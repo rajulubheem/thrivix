@@ -44,7 +44,7 @@ async def stream_research(session_id: str, query: str, model: str = "gpt-4o-mini
     Stream research results with real LLM integration
     """
     session = research_sessions[session_id]
-    api_key = os.getenv("TAVILY_API_KEY") or "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"
+    api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
     
     try:
         session['status'] = 'running'

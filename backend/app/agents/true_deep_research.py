@@ -21,7 +21,7 @@ class TrueDeepResearchAgent:
     def __init__(self):
         from dotenv import load_dotenv
         load_dotenv()
-        self.api_key = os.getenv("TAVILY_API_KEY") or "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"
+        self.api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
         self.iterations_performed = 0
         self.all_sources = []
         self.explored_topics = set()

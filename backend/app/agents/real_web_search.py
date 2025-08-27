@@ -15,7 +15,7 @@ class RealWebSearchAgent:
         # Load API key directly from .env file
         from dotenv import load_dotenv
         load_dotenv()
-        self.api_key = os.getenv("TAVILY_API_KEY") or "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"
+        self.api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
         
     async def search(self, query: str, **kwargs) -> Dict[str, Any]:
         """Perform real web search using Tavily API"""

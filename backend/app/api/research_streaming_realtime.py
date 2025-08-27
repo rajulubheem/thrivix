@@ -63,7 +63,7 @@ async def realtime_stream_generator(query: str, enable_deep: bool = False) -> As
         else:
             # DEEP RESEARCH - Stream each iteration in real-time
             max_iterations = 5
-            api_key = os.getenv("TAVILY_API_KEY") or "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"
+            api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
             
             for iteration in range(1, max_iterations + 1):
                 # Stream reasoning IMMEDIATELY
@@ -142,7 +142,7 @@ async def realtime_stream_generator(query: str, enable_deep: bool = False) -> As
 
 async def simple_search(query: str) -> dict:
     """Execute a simple Tavily search"""
-    api_key = os.getenv("TAVILY_API_KEY") or "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"
+    api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
     return await execute_search(query, api_key)
 
 async def execute_search(query: str, api_key: str) -> dict:

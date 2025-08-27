@@ -27,7 +27,7 @@ class RealTimeDeepResearch:
     def __init__(self):
         from dotenv import load_dotenv
         load_dotenv()
-        self.api_key = os.getenv("TAVILY_API_KEY") or "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"
+        self.api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
         self.all_sources = []
         
     async def stream_deep_research(self, query: str) -> AsyncGenerator[str, None]:

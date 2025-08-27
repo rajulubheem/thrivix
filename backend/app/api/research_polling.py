@@ -41,7 +41,7 @@ async def perform_deep_research_async(session_id: str, query: str):
     Perform deep research asynchronously, updating session in real-time
     """
     session = research_sessions[session_id]
-    api_key = os.getenv("TAVILY_API_KEY") or "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"
+    api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
     
     try:
         session['status'] = 'running'
@@ -140,7 +140,7 @@ async def perform_simple_research_async(session_id: str, query: str):
     Perform simple research asynchronously
     """
     session = research_sessions[session_id]
-    api_key = os.getenv("TAVILY_API_KEY") or "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"
+    api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
     
     try:
         session['status'] = 'running'

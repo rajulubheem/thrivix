@@ -37,7 +37,7 @@ class DeepResearchAgent:
         # Load API key
         from dotenv import load_dotenv
         load_dotenv()
-        self.api_key = os.getenv("TAVILY_API_KEY") or "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"
+        self.api_key = os.getenv("TAVILY_API_KEY") or "REMOVED_API_KEY"
         
         # Agent loop configuration
         self.max_iterations = 5
