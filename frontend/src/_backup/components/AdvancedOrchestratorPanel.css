@@ -1,0 +1,410 @@
+/* Advanced Orchestrator Panel Styles */
+.orchestrator-panel.advanced {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.orchestrator-panel.advanced::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 70%);
+  animation: advanced-pulse 15s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes advanced-pulse {
+  0%, 100% { transform: rotate(0deg) scale(1); opacity: 0.5; }
+  50% { transform: rotate(180deg) scale(1.2); opacity: 0.8; }
+}
+
+.orchestrator-panel.advanced .panel-header {
+  position: relative;
+  z-index: 1;
+}
+
+.orchestrator-panel.advanced .panel-header h2 {
+  color: white;
+  font-size: 2.5rem;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.orchestrator-panel.advanced .panel-header p {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.125rem;
+}
+
+.orchestrator-panel.advanced .task-input-section {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  position: relative;
+  z-index: 1;
+  margin: 1rem;
+  padding: 1.5rem;
+  border-radius: 16px;
+}
+
+.plan-button.advanced {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  font-size: 1rem;
+  padding: 1rem 2rem;
+  box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+}
+
+.plan-button.advanced:hover:not(:disabled) {
+  transform: translateY(-3px);
+  box-shadow: 0 15px 40px rgba(102, 126, 234, 0.5);
+}
+
+/* Advanced Workflow Visualization */
+.workflow-visualization.advanced {
+  background: rgba(255, 255, 255, 0.98);
+  border: 2px solid rgba(102, 126, 234, 0.3);
+  border-radius: 20px;
+  padding: 2rem;
+  margin: 1rem;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+}
+
+.workflow-stats {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+  border-radius: 12px;
+}
+
+.workflow-stats span {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: #4a5568;
+}
+
+/* Advanced Orchestrator Decision */
+.orchestrator-decision.advanced {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+  border: 2px solid rgba(102, 126, 234, 0.2);
+  margin: 2rem 0;
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 2rem;
+  margin-top: 1.5rem;
+  overflow: visible;
+}
+
+.analysis-section h5 {
+  margin: 0 0 1rem 0;
+  color: #2d3748;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+/* Agents List Container */
+.agents-list {
+  max-height: 350px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  margin-bottom: 1rem;
+  min-height: 200px;
+}
+
+.agents-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.agents-list::-webkit-scrollbar-track {
+  background: rgba(241, 245, 249, 0.5);
+  border-radius: 4px;
+}
+
+.agents-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #667eea, #764ba2);
+  border-radius: 4px;
+}
+
+/* Specialist Agent Cards */
+.specialist-agent {
+  background: white;
+  border: 2px solid rgba(102, 126, 234, 0.2);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.specialist-agent::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  z-index: 1;
+}
+
+.specialist-agent:hover {
+  transform: translateX(8px);
+  box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+}
+
+.specialist-agent .agent-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.agent-number {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.agent-type {
+  flex: 1;
+  font-weight: 700;
+  color: #2d3748;
+  font-size: 1rem;
+}
+
+.agent-mission {
+  color: #4a5568;
+  margin: 0 0 1rem 0;
+  line-height: 1.5;
+}
+
+.agent-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.agent-details > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.agent-details .label {
+  font-weight: 600;
+  color: #718096;
+  font-size: 0.875rem;
+  min-width: 60px;
+}
+
+.tool-badge {
+  padding: 0.25rem 0.625rem;
+  background: linear-gradient(135deg, #48bb78, #38a169);
+  color: white;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.artifact-badge {
+  padding: 0.25rem 0.625rem;
+  background: linear-gradient(135deg, #4299e1, #3182ce);
+  color: white;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.memory-badge {
+  padding: 0.25rem 0.625rem;
+  background: linear-gradient(135deg, #ed8936, #dd6b20);
+  color: white;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* Memory Flow Visualization */
+.memory-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.memory-node {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.memory-node:hover {
+  background: white;
+  transform: translateX(4px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+}
+
+.memory-node .task-name {
+  font-weight: 600;
+  color: #667eea;
+  font-size: 0.875rem;
+  min-width: 120px;
+}
+
+.memory-node .arrow {
+  color: #cbd5e1;
+  font-size: 1.25rem;
+}
+
+.memory-node .keys {
+  flex: 1;
+  color: #4a5568;
+  font-size: 0.8125rem;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+/* Execution Controls Container */
+.execution-controls {
+  margin-top: 2rem;
+  padding: 2rem;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+  border-radius: 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border: 2px dashed rgba(102, 126, 234, 0.3);
+  position: relative;
+  z-index: 10;
+}
+
+/* Advanced Execute Button */
+.execute-button.advanced {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  padding: 1.25rem 3rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4);
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: 12px;
+  color: white;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 250px;
+}
+
+.execute-button.advanced::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+  pointer-events: none;
+}
+
+.execute-button.advanced:active::before {
+  width: 300px;
+  height: 300px;
+}
+
+.execute-button.advanced:hover:not(:disabled) {
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 0 20px 40px rgba(102, 126, 234, 0.5);
+}
+
+.execute-button.advanced:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* No Data Placeholder */
+.no-data {
+  color: #a0aec0;
+  font-style: italic;
+  font-size: 0.875rem;
+}
+
+/* Decision Text */
+.decision-text {
+  background: rgba(255, 255, 255, 0.8);
+  padding: 1.25rem;
+  border-radius: 12px;
+  border-left: 4px solid #667eea;
+  margin-bottom: 1.5rem;
+  font-style: italic;
+  color: #2d3748;
+  line-height: 1.6;
+}
+
+/* Responsive Design */
+@media (max-width: 1400px) {
+  .analysis-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Loading Animation */
+.orchestrator-panel.advanced.planning::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    transparent
+  );
+  animation: loading-sweep 2s linear infinite;
+}
+
+@keyframes loading-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}

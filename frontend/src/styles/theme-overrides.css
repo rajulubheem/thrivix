@@ -1,0 +1,268 @@
+/* ============================================
+   THEME OVERRIDES - Fix all hardcoded colors
+   ============================================ */
+
+/* Override ALL hardcoded dark colors with theme variables */
+
+/* Agent Panel Overrides */
+.agent-panel,
+.agent-panel-header,
+.agent-panel-content {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-primary) !important;
+}
+
+.agent-panel h3,
+.agent-panel-header h3 {
+  color: var(--text-primary) !important;
+}
+
+.agent-status {
+  color: var(--text-secondary) !important;
+}
+
+.agent-card {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.agent-card:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--border-hover) !important;
+}
+
+/* Orchestrator Panel Overrides */
+.orchestrator-panel,
+.orchestrator-container {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+.orchestrator-header {
+  background: var(--gradient-header) !important;
+  border-bottom: 1px solid var(--border-primary) !important;
+}
+
+.orchestrator-card {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Timeline Overrides */
+.timeline-container,
+.execution-timeline {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+.timeline-event {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Tool Approval Panel Overrides */
+.tool-approval-panel,
+.approval-modal {
+  background: var(--bg-primary) !important;
+  border: 1px solid var(--border-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+.approval-header {
+  background: var(--bg-secondary) !important;
+  border-bottom: 1px solid var(--border-primary) !important;
+}
+
+/* Message Display Overrides */
+.message-display {
+  color: var(--text-primary) !important;
+}
+
+.message-wrapper {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-primary) !important;
+}
+
+/* Artifacts Panel Overrides */
+.artifacts-panel {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-left: 1px solid var(--border-primary) !important;
+}
+
+.artifact-item {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Tool Settings Overrides */
+.tools-container {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.tool-card {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.tool-card:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--primary-color) !important;
+}
+
+/* Input and Form Elements */
+input,
+textarea,
+select,
+.chat-input,
+.orchestrator-input input,
+.search-bar input {
+  background: var(--input-bg) !important;
+  border: 1px solid var(--input-border) !important;
+  color: var(--input-text) !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--input-placeholder) !important;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--input-focus-border) !important;
+  outline: none !important;
+}
+
+/* Button Overrides */
+button,
+.btn {
+  background: var(--button-secondary-bg) !important;
+  color: var(--button-secondary-text) !important;
+  border: 1px solid var(--border-primary) !important;
+}
+
+button:hover,
+.btn:hover {
+  background: var(--button-secondary-hover) !important;
+}
+
+button.primary,
+.btn-primary,
+.send-button {
+  background: var(--button-primary-bg) !important;
+  color: var(--button-primary-text) !important;
+  border: none !important;
+}
+
+button.primary:hover,
+.btn-primary:hover,
+.send-button:hover {
+  background: var(--button-primary-hover) !important;
+}
+
+/* Code Blocks */
+pre,
+code,
+.code-block {
+  background: var(--code-bg) !important;
+  border: 1px solid var(--code-border) !important;
+  color: var(--code-text) !important;
+}
+
+/* Status Badges */
+.status-badge.connected,
+.status.online {
+  background: var(--success-bg) !important;
+  color: var(--success-text) !important;
+  border-color: var(--success-border) !important;
+}
+
+.status-badge.executing,
+.status.busy {
+  background: var(--warning-bg) !important;
+  color: var(--warning-text) !important;
+  border-color: var(--warning-border) !important;
+}
+
+.status-badge.error,
+.status.offline {
+  background: var(--error-bg) !important;
+  color: var(--error-text) !important;
+  border-color: var(--error-border) !important;
+}
+
+/* Modals and Overlays */
+.modal,
+.dialog,
+.overlay {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.modal-backdrop,
+.dialog-backdrop {
+  background: rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Headers and Titles */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-primary) !important;
+}
+
+/* Paragraphs and Text */
+p {
+  color: var(--text-secondary) !important;
+}
+
+/* Small and Muted Text */
+small,
+.text-muted,
+.text-secondary {
+  color: var(--text-muted) !important;
+}
+
+/* Links */
+a {
+  color: var(--primary-color) !important;
+}
+
+a:hover {
+  color: var(--primary-hover) !important;
+}
+
+/* Remove ALL forced dark backgrounds */
+[style*="background: #0a0e27"],
+[style*="background: #1a1f3a"],
+[style*="background-color: #0a0e27"],
+[style*="background-color: #1a1f3a"] {
+  background: var(--bg-primary) !important;
+}
+
+/* Remove ALL forced white text */
+[style*="color: #ffffff"],
+[style*="color: white"],
+[style*="color: #e4e6eb"] {
+  color: var(--text-primary) !important;
+}
+
+/* Ensure no inline styles override theme */
+* {
+  background-color: initial;
+  color: initial;
+}
+
+/* Apply theme to body and html */
+html,
+body,
+#root {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}

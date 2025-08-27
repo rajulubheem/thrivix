@@ -1,0 +1,376 @@
+.safety-panel {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.safety-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.safety-section:last-child {
+  border-bottom: none;
+}
+
+.safety-section h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+/* Safety Config */
+.safety-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.config-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.config-info {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.config-label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.config-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.config-value.level-minimal {
+  color: var(--color-green);
+}
+
+.config-value.level-moderate {
+  color: var(--color-yellow);
+}
+
+.config-value.level-strict {
+  color: var(--color-red);
+}
+
+.config-value .enabled {
+  color: var(--color-green);
+}
+
+.config-value .disabled {
+  color: var(--text-tertiary);
+}
+
+/* Summary Stats */
+.summary-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+.summary-stat {
+  text-align: center;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.summary-stat.critical {
+  border-color: var(--color-red);
+  background: var(--color-red-light);
+}
+
+.stat-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+/* Filter */
+.safety-filter {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+
+.filter-btn {
+  padding: 0.375rem 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.filter-btn:hover {
+  background: var(--bg-hover);
+}
+
+.filter-btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+.filter-btn.severity-critical {
+  border-color: var(--color-red);
+}
+
+.filter-btn.severity-error {
+  border-color: var(--color-orange);
+}
+
+.filter-btn.severity-warning {
+  border-color: var(--color-yellow);
+}
+
+.filter-btn.severity-info {
+  border-color: var(--color-blue);
+}
+
+/* Flags Container */
+.flags-container {
+  flex: 1;
+}
+
+.empty-flags {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.empty-flags p {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.empty-flags small {
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+}
+
+/* Flags List */
+.flags-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.flag-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.flag-item.severity-critical {
+  border-color: var(--color-red);
+}
+
+.flag-item.severity-error {
+  border-color: var(--color-orange);
+}
+
+.flag-item.severity-warning {
+  border-color: var(--color-yellow);
+}
+
+.flag-item.severity-info {
+  border-color: var(--color-blue);
+}
+
+.flag-item.resolved {
+  opacity: 0.6;
+}
+
+.flag-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.flag-header:hover {
+  background: var(--bg-hover);
+}
+
+.flag-icon .icon-critical {
+  color: var(--color-red);
+}
+
+.flag-icon .icon-error {
+  color: var(--color-orange);
+}
+
+.flag-icon .icon-warning {
+  color: var(--color-yellow);
+}
+
+.flag-icon .icon-info {
+  color: var(--color-blue);
+}
+
+.flag-info {
+  flex: 1;
+}
+
+.flag-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.flag-type {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.flag-resolved {
+  padding: 0.125rem 0.5rem;
+  background: var(--color-green-light);
+  color: var(--color-green-dark);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.flag-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.flag-expand {
+  color: var(--text-secondary);
+}
+
+/* Flag Details */
+.flag-details {
+  padding: 0 0.75rem 0.75rem 3rem;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 200px;
+  }
+}
+
+.flag-message {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
+  line-height: 1.5;
+}
+
+.flag-step {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.flag-step code {
+  padding: 0.125rem 0.375rem;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.flag-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.action-btn {
+  padding: 0.375rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn.resolve {
+  background: var(--color-green);
+  color: white;
+}
+
+.action-btn.resolve:hover {
+  background: var(--color-green-dark);
+}
+
+.action-btn.halt {
+  background: var(--color-red);
+  color: white;
+}
+
+.action-btn.halt:hover {
+  background: var(--color-red-dark);
+}
+
+/* Policies List */
+.policies-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.policy-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.policy-icon {
+  color: var(--color-green);
+}

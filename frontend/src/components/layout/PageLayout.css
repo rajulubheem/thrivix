@@ -1,0 +1,40 @@
+/* Page Layout Styles */
+.page-layout {
+  height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-content {
+  flex: 1;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Remove animation for conversation pages to prevent sliding */
+.page-content > *:not(.conversation-research-container) {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Conversation pages should have no animation */
+.page-content > .conversation-research-container {
+  animation: none;
+  height: 100%;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

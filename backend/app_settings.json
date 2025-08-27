@@ -1,0 +1,141 @@
+{
+  "models": {
+    "gpt-4o": {
+      "name": "GPT-4o",
+      "provider": "openai",
+      "max_tokens": 16000,
+      "temperature": 0.7,
+      "top_p": null,
+      "frequency_penalty": null,
+      "presence_penalty": null,
+      "enabled": true
+    },
+    "gpt-4o-mini": {
+      "name": "GPT-4o Mini",
+      "provider": "openai",
+      "max_tokens": 16000,
+      "temperature": 0.7,
+      "top_p": null,
+      "frequency_penalty": null,
+      "presence_penalty": null,
+      "enabled": true
+    },
+    "gpt-3.5-turbo": {
+      "name": "GPT-3.5 Turbo",
+      "provider": "openai",
+      "max_tokens": 4000,
+      "temperature": 0.7,
+      "top_p": null,
+      "frequency_penalty": null,
+      "presence_penalty": null,
+      "enabled": true
+    }
+  },
+  "agents": {
+    "researcher": {
+      "name": "Research Specialist",
+      "model": "gpt-4o-mini",
+      "max_tokens": 16000,
+      "temperature": 0.7,
+      "system_prompt": null,
+      "tools": [
+        "web_search",
+        "document_analysis"
+      ],
+      "enabled": true
+    },
+    "developer": {
+      "name": "Developer",
+      "model": "gpt-4o",
+      "max_tokens": 16000,
+      "temperature": 0.7,
+      "system_prompt": null,
+      "tools": [
+        "code_execution",
+        "file_operations"
+      ],
+      "enabled": true
+    },
+    "architect": {
+      "name": "System Architect",
+      "model": "gpt-4o",
+      "max_tokens": 16000,
+      "temperature": 0.7,
+      "system_prompt": null,
+      "tools": [
+        "documentation",
+        "design"
+      ],
+      "enabled": true
+    },
+    "reviewer": {
+      "name": "Code Reviewer",
+      "model": "gpt-4o-mini",
+      "max_tokens": 16000,
+      "temperature": 0.5,
+      "system_prompt": null,
+      "tools": [
+        "code_analysis",
+        "testing"
+      ],
+      "enabled": true
+    }
+  },
+  "tools": {
+    "tavily_search": {
+      "name": "tavily_search",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Web search using Tavily for real-time information",
+      "category": "web_search"
+    },
+    "tavily_web_search": {
+      "name": "tavily_web_search",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Advanced web search with Tavily",
+      "category": "web_search"
+    },
+    "file_write": {
+      "name": "file_write",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Write content to files",
+      "category": "file_operations"
+    },
+    "file_read": {
+      "name": "file_read",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Read content from files",
+      "category": "file_operations"
+    },
+    "python_repl": {
+      "name": "python_repl",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Execute Python code",
+      "category": "code_execution"
+    },
+    "shell": {
+      "name": "shell",
+      "enabled": false,
+      "requires_approval": true,
+      "description": "Execute shell commands",
+      "category": "system"
+    }
+  },
+  "swarm": {
+    "max_handoffs": 20,
+    "max_iterations": 20,
+    "execution_timeout": 900.0,
+    "node_timeout": 300.0,
+    "repetitive_handoff_detection_window": 8,
+    "repetitive_handoff_min_unique_agents": 3
+  },
+  "general": {
+    "auto_save": true,
+    "debug_mode": true,
+    "streaming_enabled": true
+  }
+}

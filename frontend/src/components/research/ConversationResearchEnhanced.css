@@ -1,0 +1,240 @@
+/* Enhanced Conversation Research Styles for Radix UI */
+
+/* Override conversation-research-container for proper horizontal layout */
+.conversation-research-container {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Ensure sidebar is on the left */
+.conversation-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--color-panel-solid);
+  border-right: 1px solid var(--gray-a5);
+}
+
+/* Main chat area takes remaining space */
+.conversation-research {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--color-background);
+}
+
+/* Header styling */
+.header-bar {
+  border-bottom: 1px solid var(--gray-a5);
+  background: var(--color-panel-solid);
+  flex-shrink: 0;
+}
+
+/* Main content flex layout */
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Messages area takes remaining space */
+.messages-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--color-background);
+}
+
+/* Scrollable messages */
+.messages-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2rem 0;
+}
+
+/* Input area at bottom */
+.input-area {
+  border-top: 1px solid var(--gray-a5);
+  background: var(--color-panel-solid);
+  padding: 1rem;
+  flex-shrink: 0;
+}
+
+/* Message cards proper spacing */
+.message-card {
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+/* Input area styling */
+.input-container {
+  border-top: 1px solid var(--gray-5);
+  background: var(--gray-2);
+  padding: 1rem;
+}
+
+/* Sources sidebar */
+.sources-sidebar {
+  width: 320px;
+  min-width: 320px;
+  border-left: 1px solid var(--gray-a5);
+  background: var(--color-panel-solid);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+/* Markdown content styling */
+.markdown-content {
+  line-height: 1.6;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.markdown-content p {
+  margin-bottom: 0.75rem;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin-bottom: 0.75rem;
+  padding-left: 1.5rem;
+}
+
+.markdown-content code {
+  background: var(--gray-3);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.markdown-content pre {
+  background: var(--gray-3);
+  padding: 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 0.75rem;
+}
+
+/* Animated spinner */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Thoughts section styling */
+.thoughts-section {
+  margin-top: 1rem;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.thought-item {
+  padding: 0.75rem;
+  border-left: 3px solid;
+  margin-bottom: 0.5rem;
+}
+
+.thought-item:last-child {
+  margin-bottom: 0;
+}
+
+/* Screenshot cards */
+.screenshot-card {
+  min-width: 200px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.screenshot-card:hover {
+  transform: scale(1.05);
+}
+
+/* Welcome card centering */
+.welcome-card {
+  margin: auto;
+  max-width: 600px;
+  margin-top: 10vh;
+}
+
+/* Button grid */
+.suggestion-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* Ensure proper height for main flex container */
+.main-container {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.messages-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.messages-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Fix TextArea sizing */
+.rt-TextAreaRoot {
+  width: 100%;
+}
+
+.rt-TextAreaInput {
+  min-height: 60px;
+  resize: vertical;
+}
+
+/* Badge styling */
+.rt-Badge {
+  white-space: nowrap;
+}
+
+/* Avatar sizing */
+.rt-AvatarRoot {
+  flex-shrink: 0;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .sources-sidebar {
+    display: none;
+  }
+  
+  .rt-Container[size="3"] {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  
+  .suggestion-buttons {
+    grid-template-columns: 1fr;
+  }
+}

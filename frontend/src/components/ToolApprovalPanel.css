@@ -1,0 +1,400 @@
+/* Tool Approval Panel - Integrated with chat layout */
+
+.tool-approval-panel {
+  position: relative;
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 16px;
+  animation: slideDown 0.3s ease-out;
+}
+
+/* Floating position for backwards compatibility */
+.tool-approval-panel.floating {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 600px;
+  z-index: 1000;
+  margin-bottom: 0;
+}
+
+/* Top position (integrated) */
+.tool-approval-panel.top {
+  position: relative;
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Header - Clean and minimal */
+.approval-header {
+  background: var(--bg-secondary);
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-icon {
+  font-size: 16px;
+  opacity: 0.8;
+}
+
+.header-title h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.request-count {
+  background: var(--accent-primary);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* Compact requests container */
+.approval-requests {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Individual request - Compact design */
+.approval-request {
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-primary);
+  transition: background-color 0.2s ease;
+}
+
+.approval-request:last-child {
+  border-bottom: none;
+}
+
+.approval-request:hover {
+  background: var(--bg-hover);
+}
+
+.approval-request.expanded {
+  background: var(--bg-secondary);
+}
+
+/* Safety level indicators - Subtle */
+.approval-request.safe {
+  border-left: 3px solid var(--accent-success);
+}
+
+.approval-request.caution {
+  border-left: 3px solid var(--accent-warning);
+}
+
+.approval-request.danger {
+  border-left: 3px solid var(--accent-error);
+}
+
+/* Compact request summary */
+.request-summary {
+  padding: 12px 20px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.request-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.agent-badge {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tool-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.safety-indicator {
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.expand-indicator {
+  color: var(--text-secondary);
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+/* Compact details */
+.request-details {
+  border-top: 1px solid var(--border-primary);
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+}
+
+.request-message {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.parameters h4 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.parameter {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.parameter label {
+  font-weight: 500;
+  color: var(--text-secondary);
+  min-width: 70px;
+  font-size: 12px;
+  padding-top: 6px;
+}
+
+.param-input,
+.param-textarea {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+}
+
+.param-input:focus,
+.param-textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.param-value {
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  flex: 1;
+  margin: 0;
+  white-space: pre-wrap;
+  border: 1px solid var(--border-primary);
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+/* Compact actions */
+.request-actions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.rejection-input {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.rejection-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.approve-btn,
+.reject-btn {
+  flex: 1;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.approve-btn {
+  background: var(--accent-success);
+  color: white;
+}
+
+.approve-btn:hover {
+  background: var(--secondary-hover);
+  transform: translateY(-1px);
+}
+
+.reject-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+}
+
+.reject-btn:hover {
+  background: var(--accent-error);
+  color: white;
+  transform: translateY(-1px);
+}
+
+/* Safety warning - Subtle */
+.safety-warning {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--warning-text);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+/* Bulk actions - Subtle */
+.bulk-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.approve-all-safe {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.approve-all-safe:hover {
+  background: var(--accent-success);
+  color: white;
+}
+
+/* Custom scrollbar */
+.approval-requests::-webkit-scrollbar {
+  width: 4px;
+}
+
+.approval-requests::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.approval-requests::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: 2px;
+}
+
+.approval-requests::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .tool-approval-panel {
+    width: 95%;
+    margin: 0 2.5%;
+  }
+  
+  .approval-header,
+  .request-summary,
+  .request-details {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  
+  .action-buttons {
+    flex-direction: column;
+  }
+  
+  .parameter {
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  .parameter label {
+    min-width: auto;
+    padding-top: 0;
+  }
+}
+
+/* Light theme specific improvements */
+[data-theme="light"] .tool-approval-panel {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  border-color: #e5e7eb;
+}
+
+/* Dark theme specific improvements */
+[data-theme="dark"] .tool-approval-panel {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border-color: #374151;
+}

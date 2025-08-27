@@ -1,0 +1,343 @@
+.control-panel {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.control-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.control-section:last-child {
+  border-bottom: none;
+}
+
+.control-section h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+/* Goal Input */
+.goal-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  resize: vertical;
+  transition: all 0.2s;
+}
+
+.goal-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+.goal-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Recipe Section */
+.recipe-section {
+  margin-top: 1rem;
+}
+
+.recipe-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  transition: all 0.2s;
+  width: 100%;
+}
+
+.recipe-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.recipe-list {
+  margin-top: 0.5rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.recipe-item {
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.recipe-item:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.recipe-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.recipe-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.recipe-success {
+  padding: 0.125rem 0.375rem;
+  background: var(--color-green-light);
+  color: var(--color-green-dark);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.recipe-description {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.recipe-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.recipe-meta span {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Execution Controls */
+.execution-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.control-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.control-btn.primary {
+  background: var(--color-primary);
+  color: white;
+}
+
+.control-btn.primary:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(99, 102, 241, 0.3);
+}
+
+.control-btn.warning {
+  background: var(--color-yellow);
+  color: white;
+}
+
+.control-btn.warning:hover:not(:disabled) {
+  background: var(--color-yellow-dark);
+}
+
+.control-btn.danger {
+  background: var(--color-red);
+  color: white;
+}
+
+.control-btn.danger:hover:not(:disabled) {
+  background: var(--color-red-dark);
+}
+
+/* Mode Selection */
+.mode-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mode-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-label:hover {
+  border-color: var(--color-primary);
+}
+
+.mode-label input[type="radio"] {
+  margin-top: 0.125rem;
+}
+
+.mode-label span {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.mode-label small {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+/* Capability Limits */
+.caps-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.cap-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cap-item label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.cap-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cap-input input[type="number"] {
+  width: 80px;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.cap-input select {
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.cap-input span {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.save-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem;
+  margin-top: 1rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.save-settings:hover {
+  background: var(--bg-hover);
+}
+
+/* Execution Info */
+.execution-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-primary);
+  border-radius: 4px;
+}
+
+.info-label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.info-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.info-value.status-idle { color: var(--color-gray); }
+.info-value.status-planning { color: var(--color-blue); }
+.info-value.status-running { color: var(--color-green); }
+.info-value.status-paused { color: var(--color-yellow); }
+.info-value.status-completed { color: var(--color-green); }
+.info-value.status-failed { color: var(--color-red); }
+.info-value.status-cancelled { color: var(--color-orange); }

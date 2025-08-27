@@ -1,0 +1,240 @@
+.tool-execution-display {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  padding: 1px;
+  margin: 20px 0;
+}
+
+.tool-execution-display > * {
+  background: #1a1a2e;
+  border-radius: 11px;
+}
+
+.tool-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tool-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.header-icon {
+  width: 20px;
+  height: 20px;
+  color: #667eea;
+}
+
+.live-badge {
+  background: #ff4444;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
+  animation: pulse 2s infinite;
+  margin-left: auto;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.tool-timeline {
+  padding: 20px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.tool-execution-item {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 20px;
+  position: relative;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.tool-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  background: rgba(102, 126, 234, 0.2);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tool-icon {
+  width: 20px;
+  height: 20px;
+  color: #667eea;
+}
+
+.tool-details {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tool-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.agent-name {
+  color: #667eea;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.tool-name {
+  color: #fff;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.tool-result {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 8px 0;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.tool-result pre {
+  margin: 0;
+  color: #a0a0a0;
+  font-size: 11px;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.tool-timestamp {
+  color: #666;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+.status-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.status-icon.completed {
+  color: #4ade80;
+}
+
+.status-icon.error {
+  color: #ff4444;
+}
+
+.status-icon.running {
+  color: #fbbf24;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.timeline-connector {
+  position: absolute;
+  left: 20px;
+  top: 45px;
+  width: 2px;
+  height: calc(100% + 10px);
+  background: linear-gradient(180deg, rgba(102, 126, 234, 0.5), transparent);
+}
+
+.tool-execution-display.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+  background: #1a1a2e;
+}
+
+.empty-icon {
+  width: 40px;
+  height: 40px;
+  color: #444;
+  margin-bottom: 10px;
+}
+
+.tool-execution-display.empty p {
+  color: #666;
+  margin: 0;
+}
+
+/* Tool-specific colors */
+.tool-execution-item .tool-icon-wrapper:has(.tool-icon) {
+  position: relative;
+}
+
+.tool-execution-item[data-tool="file_read"] .tool-icon,
+.tool-execution-item[data-tool="file_write"] .tool-icon {
+  color: #4ade80;
+}
+
+.tool-execution-item[data-tool="tavily_search"] .tool-icon,
+.tool-execution-item[data-tool="http_request"] .tool-icon {
+  color: #60a5fa;
+}
+
+.tool-execution-item[data-tool="python_repl"] .tool-icon,
+.tool-execution-item[data-tool="shell"] .tool-icon {
+  color: #fbbf24;
+}
+
+.tool-execution-item[data-tool="calculator"] .tool-icon {
+  color: #a78bfa;
+}
+
+.tool-execution-item[data-tool="think"] .tool-icon {
+  color: #f472b6;
+}
+
+/* Scrollbar styling */
+.tool-timeline::-webkit-scrollbar {
+  width: 6px;
+}
+
+.tool-timeline::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+.tool-timeline::-webkit-scrollbar-thumb {
+  background: rgba(102, 126, 234, 0.5);
+  border-radius: 3px;
+}
+
+.tool-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(102, 126, 234, 0.7);
+}

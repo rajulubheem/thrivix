@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vanilla JavaScript SSE Streaming Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        #messages {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 400px;
+            max-height: 600px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+        .message {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            border-left: 3px solid #0066cc;
+        }
+        .agent-name {
+            font-weight: bold;
+            color: #0066cc;
+            margin-bottom: 10px;
+        }
+        .content {
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+        input {
+            flex: 1;
+            padding: 12px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0052a3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            background: #e8f4fd;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 16px;
+            background: #0066cc;
+            animation: blink 1s infinite;
+            margin-left: 2px;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 Vanilla JavaScript SSE Streaming Test</h1>
+    <div class="status" id="status">Ready to stream...</div>
+    
+    <div id="messages"></div>
+    
+    <div class="input-group">
+        <input type="text" id="input" placeholder="Enter your task..." />
+        <button id="sendBtn" onclick="startStream()">Send</button>
+        <button id="stopBtn" onclick="stopStream()" style="display:none; background:#ff4444;">Stop</button>
+    </div>
+
+    <script>
+        let controller = null;
+        let agentElements = new Map();
+        let isStreaming = false;
+
+        async function startStream() {
+            const input = document.getElementById('input');
+            const task = input.value.trim();
+            
+            if (!task || isStreaming) return;
+            
+            // Clear and setup
+            input.value = '';
+            document.getElementById('messages').innerHTML = '';
+            agentElements.clear();
+            isStreaming = true;
+            
+            // Update UI
+            document.getElementById('status').textContent = '🔴 Streaming live...';
+            document.getElementById('sendBtn').style.display = 'none';
+            document.getElementById('stopBtn').style.display = 'block';
+            input.disabled = true;
+            
+            // Create abort controller
+            controller = new AbortController();
+            
+            try {
+                console.log('🚀 Starting stream for task:', task);
+                
+                const response = await fetch('http://localhost:8000/api/v1/chat/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream',
+                    },
+                    body: JSON.stringify({
+                        task: task,
+                        agents: [],
+                        max_handoffs: 20
+                    }),
+                    signal: controller.signal
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        console.log('✅ Stream complete');
+                        break;
+                    }
+                    
+                    // Decode chunk
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Process complete lines
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            
+                            try {
+                                const parsed = JSON.parse(data);
+                                
+                                // Handle token event (the main streaming event)
+                                if (parsed.agent && parsed.delta !== undefined) {
+                                    let elem = agentElements.get(parsed.agent);
+                                    
+                                    if (!elem) {
+                                        // Create new message element
+                                        const messageDiv = document.createElement('div');
+                                        messageDiv.className = 'message';
+                                        
+                                        const agentName = document.createElement('div');
+                                        agentName.className = 'agent-name';
+                                        agentName.textContent = parsed.agent.replace(/_/g, ' ');
+                                        
+                                        const content = document.createElement('div');
+                                        content.className = 'content';
+                                        
+                                        const cursor = document.createElement('span');
+                                        cursor.className = 'cursor';
+                                        cursor.id = `cursor-${parsed.agent}`;
+                                        
+                                        messageDiv.appendChild(agentName);
+                                        messageDiv.appendChild(content);
+                                        content.appendChild(cursor);
+                                        
+                                        document.getElementById('messages').appendChild(messageDiv);
+                                        
+                                        elem = { content, cursor };
+                                        agentElements.set(parsed.agent, elem);
+                                    }
+                                    
+                                    // CRITICAL: Insert text before cursor
+                                    const textNode = document.createTextNode(parsed.delta);
+                                    elem.content.insertBefore(textNode, elem.cursor);
+                                    
+                                    // Force immediate repaint
+                                    elem.content.offsetHeight;
+                                    
+                                    // Auto-scroll
+                                    const messages = document.getElementById('messages');
+                                    messages.scrollTop = messages.scrollHeight;
+                                    
+                                    console.log(`✅ Appended: "${parsed.delta}"`);
+                                }
+                                
+                                // Handle agent done
+                                if (parsed.agent && parsed.output !== undefined) {
+                                    // Remove cursor when agent is done
+                                    const cursor = document.getElementById(`cursor-${parsed.agent}`);
+                                    if (cursor) cursor.remove();
+                                }
+                                
+                            } catch (e) {
+                                if (data === '[DONE]') {
+                                    console.log('🎉 Execution complete');
+                                    stopStream();
+                                }
+                            }
+                        } else if (line.startsWith('event: ')) {
+                            console.log('Event:', line.slice(7));
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Stream error:', error);
+                if (error.name !== 'AbortError') {
+                    alert('Error: ' + error.message);
+                }
+            } finally {
+                stopStream();
+            }
+        }
+        
+        function stopStream() {
+            if (controller) {
+                controller.abort();
+                controller = null;
+            }
+            
+            // Remove all cursors
+            document.querySelectorAll('.cursor').forEach(c => c.remove());
+            
+            // Update UI
+            isStreaming = false;
+            document.getElementById('status').textContent = '✅ Ready to stream...';
+            document.getElementById('sendBtn').style.display = 'block';
+            document.getElementById('stopBtn').style.display = 'none';
+            document.getElementById('input').disabled = false;
+        }
+        
+        // Enter key to send
+        document.getElementById('input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !isStreaming) {
+                startStream();
+            }
+        });
+    </script>
+</body>
+</html>

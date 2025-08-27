@@ -1,0 +1,611 @@
+/**
+ * Enhanced Conversation Research Interface with Radix UI
+ */
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import {
+  Box,
+  Flex,
+  Text,
+  Button,
+  Card,
+  Badge,
+  ScrollArea,
+  Separator,
+  Avatar,
+  IconButton,
+  TextArea,
+  Heading,
+  Link,
+  Tabs,
+  Grid,
+  Container,
+  Section,
+  Callout,
+} from '@radix-ui/themes';
+import ChatHistory from './ChatHistory';
+import PageLayout from '../layout/PageLayout';
+import './ConversationResearchProfessional.css';
+import {
+  PaperPlaneIcon,
+  ReloadIcon,
+  TrashIcon,
+  DownloadIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  PersonIcon,
+  RocketIcon,
+  MagnifyingGlassIcon,
+  LinkBreak1Icon,
+  ImageIcon,
+  CodeIcon,
+  ActivityLogIcon,
+  CheckCircledIcon,
+  CrossCircledIcon,
+  InfoCircledIcon,
+  ExclamationTriangleIcon,
+} from '@radix-ui/react-icons';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { 
+  Send, Sparkles, Loader2, User, Bot, ThumbsUp, ThumbsDown,
+  Globe, Brain, Search, FileText, CheckCircle, AlertCircle,
+  Clock, ExternalLink, Image, Plus, ChevronDown, Loader
+} from 'lucide-react';
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: string;
+  sources?: Source[];
+  screenshots?: any[];
+  feedback?: 'positive' | 'negative' | null;
+  is_clarification?: boolean;
+}
+
+interface Source {
+  id: string;
+  number?: number;
+  title: string;
+  url: string;
+  domain: string;
+  snippet?: string;
+  favicon?: string;
+  thumbnail?: string;
+}
+
+interface Thought {
+  type: string;
+  content: string;
+  timestamp: string;
+}
+
+interface ConversationSession {
+  session_id: string;
+  conversation_count: number;
+  timestamp: string;
+  active?: boolean;
+}
+
+const ConversationResearchEnhanced: React.FC = () => {
+  const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
+  
+  const [sessionId, setSessionId] = useState<string | null>(urlSessionId || null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [thoughts, setThoughts] = useState<Thought[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [screenshots, setScreenshots] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<ConversationSession[]>([]);
+  const [modalImage, setModalImage] = useState<{src: string; alt: string; url?: string} | null>(null);
+  const [expandedThoughts, setExpandedThoughts] = useState<{ [key: number]: boolean }>({});
+  const [mode, setMode] = useState<'fast' | 'deep' | 'scholar'>('fast');
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  
+  const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  useEffect(() => {
+    // Load sessions on mount
+    const loadSessions = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/v1/conversation/sessions`);
+        if (response.ok) {
+          const data = await response.json();
+          setSessions(data.sessions || []);
+        }
+      } catch (error) {
+        console.error('Error loading sessions:', error);
+      }
+    };
+    
+    loadSessions();
+    
+    // Load session if ID is provided in URL
+    if (urlSessionId) {
+      loadSession(urlSessionId);
+    }
+  }, []);
+
+  const pollForUpdates = useCallback(async (sid: string) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/v1/conversation/status/${sid}`);
+      if (!response.ok) throw new Error('Failed to get status');
+      
+      const data = await response.json();
+      
+      // Update messages with screenshots attached
+      if (data.messages && data.messages.length > 0) {
+        const updatedMessages = [...data.messages];
+        if (data.screenshots && data.screenshots.length > 0) {
+          for (let i = updatedMessages.length - 1; i >= 0; i--) {
+            if (updatedMessages[i].role === 'assistant') {
+              updatedMessages[i].screenshots = data.screenshots;
+              break;
+            }
+          }
+        }
+        setMessages(updatedMessages);
+      }
+      
+      if (data.sources) setSources(data.sources);
+      if (data.thoughts) setThoughts(data.thoughts);
+      if (data.screenshots) setScreenshots(data.screenshots);
+      
+      // Stop polling when completed
+      if (data.status === 'completed' || data.status === 'error') {
+        setIsLoading(false);
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+        }
+      }
+    } catch (error) {
+      console.error('Polling error:', error);
+    }
+  }, [apiUrl]);
+
+  const loadSession = async (sid: string) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/v1/conversation/session/${sid}`);
+      if (!response.ok) throw new Error('Failed to load session');
+      
+      const data = await response.json();
+      setSessionId(sid);
+      setMessages(data.messages || []);
+      navigate(`/conversation/${sid}`);
+    } catch (error) {
+      console.error('Error loading session:', error);
+    }
+  };
+
+  const deleteSession = async (sid: string) => {
+    try {
+      await fetch(`${apiUrl}/api/v1/conversation/session/${sid}`, {
+        method: 'DELETE',
+      });
+      setSessions(sessions.filter(s => s.session_id !== sid));
+      if (sid === sessionId) {
+        startNewConversation();
+      }
+    } catch (error) {
+      console.error('Error deleting session:', error);
+    }
+  };
+
+  const startNewConversation = () => {
+    setSessionId(null);
+    setMessages([]);
+    setThoughts([]);
+    setSources([]);
+    setScreenshots([]);
+    navigate('/conversation');
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+    
+    const userMessage = input.trim();
+    setInput('');
+    setIsLoading(true);
+    setThoughts([]);
+    setSources([]);
+    
+    // Add user message
+    setMessages(prev => [...prev, { 
+      role: 'user', 
+      content: userMessage,
+      timestamp: new Date().toISOString()
+    }]);
+    
+    try {
+      const response = await fetch(`${apiUrl}/api/v1/conversation/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          query: userMessage,
+          session_id: sessionId 
+        }),
+      });
+      
+      if (!response.ok) throw new Error('Failed to start conversation');
+      
+      const data = await response.json();
+      const newSessionId = data.session_id;
+      
+      setSessionId(newSessionId);
+      if (!sessionId) {
+        navigate(`/conversation/${newSessionId}`, { replace: true });
+      }
+      
+      // Start polling
+      pollingIntervalRef.current = setInterval(() => {
+        pollForUpdates(newSessionId);
+      }, 500);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      setIsLoading(false);
+    }
+  };
+
+  const getThoughtIcon = (type: string) => {
+    const iconMap: { [key: string]: React.ReactNode } = {
+      'searching': <MagnifyingGlassIcon />,
+      'analyzing': <ActivityLogIcon />,
+      'found': <CheckCircledIcon />,
+      'error': <CrossCircledIcon />,
+      'reading': <FileText size={14} />,
+      'browsing': <Globe size={14} />,
+      default: <InfoCircledIcon />
+    };
+    return iconMap[type.toLowerCase()] || iconMap.default;
+  };
+
+  const getThoughtColor = (type: string): any => {
+    const colorMap: { [key: string]: any } = {
+      'searching': 'blue',
+      'analyzing': 'purple',
+      'found': 'green',
+      'error': 'red',
+      'reading': 'amber',
+      'browsing': 'indigo',
+      default: 'gray'
+    };
+    return colorMap[type.toLowerCase()] || colorMap.default;
+  };
+
+  return (
+    <PageLayout>
+      <div className="conversation-research-container">
+        {/* Sidebar with Chat History */}
+        <div className="conversation-sidebar">
+          <ChatHistory
+            sessions={sessions}
+            currentSessionId={sessionId}
+            onSelectSession={loadSession}
+            onDeleteSession={deleteSession}
+            onNewChat={startNewConversation}
+          />
+        </div>
+        
+        {/* Main Chat Area - Center */}
+        <div className="conversation-main">
+          {/* Header Bar */}
+          <div className="conversation-header">
+            <div className="header-content">
+              <div className="header-left">
+                <div className="header-title">
+                  <Brain size={20} />
+                  Research Assistant
+                </div>
+                {sessionId && (
+                  <Badge color="violet" variant="soft">
+                    {messages.length} messages
+                  </Badge>
+                )}
+              </div>
+              <div className="header-actions">
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <Button variant="soft" size="2">
+                      {mode.charAt(0).toUpperCase() + mode.slice(1)} Mode
+                      <ChevronDown size={16} />
+                    </Button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content className="dropdown-content">
+                    <DropdownMenu.Item onClick={() => setMode('fast')}>Fast</DropdownMenu.Item>
+                    <DropdownMenu.Item onClick={() => setMode('deep')}>Deep Research</DropdownMenu.Item>
+                    <DropdownMenu.Item onClick={() => setMode('scholar')}>Scholar</DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+                <Button
+                  variant="soft"
+                  size="2"
+                  color="gray"
+                  onClick={startNewConversation}
+                >
+                  <Plus size={16} />
+                  New Chat
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Content Area with Messages and Sources */}
+          <div className="conversation-content">
+            {/* Messages Container - Center */}
+            <div className="messages-container">
+              <ScrollArea className="messages-scroll-area">
+                <div className="messages-inner">
+                  {messages.length === 0 ? (
+                    /* Welcome Screen */
+                    <div className="welcome-container">
+                      <div className="welcome-content">
+                        <div className="welcome-icon">
+                          <Brain size={64} />
+                        </div>
+                        <h1 className="welcome-title">
+                          Welcome to Research Assistant
+                        </h1>
+                        <p className="welcome-subtitle">
+                          Choose a mode and start researching
+                        </p>
+                        <div className="suggestion-grid">
+                          <div
+                            className="suggestion-card"
+                            onClick={() => sendMessage()}
+                          >
+                            <Text size="2" weight="medium">Latest AI News</Text>
+                          </div>
+                          <div
+                            className="suggestion-card"
+                            onClick={() => sendMessage()}
+                          >
+                            <Text size="2" weight="medium">Quantum Computing</Text>
+                          </div>
+                          <div
+                            className="suggestion-card"
+                            onClick={() => sendMessage()}
+                          >
+                            <Text size="2" weight="medium">Climate Solutions</Text>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Messages */
+                    <div>
+                      {messages.map((message, index) => (
+                        <div key={index} className="message">
+                          <Avatar
+                            className="message-avatar"
+                            src={message.role === 'user' ? undefined : '/ai-avatar.png'}
+                            fallback={message.role === 'user' ? 'U' : 'AI'}
+                            color={message.role === 'user' ? 'blue' : 'violet'}
+                            size="3"
+                          />
+                          <div className="message-content-wrapper">
+                            <div className="message-header">
+                              <span className="message-role">
+                                {message.role === 'user' ? 'You' : 'Assistant'}
+                              </span>
+                              <span className="message-time">
+                                {new Date(message.timestamp || Date.now()).toLocaleTimeString()}
+                              </span>
+                            </div>
+                            <div className="message-body">
+                              {message.role === 'user' ? (
+                                <Text>{message.content}</Text>
+                              ) : (
+                                <>
+                                  <div className="markdown-content">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                      {message.content || 'Researching...'}
+                                    </ReactMarkdown>
+                                  </div>
+
+                                  {/* Inline Thoughts Display */}
+                                  {message.role === 'assistant' && 
+                                   index === messages.filter(m => m.role === 'assistant').length - 1 && 
+                                   thoughts.length > 0 && (
+                                    <div className="thoughts-inline">
+                                      <details>
+                                        <summary className="thoughts-header">
+                                          <Flex align="center" gap="2">
+                                            <Brain size={16} />
+                                            <Text size="2" weight="medium">Thinking Process</Text>
+                                            <Badge size="1" color="gray">{thoughts.length} thoughts</Badge>
+                                          </Flex>
+                                        </summary>
+                                        <div className="thoughts-content">
+                                          {thoughts.map((thought, idx) => (
+                                            <div key={idx} className="thought-item">
+                                              <Badge color="violet" size="1" mb="1">
+                                                {thought.type}
+                                              </Badge>
+                                              <Text size="2">{thought.content}</Text>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </details>
+                                    </div>
+                                  )}
+
+                                  {/* Screenshots for this message */}
+                                  {message.screenshots && message.screenshots.length > 0 && (
+                                    <div className="screenshots-container">
+                                      <div className="screenshots-header">
+                                        <Image size={16} />
+                                        <Text size="2" weight="medium">Screenshots</Text>
+                                        <Badge size="1">{message.screenshots.length}</Badge>
+                                      </div>
+                                      <div className="screenshots-scroll">
+                                        {message.screenshots.map((screenshot, sIdx) => (
+                                          <div
+                                            key={sIdx}
+                                            className="screenshot-card"
+                                            onClick={() => window.open(screenshot.url, '_blank')}
+                                          >
+                                            <img
+                                              className="screenshot-image"
+                                              src={screenshot.url}
+                                              alt={screenshot.description || `Screenshot ${sIdx + 1}`}
+                                            />
+                                            {screenshot.description && (
+                                              <div className="screenshot-info">
+                                                <Text size="1">{screenshot.description}</Text>
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {/* Loading Indicator */}
+                      {isLoading && (
+                        <div className="message">
+                          <Avatar
+                            className="message-avatar"
+                            fallback="AI"
+                            color="violet"
+                            size="3"
+                          />
+                          <div className="message-content-wrapper">
+                            <div className="message-header">
+                              <span className="message-role">Assistant</span>
+                            </div>
+                            <div className="loading-message">
+                              <div className="loading-spinner">
+                                <Loader size={16} />
+                              </div>
+                              <Text>Researching with {mode} mode...</Text>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+
+            {/* Sources Sidebar - Right */}
+            {sources.length > 0 && (
+              <div className="sources-sidebar">
+                <div className="sources-header">
+                  <Globe size={20} />
+                  <span className="sources-title">Sources</span>
+                  <span className="sources-count">{sources.length}</span>
+                </div>
+                <div>
+                  {sources.map((source, index) => (
+                    <a
+                      key={index}
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="source-card"
+                    >
+                      <Text size="2" weight="medium">{source.title}</Text>
+                      <Text size="1" color="gray">{source.description}</Text>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Input Container - Bottom */}
+          <div className="input-container">
+            <div className="input-wrapper">
+              <TextArea
+                className="input-field"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={`Ask anything... (${mode} mode)`}
+                disabled={isLoading}
+              />
+              <button
+                className="send-button"
+                onClick={() => sendMessage()}
+                disabled={!input.trim() || isLoading}
+              >
+                <Send size={20} />
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+
+      {/* Image Modal */}
+      {modalImage && (
+        <Box
+          onClick={() => setModalImage(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <Box onClick={(e) => e.stopPropagation()} style={{ maxWidth: '90vw', maxHeight: '90vh' }}>
+            <img 
+              src={modalImage.src} 
+              alt={modalImage.alt}
+              style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }}
+            />
+            <Flex justify="center" gap="3" mt="3">
+              {modalImage.url && (
+                <Button variant="soft" asChild>
+                  <a href={modalImage.url} target="_blank" rel="noopener noreferrer">
+                    Visit Page
+                  </a>
+                </Button>
+              )}
+              <Button variant="soft" onClick={() => setModalImage(null)}>
+                Close
+              </Button>
+            </Flex>
+          </Box>
+        </Box>
+      )}
+      </div>
+    </PageLayout>
+  );
+};
+
+export default ConversationResearchEnhanced;

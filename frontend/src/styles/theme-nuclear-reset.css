@@ -1,0 +1,624 @@
+/* ============================================
+   NUCLEAR THEME RESET - Override EVERYTHING
+   This file forces ALL elements to use theme colors
+   ============================================ */
+
+/* ==========================================
+   RESET ALL BACKGROUND COLORS
+   ========================================== */
+
+/* Remove ALL background colors and force theme */
+* {
+  background-color: inherit !important;
+  border-color: inherit !important;
+  color: inherit !important;
+}
+
+/* Root containers */
+html, body, #root {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ==========================================
+   LIGHT THEME - FORCE WHITE BACKGROUNDS
+   ========================================== */
+
+[data-theme="light"] {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+[data-theme="light"] *,
+[data-theme="light"] div,
+[data-theme="light"] section,
+[data-theme="light"] header,
+[data-theme="light"] main,
+[data-theme="light"] aside,
+[data-theme="light"] article,
+[data-theme="light"] nav,
+[data-theme="light"] .container,
+[data-theme="light"] .panel,
+[data-theme="light"] .component {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+
+/* Secondary backgrounds in light mode */
+[data-theme="light"] .card,
+[data-theme="light"] .panel-secondary,
+[data-theme="light"] .sidebar,
+[data-theme="light"] .header,
+[data-theme="light"] .footer {
+  background: #f9fafb !important;
+  background-color: #f9fafb !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+/* Specific components - FORCE LIGHT */
+[data-theme="light"] .swarm-chat,
+[data-theme="light"] .chat-header,
+[data-theme="light"] .chat-layout,
+[data-theme="light"] .left-panel,
+[data-theme="light"] .center-panel,
+[data-theme="light"] .right-panel,
+[data-theme="light"] .messages-container,
+[data-theme="light"] .chat-input-container,
+[data-theme="light"] .agent-panel,
+[data-theme="light"] .agent-panel-header,
+[data-theme="light"] .agent-panel-content,
+[data-theme="light"] .unified-agent-panel,
+[data-theme="light"] .team-overview,
+[data-theme="light"] .agent-list,
+[data-theme="light"] .agent-section,
+[data-theme="light"] .artifacts-panel,
+[data-theme="light"] .orchestrator-panel,
+[data-theme="light"] .orchestrator-container,
+[data-theme="light"] .orchestrator-content,
+[data-theme="light"] .orchestrator-input,
+[data-theme="light"] .orchestrator-input-container,
+[data-theme="light"] .orchestrator-input-form,
+[data-theme="light"] .timeline-container,
+[data-theme="light"] .execution-timeline,
+[data-theme="light"] .tool-approval-panel,
+[data-theme="light"] .tools-container,
+[data-theme="light"] .tools-header,
+[data-theme="light"] .tools-main,
+[data-theme="light"] .tools-grid,
+[data-theme="light"] .welcome,
+[data-theme="light"] .welcome-screen,
+[data-theme="light"] .welcome-container {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+
+/* Cards and items in light mode */
+[data-theme="light"] .agent-card,
+[data-theme="light"] .artifact-item,
+[data-theme="light"] .timeline-event,
+[data-theme="light"] .message-wrapper,
+[data-theme="light"] .tool-card,
+[data-theme="light"] .orchestrator-card,
+[data-theme="light"] .feature-card,
+[data-theme="light"] .welcome-card,
+[data-theme="light"] .agent-content,
+[data-theme="light"] .agent-metrics,
+[data-theme="light"] .agent-activity {
+  background: #f9fafb !important;
+  background-color: #f9fafb !important;
+  border: 1px solid #e5e7eb !important;
+  color: #111827 !important;
+}
+
+/* Headers in light mode */
+[data-theme="light"] .chat-header,
+[data-theme="light"] .tools-header,
+[data-theme="light"] .agent-panel-header,
+[data-theme="light"] .orchestrator-header,
+[data-theme="light"] .agent-header {
+  background: #f9fafb !important;
+  background-color: #f9fafb !important;
+  border-bottom: 1px solid #e5e7eb !important;
+  color: #111827 !important;
+}
+
+/* Text elements in light mode */
+[data-theme="light"] h1,
+[data-theme="light"] h2,
+[data-theme="light"] h3,
+[data-theme="light"] h4,
+[data-theme="light"] h5,
+[data-theme="light"] h6,
+[data-theme="light"] .agent-name,
+[data-theme="light"] .overview-header h3 {
+  color: #111827 !important;
+}
+
+[data-theme="light"] p,
+[data-theme="light"] span,
+[data-theme="light"] div {
+  color: #4b5563 !important;
+}
+
+[data-theme="light"] .text-muted,
+[data-theme="light"] .text-secondary,
+[data-theme="light"] small,
+[data-theme="light"] .agent-role,
+[data-theme="light"] .stat-label,
+[data-theme="light"] .status-text {
+  color: #6b7280 !important;
+}
+
+/* Inputs in light mode */
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select,
+[data-theme="light"] .chat-input,
+[data-theme="light"] .orchestrator-input input,
+[data-theme="light"] .search-bar input {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  color: #111827 !important;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #9ca3af !important;
+}
+
+/* Buttons in light mode */
+[data-theme="light"] button,
+[data-theme="light"] .btn,
+[data-theme="light"] .action-btn {
+  background: #f3f4f6 !important;
+  color: #374151 !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+[data-theme="light"] button:hover,
+[data-theme="light"] .btn:hover,
+[data-theme="light"] .action-btn:hover {
+  background: #e5e7eb !important;
+}
+
+[data-theme="light"] .send-button,
+[data-theme="light"] .btn-primary,
+[data-theme="light"] button.primary {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+
+/* ==========================================
+   DARK THEME - FORCE DARK BACKGROUNDS
+   ========================================== */
+
+[data-theme="dark"] {
+  background: #0f172a !important;
+  color: #f1f5f9 !important;
+}
+
+/* Primary backgrounds in dark mode */
+[data-theme="dark"] .swarm-chat,
+[data-theme="dark"] .chat-layout,
+[data-theme="dark"] .center-panel,
+[data-theme="dark"] .messages-container,
+[data-theme="dark"] .welcome-screen,
+[data-theme="dark"] .tools-container {
+  background: #0f172a !important;
+  background-color: #0f172a !important;
+  color: #f1f5f9 !important;
+}
+
+/* Secondary panels in dark mode */
+[data-theme="dark"] .left-panel,
+[data-theme="dark"] .right-panel,
+[data-theme="dark"] .agent-panel,
+[data-theme="dark"] .unified-agent-panel,
+[data-theme="dark"] .team-overview,
+[data-theme="dark"] .agent-list,
+[data-theme="dark"] .artifacts-panel,
+[data-theme="dark"] .orchestrator-panel,
+[data-theme="dark"] .orchestrator-container,
+[data-theme="dark"] .chat-header,
+[data-theme="dark"] .chat-input-container,
+[data-theme="dark"] .tools-header {
+  background: #1e293b !important;
+  background-color: #1e293b !important;
+  color: #f1f5f9 !important;
+}
+
+/* Cards in dark mode */
+[data-theme="dark"] .agent-card,
+[data-theme="dark"] .artifact-item,
+[data-theme="dark"] .timeline-event,
+[data-theme="dark"] .message-wrapper,
+[data-theme="dark"] .tool-card,
+[data-theme="dark"] .agent-content,
+[data-theme="dark"] .agent-metrics,
+[data-theme="dark"] .agent-activity {
+  background: #334155 !important;
+  background-color: #334155 !important;
+  border: 1px solid #475569 !important;
+  color: #f1f5f9 !important;
+}
+
+/* Text in dark mode */
+[data-theme="dark"] h1,
+[data-theme="dark"] h2,
+[data-theme="dark"] h3,
+[data-theme="dark"] h4,
+[data-theme="dark"] h5,
+[data-theme="dark"] h6 {
+  color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] p,
+[data-theme="dark"] span,
+[data-theme="dark"] div {
+  color: #cbd5e1 !important;
+}
+
+/* ==========================================
+   NUCLEAR OVERRIDES - REMOVE ALL INLINE STYLES
+   ========================================== */
+
+/* Remove any inline styles that might override */
+[style*="background"],
+[style*="color"],
+[style*="border"] {
+  background: inherit !important;
+  color: inherit !important;
+  border-color: inherit !important;
+}
+
+/* Target specific hardcoded values */
+[style*="#0a0e27"],
+[style*="#1a1f3a"],
+[style*="#ffffff"],
+[style*="#e4e6eb"],
+[style*="rgba(255, 255, 255"] {
+  background: inherit !important;
+  color: inherit !important;
+}
+
+/* ==========================================
+   COMPONENT-SPECIFIC FIXES
+   ========================================== */
+
+/* Orchestrator specific fixes */
+.orchestrator-panel,
+.orchestrator-container,
+.orchestrator-content,
+.orchestrator-input,
+.orchestrator-input-container,
+.orchestrator-input-form {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-primary) !important;
+}
+
+/* Agent panel specific fixes */
+.agent-panel,
+.unified-agent-panel,
+.team-overview,
+.agent-list,
+.agent-section {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Timeline specific fixes */
+.timeline-container,
+.execution-timeline {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ==========================================
+   FORCE INHERITANCE
+   ========================================== */
+
+/* Make everything inherit from parent */
+* {
+  background-color: inherit;
+  color: inherit;
+  border-color: inherit;
+}
+
+/* Reset specificity wars */
+.swarm-chat * {
+  background-color: inherit !important;
+  color: inherit !important;
+}
+
+/* Override any remaining hardcoded colors */
+[class*="panel"],
+[class*="container"],
+[class*="wrapper"],
+[class*="content"] {
+  background: inherit !important;
+  color: inherit !important;
+}
+
+/* ==========================================
+   ESSENTIAL LAYOUT STYLES (theme-aware)
+   ========================================== */
+
+/* Chat Layout */
+.swarm-chat {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+.chat-header {
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.chat-layout {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.left-panel {
+  width: 320px;
+  border-right: 1px solid var(--border-primary);
+  overflow-y: auto;
+}
+
+.center-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.right-panel {
+  width: 360px;
+  border-left: 1px solid var(--border-primary);
+  overflow-y: auto;
+}
+
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.chat-input-container {
+  padding: 16px;
+  border-top: 1px solid var(--border-primary);
+  display: flex;
+  gap: 12px;
+}
+
+.chat-input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.send-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Agent Panel */
+.unified-agent-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.team-overview {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.agent-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.agent-section {
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.agent-header {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.agent-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.agent-content {
+  padding: 0 16px 16px 44px;
+}
+
+/* Orchestrator Panel */
+.orchestrator-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.orchestrator-input-container {
+  padding: 16px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.orchestrator-input {
+  display: flex;
+  gap: 12px;
+}
+
+.orchestrator-input input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* Tool Settings */
+.tools-container {
+  min-height: 100vh;
+  padding-bottom: 2rem;
+}
+
+.tools-header {
+  padding: 2rem 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.tools-main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 2.5rem;
+}
+
+/* Welcome Screen */
+.welcome {
+  text-align: center;
+  padding: 60px 20px;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.welcome h2 {
+  margin: 0 0 12px 0;
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.welcome p {
+  margin: 0 0 32px 0;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.quick-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.quick-actions button {
+  padding: 12px 20px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+/* Messages */
+.message {
+  margin-bottom: 16px;
+}
+
+.user-message {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.user-message .message-content {
+  max-width: 70%;
+  padding: 12px 16px;
+  border-radius: 16px 16px 4px 16px;
+}
+
+.agent-message {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.agent-message .message-content {
+  padding: 10px 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px 16px 16px 16px;
+}
+
+/* Utility classes */
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  flex-direction: column;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.gap-2 {
+  gap: 0.5rem;
+}
+
+.gap-4 {
+  gap: 1rem;
+}
+
+.p-4 {
+  padding: 1rem;
+}
+
+.rounded {
+  border-radius: 0.5rem;
+}
+
+.border {
+  border: 1px solid var(--border-primary);
+}

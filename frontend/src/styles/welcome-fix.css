@@ -1,0 +1,136 @@
+/* ============================================
+   WELCOME SCREEN FIX - Proper theming
+   ============================================ */
+
+/* Fix welcome text visibility in both themes */
+.welcome h2 {
+  margin: 0 0 12px 0;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-primary) !important;
+  /* Remove gradient text that becomes invisible */
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  -webkit-text-fill-color: initial !important;
+  background-clip: initial !important;
+}
+
+/* Add a subtle gradient as a separate decoration if desired */
+.welcome h2::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+  border-radius: 2px;
+}
+
+.welcome h2 {
+  position: relative;
+}
+
+.welcome p {
+  margin: 0 0 32px 0;
+  color: var(--text-secondary) !important;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+/* Quick action buttons in welcome screen */
+.quick-actions button {
+  background: var(--button-secondary-bg) !important;
+  border: 1.5px solid var(--border-primary) !important;
+  color: var(--button-secondary-text) !important;
+}
+
+.quick-actions button:hover {
+  background: var(--button-secondary-hover) !important;
+  border-color: var(--primary-color) !important;
+  color: var(--primary-color) !important;
+}
+
+/* Welcome screen container */
+.welcome {
+  background: transparent !important;
+}
+
+.welcome-screen {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.welcome-container {
+  background: transparent !important;
+}
+
+.welcome-card {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Feature cards in welcome screen */
+.feature-card {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.feature-card h3 {
+  color: var(--text-primary) !important;
+}
+
+.feature-card p {
+  color: var(--text-secondary) !important;
+}
+
+/* Agent avatars with better contrast */
+.agent-avatar {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* For light theme specifically */
+[data-theme="light"] .welcome h2 {
+  color: #111827 !important;
+}
+
+[data-theme="light"] .welcome p {
+  color: #4b5563 !important;
+}
+
+[data-theme="light"] .quick-actions button {
+  background: #ffffff !important;
+  border: 1.5px solid #e5e7eb !important;
+  color: #374151 !important;
+}
+
+[data-theme="light"] .quick-actions button:hover {
+  background: #f3f4f6 !important;
+  border-color: #2563eb !important;
+  color: #2563eb !important;
+}
+
+/* For dark theme specifically */
+[data-theme="dark"] .welcome h2 {
+  color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] .welcome p {
+  color: #cbd5e1 !important;
+}
+
+[data-theme="dark"] .quick-actions button {
+  background: #1e293b !important;
+  border: 1.5px solid #334155 !important;
+  color: #e2e8f0 !important;
+}
+
+[data-theme="dark"] .quick-actions button:hover {
+  background: #334155 !important;
+  border-color: #3b82f6 !important;
+  color: #3b82f6 !important;
+}

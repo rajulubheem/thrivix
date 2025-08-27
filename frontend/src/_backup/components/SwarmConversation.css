@@ -1,0 +1,246 @@
+.swarm-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+/* User Messages */
+.conversation-item.user {
+  align-self: flex-end;
+  max-width: 70%;
+}
+
+.conversation-item.user .message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.conversation-item.user .user-label {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.conversation-item.user .message-content {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  padding: 0.875rem 1.25rem;
+  border-radius: 18px 18px 4px 18px;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+}
+
+/* Agent Messages */
+.conversation-item.agent {
+  align-self: flex-start;
+  max-width: 80%;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid;
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.conversation-item.agent .message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.conversation-item.agent .agent-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.conversation-item.agent .agent-emoji {
+  font-size: 1.25rem;
+}
+
+.conversation-item.agent .agent-name {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.conversation-item.agent .tools-used {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.conversation-item.agent .tool-badge {
+  padding: 0.125rem 0.5rem;
+  background: #f0f9ff;
+  border: 1px solid #3b82f6;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  color: #3b82f6;
+}
+
+.conversation-item.agent .message-content {
+  color: #1e293b;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.conversation-item.agent .cursor {
+  animation: blink 1s infinite;
+  color: #6366f1;
+  font-weight: bold;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* Handoff Messages */
+.conversation-item.handoff {
+  align-self: center;
+  width: 100%;
+  max-width: 500px;
+  background: linear-gradient(90deg, #f0f9ff, #fef3c7, #f0f9ff);
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.handoff-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.handoff-arrow .from-agent,
+.handoff-arrow .to-agent {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.handoff-arrow .arrow {
+  color: #6366f1;
+  font-size: 1.25rem;
+}
+
+.handoff-reason {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: #475569;
+}
+
+.handoff-reason .reason-label {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+/* Shared Knowledge */
+.shared-knowledge {
+  margin-top: 0.75rem;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.knowledge-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: #f8fafc;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #475569;
+}
+
+.knowledge-header .toggle {
+  font-size: 0.75rem;
+}
+
+.knowledge-content {
+  margin: 0;
+  padding: 0.75rem;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.75rem;
+  overflow-x: auto;
+}
+
+/* Available Agents */
+.available-agents {
+  margin-top: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.agents-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #475569;
+}
+
+.agents-list {
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.available-agent {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.available-agent .agent-name {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.available-agent .agent-desc {
+  color: #64748b;
+}
+
+/* System Messages */
+.conversation-item.system {
+  align-self: center;
+  width: 100%;
+  max-width: 500px;
+}
+
+.system-message {
+  padding: 0.75rem 1rem;
+  background: #f1f5f9;
+  border-left: 3px solid #64748b;
+  border-radius: 6px;
+  color: #475569;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+/* Timestamp */
+.timestamp {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}

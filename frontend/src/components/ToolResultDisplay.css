@@ -1,0 +1,318 @@
+/* Tool Result Display Styles */
+
+.tool-result-display {
+    background: var(--bg-card);
+    border: 1px solid var(--border-primary);
+    border-radius: 8px;
+    margin: 8px 0;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.tool-result-display.success {
+    border-left: 3px solid var(--accent-success);
+}
+
+.tool-result-display.error {
+    border-left: 3px solid var(--accent-error);
+}
+
+.tool-result-display.in-progress {
+    border-left: 3px solid var(--accent-warning, #ffc107);
+    /* No animation - just a solid indicator */
+}
+
+/* Header */
+.tool-result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-primary);
+    user-select: none;
+}
+
+.tool-result-header:hover {
+    background: var(--bg-hover);
+}
+
+.tool-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tool-icon {
+    font-size: 16px;
+}
+
+.tool-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    text-transform: capitalize;
+}
+
+.tool-status {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tool-status.success {
+    background: var(--success-bg);
+    color: var(--success-text);
+    border: 1px solid var(--success-text);
+}
+
+.tool-status.error {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border: 1px solid var(--error-text);
+}
+
+.tool-status.in-progress {
+    background: var(--warning-bg, #fff3cd);
+    color: var(--warning-text, #856404);
+    border: 1px solid var(--warning-text, #856404);
+    /* No blinking animation */
+}
+
+.expand-indicator {
+    color: var(--text-secondary);
+    font-size: 12px;
+    transition: transform 0.2s ease;
+}
+
+/* Body */
+.tool-result-body {
+    padding: 14px;
+    background: var(--bg-secondary);
+    animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        max-height: 0;
+    }
+    to {
+        opacity: 1;
+        max-height: 500px;
+    }
+}
+
+/* Error Display */
+.tool-result-error {
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    background: var(--error-bg);
+    border: 1px solid var(--accent-error);
+    border-radius: 6px;
+}
+
+.error-icon {
+    font-size: 20px;
+}
+
+.error-content {
+    flex: 1;
+}
+
+.error-title {
+    font-weight: 600;
+    color: var(--error-text);
+    margin-bottom: 4px;
+}
+
+.error-message {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+/* Success Display */
+.tool-result-success {
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    background: var(--success-bg);
+    border: 1px solid var(--accent-success);
+    border-radius: 6px;
+}
+
+.success-icon {
+    font-size: 20px;
+}
+
+.success-content {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+/* Search Results */
+.tool-result-search {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.search-summary {
+    padding: 10px;
+    background: var(--bg-primary);
+    border-left: 3px solid var(--accent-primary);
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.results-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.search-result-item {
+    padding: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.search-result-item:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 2px 8px rgba(0, 212, 255, 0.1);
+}
+
+.result-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.result-url {
+    font-size: 11px;
+    color: var(--accent-primary);
+    text-decoration: none;
+    display: inline-block;
+    margin-bottom: 6px;
+}
+
+.result-url:hover {
+    text-decoration: underline;
+}
+
+.result-snippet {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+/* JSON Display */
+.tool-result-data {
+    max-height: 300px;
+    overflow: auto;
+}
+
+.json-display {
+    margin: 0;
+    padding: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* Timestamp */
+.tool-timestamp {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-primary);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+/* Empty State */
+.tool-result-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* Raw Content Display */
+.tool-result-raw {
+    padding: 12px;
+}
+
+.tool-result-raw .raw-content {
+    background: var(--bg-primary, #f8f9fa);
+    border: 1px solid var(--border-secondary, #e9ecef);
+    border-radius: 4px;
+    padding: 12px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: var(--text-primary, #212529);
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Scrollbar */
+.tool-result-data::-webkit-scrollbar,
+.json-display::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.tool-result-data::-webkit-scrollbar-track,
+.json-display::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+}
+
+.tool-result-data::-webkit-scrollbar-thumb,
+.json-display::-webkit-scrollbar-thumb {
+    background: var(--border-secondary);
+    border-radius: 3px;
+}
+
+.tool-result-data::-webkit-scrollbar-thumb:hover,
+.json-display::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .tool-result-body {
+        padding: 10px;
+    }
+
+    .search-result-item {
+        padding: 8px;
+    }
+}

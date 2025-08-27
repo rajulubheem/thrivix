@@ -1,0 +1,699 @@
+/* SwarmChat Theme Override - Unified Dark Theme */
+
+/* Force dark theme globally */
+* {
+  --primary-bg: #0a0e27 !important;
+  --secondary-bg: #1a1f3a !important;
+  --text-primary: #ffffff !important;
+  --text-secondary: #e4e6eb !important;
+  --text-tertiary: #8b92a8 !important;
+}
+
+/* Force dark theme on entire page */
+html, body {
+  background: #0a0e27 !important;
+  color: #e4e6eb !important;
+}
+
+/* Target ALL white backgrounds - comprehensive list */
+.welcome-screen,
+.chat-container,
+.messages-area,
+.messages-container,
+.input-area,
+.artifacts-panel,
+.agent-panel,
+.timeline-container,
+.orchestrator-container,
+.left-panel,
+.center-panel,
+.right-panel,
+.team-status,
+.team-stats,
+.agents-section,
+.timeline-view,
+.orchestrator-view,
+.orchestrator-input,
+.tool-library,
+.agent-workflow {
+  background: #0a0e27 !important;
+  color: #e4e6eb !important;
+}
+
+/* Override any white cards */
+.welcome-card,
+.feature-card,
+.message-wrapper,
+.agent-card,
+.artifact-item,
+.timeline-event,
+.orchestrator-card,
+.approval-modal {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #e4e6eb !important;
+}
+
+/* Override existing SwarmChat styles with dark theme */
+.swarm-chat {
+  background: #0a0e27 !important;
+  color: #e4e6eb !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif !important;
+  min-height: 100vh !important;
+}
+
+/* Welcome Screen Override */
+.swarm-chat .welcome-screen {
+  background: #0a0e27 !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .welcome-container {
+  background: transparent !important;
+}
+
+.swarm-chat .welcome-card {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: none !important;
+}
+
+.swarm-chat .welcome-header h1 {
+  color: #ffffff !important;
+  background: linear-gradient(135deg, #4a9eff 0%, #8b5cf6 100%) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+.swarm-chat .welcome-subtitle {
+  color: #8b92a8 !important;
+}
+
+.swarm-chat .feature-grid .feature-card {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #e4e6eb !important;
+  transition: all 0.2s !important;
+}
+
+.swarm-chat .feature-grid .feature-card:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  transform: translateY(-2px) !important;
+}
+
+.swarm-chat .feature-card .feature-icon {
+  background: rgba(74, 158, 255, 0.1) !important;
+  color: #4a9eff !important;
+}
+
+.swarm-chat .feature-card h3 {
+  color: #ffffff !important;
+}
+
+.swarm-chat .feature-card p {
+  color: #8b92a8 !important;
+}
+
+.swarm-chat .quick-start {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.swarm-chat .quick-start h3 {
+  color: #ffffff !important;
+}
+
+.swarm-chat .example-prompt {
+  background: #1a1f3a !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .example-prompt:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: #4a9eff !important;
+}
+
+/* Header Override */
+.swarm-chat .chat-header {
+  background: var(--gradient-header) !important;
+  border-bottom: 1px solid var(--border-primary) !important;
+  padding: 1rem 1.5rem !important;
+  box-shadow: none !important;
+}
+
+.swarm-chat .header-left .logo {
+  color: var(--text-primary) !important;
+}
+
+.swarm-chat .header-left h1 {
+  color: var(--text-primary) !important;
+  font-size: 1.25rem !important;
+  font-weight: 600 !important;
+}
+
+.swarm-chat .status-badge {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  color: var(--text-tertiary) !important;
+  padding: 0.375rem 0.75rem !important;
+  border-radius: var(--radius-full) !important;
+  font-size: var(--text-sm) !important;
+}
+
+.swarm-chat .status-badge.connected {
+  background: rgba(74, 222, 128, 0.1) !important;
+  border-color: var(--accent-success) !important;
+  color: var(--accent-success) !important;
+}
+
+.swarm-chat .status-badge.executing {
+  background: rgba(74, 158, 255, 0.1) !important;
+  border-color: var(--accent-primary) !important;
+  color: var(--accent-primary) !important;
+}
+
+/* View Buttons Override */
+.swarm-chat .view-btn {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  color: var(--text-tertiary) !important;
+  padding: 0.5rem 1rem !important;
+  border-radius: var(--radius-md) !important;
+  font-size: var(--text-sm) !important;
+  transition: var(--transition-base) !important;
+}
+
+.swarm-chat .view-btn:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--border-hover) !important;
+  color: var(--text-secondary) !important;
+}
+
+.swarm-chat .view-btn.active {
+  background: rgba(74, 158, 255, 0.15) !important;
+  border-color: var(--accent-primary) !important;
+  color: var(--accent-primary) !important;
+}
+
+/* Main Chat Area Override */
+.swarm-chat .chat-main {
+  background: #0a0e27 !important;
+}
+
+.swarm-chat .chat-container {
+  background: #0a0e27 !important;
+}
+
+/* Messages Area Override */
+.swarm-chat .messages-area {
+  background: #0a0e27 !important;
+  border: none !important;
+}
+
+.swarm-chat .messages-container {
+  background: #0a0e27 !important;
+}
+
+.swarm-chat .messages-scroll-container {
+  background: #0a0e27 !important;
+}
+
+/* Message Cards Override */
+.swarm-chat .message-wrapper {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  border-radius: var(--radius-lg) !important;
+  margin: 1rem 0 !important;
+  box-shadow: none !important;
+}
+
+.swarm-chat .message-wrapper:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--border-hover) !important;
+}
+
+.swarm-chat .message-header-clickable {
+  background: var(--hover-bg) !important;
+  border-bottom: 1px solid var(--border-secondary) !important;
+  color: var(--text-primary) !important;
+  padding: 1rem 1.25rem !important;
+}
+
+.swarm-chat .message-header-clickable:hover {
+  background: var(--active-bg) !important;
+}
+
+.swarm-chat .agent-avatar {
+  background: linear-gradient(135deg, var(--accent-primary), #8b5cf6) !important;
+  color: white !important;
+  border: 2px solid var(--secondary-bg) !important;
+}
+
+.swarm-chat .agent-name {
+  color: var(--text-primary) !important;
+  font-weight: 600 !important;
+}
+
+.swarm-chat .timestamp {
+  color: var(--text-muted) !important;
+  font-size: var(--text-xs) !important;
+}
+
+.swarm-chat .message-content {
+  color: var(--text-secondary) !important;
+  background: transparent !important;
+  padding: 1.25rem !important;
+}
+
+.swarm-chat .message-content pre {
+  background: var(--primary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  border-radius: var(--radius-md) !important;
+  color: var(--text-secondary) !important;
+  padding: 1rem !important;
+}
+
+.swarm-chat .message-content code {
+  background: var(--primary-bg) !important;
+  color: var(--accent-primary) !important;
+  padding: 0.125rem 0.375rem !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+/* Input Area Override */
+.swarm-chat .input-area {
+  background: var(--gradient-header) !important;
+  border-top: 1px solid var(--border-primary) !important;
+  padding: 1.5rem !important;
+}
+
+.swarm-chat .input-container {
+  background: transparent !important;
+  max-width: 1200px !important;
+  margin: 0 auto !important;
+}
+
+.swarm-chat .input-wrapper textarea {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-secondary) !important;
+  border-radius: var(--radius-lg) !important;
+  font-size: var(--text-base) !important;
+  padding: 0.875rem 1rem !important;
+}
+
+.swarm-chat .input-wrapper textarea:focus {
+  background: var(--hover-bg) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.1) !important;
+  outline: none !important;
+}
+
+.swarm-chat .input-wrapper textarea::placeholder {
+  color: var(--text-muted) !important;
+}
+
+.swarm-chat .send-button {
+  background: var(--accent-primary) !important;
+  border: none !important;
+  color: white !important;
+  border-radius: var(--radius-lg) !important;
+  padding: 0.875rem 1.5rem !important;
+  font-weight: 500 !important;
+  transition: var(--transition-base) !important;
+}
+
+.swarm-chat .send-button:hover:not(:disabled) {
+  background: #3a8eef !important;
+  transform: translateY(-1px) !important;
+}
+
+.swarm-chat .send-button:disabled {
+  opacity: 0.5 !important;
+}
+
+/* Left Panel - Team Status Override */
+.swarm-chat .left-panel {
+  background: #1a1f3a !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .team-status {
+  background: #1a1f3a !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .team-status h3 {
+  color: #ffffff !important;
+}
+
+.swarm-chat .team-stats {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.swarm-chat .stat-item {
+  background: transparent !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .stat-value {
+  color: #4a9eff !important;
+}
+
+.swarm-chat .stat-label {
+  color: #8b92a8 !important;
+}
+
+.swarm-chat .agents-section {
+  background: transparent !important;
+}
+
+.swarm-chat .agents-section h4 {
+  color: #ffffff !important;
+}
+
+.swarm-chat .empty-agents {
+  color: #8b92a8 !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Sidebar Override */
+.swarm-chat .artifacts-panel {
+  background: var(--secondary-bg) !important;
+  border-left: 1px solid var(--border-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+.swarm-chat .artifacts-header {
+  background: var(--gradient-header) !important;
+  border-bottom: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.swarm-chat .artifact-item {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  border-radius: var(--radius-md) !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.swarm-chat .artifact-item:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--border-hover) !important;
+}
+
+/* Agent Cards Override */
+.swarm-chat .agent-card {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  border-radius: var(--radius-md) !important;
+  color: var(--text-secondary) !important;
+}
+
+.swarm-chat .agent-card:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--border-hover) !important;
+}
+
+.swarm-chat .agent-card .agent-name {
+  color: var(--text-primary) !important;
+}
+
+.swarm-chat .agent-status {
+  color: var(--text-tertiary) !important;
+}
+
+.swarm-chat .agent-status.working {
+  color: var(--accent-primary) !important;
+}
+
+.swarm-chat .agent-status.done {
+  color: var(--accent-success) !important;
+}
+
+/* Timeline View Override */
+.swarm-chat .timeline-container,
+.swarm-chat .timeline-view {
+  background: #0a0e27 !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .timeline-header {
+  background: transparent !important;
+  color: #ffffff !important;
+}
+
+.swarm-chat .timeline-event {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+  margin-bottom: 1rem !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .timeline-event:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.swarm-chat .timeline-empty {
+  background: #0a0e27 !important;
+  color: #8b92a8 !important;
+}
+
+/* Orchestrator View Override */
+.swarm-chat .orchestrator-container,
+.swarm-chat .orchestrator-view {
+  background: #0a0e27 !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .orchestrator-header {
+  background: transparent !important;
+  color: #ffffff !important;
+}
+
+.swarm-chat .orchestrator-header h2 {
+  color: #ffffff !important;
+}
+
+.swarm-chat .orchestrator-header p {
+  color: #8b92a8 !important;
+}
+
+.swarm-chat .orchestrator-input {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  padding: 2rem !important;
+  border-radius: 12px !important;
+}
+
+.swarm-chat .orchestrator-input textarea {
+  background: #1a1f3a !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .orchestrator-input textarea:focus {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: #4a9eff !important;
+  outline: none !important;
+}
+
+.swarm-chat .orchestrator-input textarea::placeholder {
+  color: #6b7280 !important;
+}
+
+.swarm-chat .generate-button {
+  background: #4a9eff !important;
+  color: white !important;
+  border: none !important;
+}
+
+.swarm-chat .generate-button:hover:not(:disabled) {
+  background: #3a8eef !important;
+}
+
+.swarm-chat .generate-button:disabled {
+  opacity: 0.5 !important;
+}
+
+.swarm-chat .tool-library {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .tool-library h3 {
+  color: #ffffff !important;
+}
+
+.swarm-chat .agent-workflow {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #e4e6eb !important;
+}
+
+.swarm-chat .tip {
+  background: rgba(74, 158, 255, 0.1) !important;
+  border: 1px solid #4a9eff !important;
+  color: #4a9eff !important;
+}
+
+.swarm-chat .orchestrator-card {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-secondary) !important;
+  border-radius: var(--radius-lg) !important;
+}
+
+.swarm-chat .orchestrator-card:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--border-hover) !important;
+}
+
+/* Tool Approval Modal Override */
+.swarm-chat .approval-modal {
+  background: var(--secondary-bg) !important;
+  border: 1px solid var(--border-primary) !important;
+  border-radius: var(--radius-xl) !important;
+  color: var(--text-secondary) !important;
+}
+
+.swarm-chat .approval-header {
+  background: var(--gradient-header) !important;
+  border-bottom: 1px solid var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.swarm-chat .approval-content {
+  color: var(--text-secondary) !important;
+}
+
+.swarm-chat .approval-actions button {
+  border-radius: var(--radius-md) !important;
+  font-weight: 500 !important;
+  transition: var(--transition-base) !important;
+}
+
+.swarm-chat .approve-button {
+  background: var(--accent-primary) !important;
+  border: none !important;
+  color: white !important;
+}
+
+.swarm-chat .approve-button:hover {
+  background: #3a8eef !important;
+}
+
+.swarm-chat .reject-button {
+  background: var(--tertiary-bg) !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+.swarm-chat .reject-button:hover {
+  background: var(--hover-bg) !important;
+  border-color: var(--accent-error) !important;
+  color: var(--accent-error) !important;
+}
+
+/* Scrollbar Override */
+.swarm-chat ::-webkit-scrollbar {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+.swarm-chat ::-webkit-scrollbar-track {
+  background: var(--primary-bg) !important;
+}
+
+.swarm-chat ::-webkit-scrollbar-thumb {
+  background: var(--border-primary) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.swarm-chat ::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover) !important;
+}
+
+/* Remove all unwanted shadows and borders */
+.swarm-chat * {
+  box-shadow: none !important;
+}
+
+.swarm-chat .ds-card,
+.swarm-chat .message-wrapper,
+.swarm-chat .agent-card,
+.swarm-chat .artifact-item {
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* Smooth transitions */
+.swarm-chat * {
+  transition: background-color 0.2s ease, 
+              border-color 0.2s ease,
+              transform 0.2s ease,
+              opacity 0.2s ease !important;
+}
+
+/* Prevent flickering */
+.swarm-chat {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Welcome Screen Dark Theme Overrides */
+.welcome {
+  background: transparent !important;
+}
+
+.welcome h2 {
+  color: #ffffff !important;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.welcome p {
+  color: #e4e6eb !important;
+}
+
+.quick-actions {
+  margin-top: 32px;
+}
+
+.quick-actions button {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.1) !important;
+  color: #e4e6eb !important;
+  font-weight: 500;
+}
+
+.quick-actions button:hover {
+  background: rgba(74, 158, 255, 0.15) !important;
+  border-color: #4a9eff !important;
+  color: #4a9eff !important;
+  transform: translateY(-2px);
+}
+
+/* Chat Input Dark Theme */
+.chat-input {
+  background: rgba(26, 31, 58, 0.8) !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.1) !important;
+  color: #e4e6eb !important;
+}
+
+.chat-input::placeholder {
+  color: #8b92a8 !important;
+  opacity: 0.8;
+}
+
+.chat-input:focus {
+  background: rgba(26, 31, 58, 0.95) !important;
+  border-color: #4a9eff !important;
+}

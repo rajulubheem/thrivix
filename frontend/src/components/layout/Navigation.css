@@ -1,0 +1,155 @@
+/* Unified Navigation Styles */
+.unified-nav {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  background: rgba(var(--bg-secondary-rgb), 0.85);
+}
+
+.nav-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 2rem;
+  height: 60px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nav-brand:hover {
+  opacity: 0.8;
+}
+
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--purple-500);
+}
+
+.brand-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--purple-500), var(--blue-500));
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s;
+  text-decoration: none;
+  position: relative;
+}
+
+.nav-link:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.nav-link.active {
+  color: var(--purple-500);
+  background: rgba(139, 92, 246, 0.1);
+}
+
+.nav-link.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 3px;
+  background: var(--purple-500);
+  border-radius: 3px 3px 0 0;
+}
+
+.nav-link.icon-only {
+  padding: 0.5rem;
+}
+
+.nav-link.icon-only span {
+  display: none;
+}
+
+.nav-link.theme-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--purple-500);
+}
+
+.nav-back {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.nav-back:hover {
+  border-color: var(--purple-500);
+  color: var(--purple-500);
+}
+
+.nav-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border-color);
+  margin: 0 0.5rem;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .nav-container {
+    padding: 0 1rem;
+  }
+
+  .brand-name {
+    display: none;
+  }
+
+  .nav-link span {
+    display: none;
+  }
+
+  .nav-link {
+    padding: 0.5rem;
+  }
+
+  .nav-divider {
+    margin: 0 0.25rem;
+  }
+}
+
+/* CSS Variables for themes */
+:root {
+  --bg-secondary-rgb: 255, 255, 255;
+}
+
+body.dark {
+  --bg-secondary-rgb: 31, 41, 55;
+}

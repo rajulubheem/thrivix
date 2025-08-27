@@ -1,0 +1,96 @@
+/* ============================================
+   INLINE STYLE OVERRIDE - Force theme colors
+   ============================================ */
+
+/* Override ALL inline styles with CSS variables */
+
+/* Light Mode Overrides */
+[data-theme="light"] [style*="background: #1a1f3a"],
+[data-theme="light"] [style*="background: #0a0e27"],
+[data-theme="light"] [style*="background: rgba(255, 255, 255, 0.03)"],
+[data-theme="light"] [style*="background: rgba(255, 255, 255, 0.05)"] {
+  background: var(--bg-secondary) !important;
+}
+
+[data-theme="light"] [style*="color: #e4e6eb"],
+[data-theme="light"] [style*="color: #ffffff"],
+[data-theme="light"] [style*="color: #8b92a8"] {
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] [style*="border: 1px solid rgba(255, 255, 255, 0.1)"],
+[data-theme="light"] [style*="borderBottom: '1px solid rgba(255, 255, 255, 0.1)'"] {
+  border-color: var(--border-primary) !important;
+}
+
+/* Force light backgrounds on specific components */
+[data-theme="light"] .unified-agent-panel,
+[data-theme="light"] .team-overview,
+[data-theme="light"] .panel-section {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] .team-stats-grid {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+}
+
+[data-theme="light"] .section-header-fixed {
+  background: var(--bg-tertiary) !important;
+}
+
+[data-theme="light"] .section-title-fixed {
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] .meta-badge {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-secondary) !important;
+}
+
+[data-theme="light"] .stat-card {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-primary) !important;
+}
+
+[data-theme="light"] .stat-number {
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] .stat-text {
+  color: var(--text-secondary) !important;
+}
+
+/* Theme Toggle Button Fix */
+.theme-toggle {
+  position: fixed !important;
+  top: 20px !important;
+  right: 20px !important;
+  z-index: 1000 !important;
+  background: var(--bg-secondary) !important;
+  border: 2px solid var(--border-primary) !important;
+  border-radius: 50% !important;
+  width: 44px !important;
+  height: 44px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.3s ease !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.theme-toggle:hover {
+  transform: scale(1.05) !important;
+  background: var(--hover-bg) !important;
+}
+
+/* Dark Mode - Keep existing behavior */
+[data-theme="dark"] .unified-agent-panel,
+[data-theme="dark"] .team-overview,
+[data-theme="dark"] .panel-section {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}

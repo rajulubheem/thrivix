@@ -1,0 +1,33 @@
+Thrivix Intelligence Platform
+Copyright 2025 [Your Name]
+
+This product includes software developed by [Your Name] for the Thrivix project.
+
+================================================================================
+
+Third-party Software Notices:
+
+This software incorporates the following third-party components:
+
+1. Strands AI SDK
+   Copyright Amazon.com, Inc. or its affiliates
+   Licensed under the Apache License, Version 2.0
+   
+2. React and related libraries
+   Copyright (c) Meta Platforms, Inc. and affiliates
+   Licensed under the MIT License
+
+3. FastAPI
+   Copyright (c) 2018 Sebastián Ramírez
+   Licensed under the MIT License
+
+================================================================================
+
+The Thrivix platform's unique features include:
+- Custom UI/UX design and implementation
+- Multi-agent orchestration architecture  
+- Research interface and conversation systems
+- Integration layer between Strands SDK and frontend
+
+All original work in this repository (excluding third-party libraries) is:
+Copyright 2025 [Your Name] and licensed under Apache License 2.0

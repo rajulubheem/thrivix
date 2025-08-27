@@ -1,0 +1,230 @@
+{
+  "tools": [
+    {
+      "id": "tavily_search",
+      "name": "Tavily Web Search",
+      "description": "Search the web using Tavily API for current information",
+      "category": "web_search",
+      "enabled": true,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83d\udd0d",
+      "config": {
+        "search_depth": "basic",
+        "max_results": 5,
+        "include_raw_content": false,
+        "include_images": false
+      },
+      "required_env_vars": [
+        "TAVILY_API_KEY"
+      ],
+      "requires_approval": true,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    },
+    {
+      "id": "file_write",
+      "name": "File Write",
+      "description": "Create or write files to the filesystem",
+      "category": "file_operations",
+      "enabled": true,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83d\udcdd",
+      "config": {
+        "max_file_size": 10485760,
+        "allowed_extensions": [
+          ".txt",
+          ".py",
+          ".js",
+          ".json",
+          ".md",
+          ".html",
+          ".css"
+        ]
+      },
+      "required_env_vars": [],
+      "requires_approval": true,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    },
+    {
+      "id": "file_read",
+      "name": "File Read",
+      "description": "Read files from the filesystem",
+      "category": "file_operations",
+      "enabled": true,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83d\udcd6",
+      "config": {
+        "max_file_size": 10485760
+      },
+      "required_env_vars": [],
+      "requires_approval": false,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    },
+    {
+      "id": "python_repl",
+      "name": "Python REPL",
+      "description": "Execute Python code in a sandboxed environment",
+      "category": "code_execution",
+      "enabled": false,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83d\udc0d",
+      "config": {
+        "timeout": 30,
+        "max_output_size": 50000
+      },
+      "required_env_vars": [],
+      "requires_approval": true,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    },
+    {
+      "id": "data_query",
+      "name": "Data Query",
+      "description": "Query and analyze structured data",
+      "category": "data_analysis",
+      "enabled": true,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83d\udcca",
+      "config": {},
+      "required_env_vars": [],
+      "requires_approval": false,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    },
+    {
+      "id": "calculator",
+      "name": "Calculator",
+      "description": "Perform mathematical calculations",
+      "category": "utilities",
+      "enabled": true,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83e\uddee",
+      "config": {},
+      "required_env_vars": [],
+      "requires_approval": false,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    },
+    {
+      "id": "task_create",
+      "name": "Task Creator",
+      "description": "Create and manage tasks",
+      "category": "utilities",
+      "enabled": true,
+      "status": "enabled",
+      "version": null,
+      "author": null,
+      "icon": "\ud83d\udccb",
+      "config": {},
+      "required_env_vars": [],
+      "requires_approval": false,
+      "rate_limit": null,
+      "max_retries": 3,
+      "timeout": 30,
+      "mcp_server_id": null,
+      "usage_count": 0,
+      "last_used": null,
+      "error_count": 0,
+      "last_error": null,
+      "allowed_agents": [],
+      "blocked_agents": []
+    }
+  ],
+  "mcp_servers": [
+    {
+      "id": "weather-mcp",
+      "name": "Weather MCP Server",
+      "command": "npx",
+      "args": [
+        "@modelcontextprotocol/server-weather"
+      ],
+      "env": {
+        "OPENWEATHER_API_KEY": ""
+      },
+      "enabled": false,
+      "auto_start": false,
+      "status": "stopped",
+      "last_connected": null,
+      "error_message": null
+    },
+    {
+      "id": "github-mcp",
+      "name": "GitHub MCP Server",
+      "command": "npx",
+      "args": [
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_TOKEN": ""
+      },
+      "enabled": false,
+      "auto_start": false,
+      "status": "stopped",
+      "last_connected": null,
+      "error_message": null
+    }
+  ],
+  "last_updated": "2025-08-13T01:44:49.592698"
+}

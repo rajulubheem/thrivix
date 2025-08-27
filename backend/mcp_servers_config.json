@@ -1,0 +1,52 @@
+{
+  "servers": [
+    {
+      "name": "Calculator",
+      "description": "Basic arithmetic operations for calculations",
+      "url": "http://localhost:8001/mcp",
+      "transport": "streamable_http",
+      "script": "mcp_calculator_server.py",
+      "port": 8001,
+      "tools": [
+        "add", "subtract", "multiply", "divide", 
+        "power", "sqrt", "percentage"
+      ]
+    },
+    {
+      "name": "Filesystem",
+      "description": "Secure file operations for agent collaboration",
+      "url": "http://localhost:8002/mcp",
+      "transport": "streamable_http",
+      "script": "mcp_filesystem_server.py",
+      "port": 8002,
+      "tools": [
+        "list_files", "read_file", "write_file", 
+        "delete_file", "create_directory", "file_info"
+      ]
+    },
+    {
+      "name": "Memory",
+      "description": "Persistent memory and knowledge management",
+      "url": "http://localhost:8003/mcp",
+      "transport": "streamable_http",
+      "script": "mcp_memory_server.py",
+      "port": 8003,
+      "tools": [
+        "store_memory", "recall_memory", "search_memories",
+        "link_memories", "get_related", "forget_memory", "memory_stats"
+      ]
+    },
+    {
+      "name": "WebSearch",
+      "description": "Web search and content extraction",
+      "url": "http://localhost:8004/mcp",
+      "transport": "streamable_http",
+      "script": "mcp_websearch_server.py",
+      "port": 8004,
+      "tools": [
+        "web_search", "fetch_webpage", "extract_metadata",
+        "check_url", "extract_article"
+      ]
+    }
+  ]
+}

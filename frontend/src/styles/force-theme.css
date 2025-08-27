@@ -1,0 +1,309 @@
+/* ============================================
+   FORCE THEME - Override ALL hardcoded colors
+   This file MUST be loaded LAST to override everything
+   ============================================ */
+
+/* Light Theme Overrides */
+[data-theme="light"] * {
+  --primary-bg: #ffffff !important;
+  --secondary-bg: #f9fafb !important;
+  --tertiary-bg: #f3f4f6 !important;
+  --hover-bg: #f0f1f3 !important;
+  --active-bg: #e5e7eb !important;
+}
+
+/* Force light backgrounds on ALL components in light mode */
+[data-theme="light"] .swarm-chat,
+[data-theme="light"] .chat-header,
+[data-theme="light"] .chat-layout,
+[data-theme="light"] .left-panel,
+[data-theme="light"] .center-panel,
+[data-theme="light"] .right-panel,
+[data-theme="light"] .messages-container,
+[data-theme="light"] .chat-input-container,
+[data-theme="light"] .agent-panel,
+[data-theme="light"] .agent-panel-header,
+[data-theme="light"] .agent-panel-content,
+[data-theme="light"] .artifacts-panel,
+[data-theme="light"] .orchestrator-panel,
+[data-theme="light"] .orchestrator-container,
+[data-theme="light"] .timeline-container,
+[data-theme="light"] .execution-timeline,
+[data-theme="light"] .tool-approval-panel,
+[data-theme="light"] .tools-container,
+[data-theme="light"] .tools-header,
+[data-theme="light"] .tools-main,
+[data-theme="light"] .welcome,
+[data-theme="light"] .welcome-screen {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+
+/* Secondary panels in light mode */
+[data-theme="light"] .agent-card,
+[data-theme="light"] .artifact-item,
+[data-theme="light"] .timeline-event,
+[data-theme="light"] .message-wrapper,
+[data-theme="light"] .tool-card,
+[data-theme="light"] .orchestrator-card,
+[data-theme="light"] .feature-card,
+[data-theme="light"] .welcome-card {
+  background: #f9fafb !important;
+  background-color: #f9fafb !important;
+  border: 1px solid #e5e7eb !important;
+  color: #111827 !important;
+}
+
+/* Headers and special sections in light mode */
+[data-theme="light"] .chat-header,
+[data-theme="light"] .tools-header,
+[data-theme="light"] .agent-panel-header,
+[data-theme="light"] .orchestrator-header {
+  background: #f9fafb !important;
+  background-color: #f9fafb !important;
+  border-bottom: 1px solid #e5e7eb !important;
+}
+
+/* Inputs and form elements in light mode */
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select,
+[data-theme="light"] .chat-input,
+[data-theme="light"] .search-bar input {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  color: #111827 !important;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #9ca3af !important;
+}
+
+/* Buttons in light mode */
+[data-theme="light"] button,
+[data-theme="light"] .btn {
+  background: #f3f4f6 !important;
+  color: #374151 !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+[data-theme="light"] button:hover,
+[data-theme="light"] .btn:hover {
+  background: #e5e7eb !important;
+}
+
+[data-theme="light"] .send-button,
+[data-theme="light"] .btn-primary,
+[data-theme="light"] button.primary {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+
+[data-theme="light"] .send-button:hover,
+[data-theme="light"] .btn-primary:hover,
+[data-theme="light"] button.primary:hover {
+  background: #1d4ed8 !important;
+}
+
+/* Text colors in light mode */
+[data-theme="light"] h1,
+[data-theme="light"] h2,
+[data-theme="light"] h3,
+[data-theme="light"] h4,
+[data-theme="light"] h5,
+[data-theme="light"] h6 {
+  color: #111827 !important;
+}
+
+[data-theme="light"] p {
+  color: #4b5563 !important;
+}
+
+[data-theme="light"] .text-muted,
+[data-theme="light"] .text-secondary,
+[data-theme="light"] small {
+  color: #6b7280 !important;
+}
+
+[data-theme="light"] a {
+  color: #2563eb !important;
+}
+
+[data-theme="light"] a:hover {
+  color: #1d4ed8 !important;
+}
+
+/* Code blocks in light mode */
+[data-theme="light"] pre,
+[data-theme="light"] code,
+[data-theme="light"] .code-block {
+  background: #f9fafb !important;
+  border: 1px solid #e5e7eb !important;
+  color: #1f2937 !important;
+}
+
+/* Status badges in light mode */
+[data-theme="light"] .status-badge.connected {
+  background: #d1fae5 !important;
+  color: #065f46 !important;
+}
+
+[data-theme="light"] .status-badge.executing {
+  background: #fed7aa !important;
+  color: #92400e !important;
+}
+
+[data-theme="light"] .status-badge.active {
+  background: #dbeafe !important;
+  color: #1e40af !important;
+}
+
+/* Agent avatars in light mode */
+[data-theme="light"] .agent-avatar {
+  background: #f3f4f6 !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+/* Quick actions in light mode */
+[data-theme="light"] .quick-actions button {
+  background: #ffffff !important;
+  border: 1.5px solid #e5e7eb !important;
+  color: #374151 !important;
+}
+
+[data-theme="light"] .quick-actions button:hover {
+  background: #f3f4f6 !important;
+  border-color: #2563eb !important;
+  color: #2563eb !important;
+}
+
+/* View switcher in light mode */
+[data-theme="light"] .view-switcher {
+  background: #f3f4f6 !important;
+}
+
+[data-theme="light"] .view-btn {
+  color: #6b7280 !important;
+}
+
+[data-theme="light"] .view-btn:hover {
+  color: #374151 !important;
+}
+
+[data-theme="light"] .view-btn.active {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+/* Artifacts toggle in light mode */
+[data-theme="light"] .artifacts-toggle {
+  background: #f9fafb !important;
+  border: 1.5px solid #e5e7eb !important;
+  color: #4b5563 !important;
+}
+
+[data-theme="light"] .artifacts-toggle:hover {
+  border-color: #9ca3af !important;
+}
+
+[data-theme="light"] .artifacts-toggle.active {
+  background: #f3f4f6 !important;
+  border-color: #2563eb !important;
+}
+
+/* Messages in light mode */
+[data-theme="light"] .agent-message .message-content {
+  background: #f9fafb !important;
+  border: 1px solid #e5e7eb !important;
+  color: #111827 !important;
+}
+
+[data-theme="light"] .agent-message .message-content p {
+  color: #374151 !important;
+}
+
+[data-theme="light"] .user-message .message-content {
+  background: linear-gradient(135deg, #2563eb, #10b981) !important;
+  color: #ffffff !important;
+}
+
+/* Scrollbars in light mode */
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #f3f4f6 !important;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #9ca3af !important;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #6b7280 !important;
+}
+
+/* ============================================
+   Dark Theme (keep working as before)
+   ============================================ */
+
+[data-theme="dark"] .swarm-chat,
+[data-theme="dark"] .chat-layout,
+[data-theme="dark"] .center-panel,
+[data-theme="dark"] .messages-container,
+[data-theme="dark"] .welcome-screen {
+  background: #0f172a !important;
+  color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] .left-panel,
+[data-theme="dark"] .right-panel,
+[data-theme="dark"] .agent-panel,
+[data-theme="dark"] .artifacts-panel,
+[data-theme="dark"] .orchestrator-panel,
+[data-theme="dark"] .chat-header,
+[data-theme="dark"] .chat-input-container {
+  background: #1e293b !important;
+  color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] .agent-card,
+[data-theme="dark"] .artifact-item,
+[data-theme="dark"] .timeline-event,
+[data-theme="dark"] .message-wrapper,
+[data-theme="dark"] .tool-card {
+  background: #334155 !important;
+  border: 1px solid #475569 !important;
+  color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] .chat-input {
+  background: #1e293b !important;
+  border: 1px solid #475569 !important;
+  color: #f1f5f9 !important;
+}
+
+/* ============================================
+   Remove ALL inline styles that force colors
+   ============================================ */
+
+/* Target any element with inline dark background styles */
+[style*="background: #0a0e27"],
+[style*="background: #1a1f3a"],
+[style*="background-color: #0a0e27"],
+[style*="background-color: #1a1f3a"],
+[style*="background: rgba(255, 255, 255, 0.03"],
+[style*="background: rgba(255, 255, 255, 0.05"] {
+  background: inherit !important;
+}
+
+/* Remove forced text colors */
+[style*="color: #ffffff"],
+[style*="color: white"],
+[style*="color: #e4e6eb"],
+[style*="color: #8b92a8"] {
+  color: inherit !important;
+}
