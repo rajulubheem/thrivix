@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import swarm, swarm_dag, sse, agents, orchestrator, tools, streaming, virtual_files, tool_config, mcp, chat, settings, tool_test, true_swarm, orchestrator_api, unified_orchestrator_api, admin
-from app.api.v1 import tool_approval, test_tools, dynamic_tools, simple_approval, dynamic_tool_registry, tool_help, tool_debug, file_viewer
+from app.api.v1.endpoints import swarm, swarm_dag, sse, agents, orchestrator, tools, streaming, virtual_files, tool_config, mcp, chat, settings, true_swarm, orchestrator_api, unified_orchestrator_api, admin
+from app.api.v1 import tool_approval, dynamic_tools, simple_approval, dynamic_tool_registry, tool_help, tool_debug, file_viewer
 from app.api import graph_endpoints, graph_demo
 
 api_router = APIRouter()
@@ -14,10 +14,8 @@ api_router.include_router(orchestrator.router, prefix="/orchestrator", tags=["or
 api_router.include_router(orchestrator_api.router, prefix="/orchestrator-enhanced", tags=["orchestrator-enhanced"])
 api_router.include_router(unified_orchestrator_api.router, prefix="/unified", tags=["unified-orchestrator"])
 api_router.include_router(tools.router, prefix="/tools", tags=["tools"])
-api_router.include_router(tool_test.router, prefix="/tools", tags=["tool-test"])
 api_router.include_router(tool_config.router, prefix="/tool-config", tags=["tool-config"])
 api_router.include_router(dynamic_tools.router, prefix="/dynamic-tools", tags=["dynamic-tools"])
-api_router.include_router(test_tools.router, prefix="/test-tools", tags=["test-tools"])
 api_router.include_router(tool_approval.router, prefix="/approval", tags=["approval"])
 api_router.include_router(simple_approval.router, prefix="/simple-approval", tags=["simple-approval"])
 api_router.include_router(virtual_files.router, prefix="/files", tags=["files"])
