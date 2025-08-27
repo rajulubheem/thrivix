@@ -1,381 +1,228 @@
-# Thrivix - Enterprise AI Agent Platform Built on Strands SDK
+# Thrivix - Multi-Agent AI Research Platform
 
 <div align="center">
   <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" />
-  <img src="https://img.shields.io/badge/python-3.9+-blue.svg" />
-  <img src="https://img.shields.io/badge/node-18+-green.svg" />
-  <img src="https://img.shields.io/badge/Strands%20SDK-1.0+-purple.svg" />
-  <img src="https://img.shields.io/badge/AWS%20Bedrock-Ready-orange.svg" />
+  <img src="https://img.shields.io/badge/Built%20with-Strands%20SDK-purple.svg" />
 </div>
 
-## 🚀 Overview
+## What is Thrivix?
 
-**Thrivix** is a production-ready AI agent platform built on [Strands Agents SDK](https://github.com/strands-agents/sdk-python), the open-source framework trusted by AWS teams including Amazon Q Developer, AWS Glue, and VPC Reachability Analyzer. Thrivix provides a complete, enterprise-grade solution for deploying multi-agent AI systems with visual orchestration, real-time monitoring, and advanced research capabilities.
+Thrivix is a powerful AI platform that lets you have intelligent conversations with multiple AI agents working together. Built using [Strands SDK](https://github.com/strands-agents/sdk-python), it provides real-time research capabilities, multi-agent collaboration, and a beautiful interface for complex AI interactions.
 
-### Built on Proven Technology
+## 🎯 What Can Thrivix Actually Do?
 
-Thrivix leverages **Strands SDK** - a model-driven approach to building AI agents that has been battle-tested in production at AWS. Where it used to take months for teams to go from prototype to production with custom agents, Strands enables deployment in days. We've built Thrivix to bring this same production-ready capability to everyone.
+### 1. **Multi-Mode AI Conversations**
+- **Fast Mode**: Quick responses for simple questions
+- **Deep Research**: Comprehensive analysis with web search, multiple sources, and progressive thinking
+- **Scholar Mode**: Academic-style research with citations
 
-## 🏗️ Powered by Strands SDK
+### 2. **Real Features That Work Today**
+- ✅ **Live Streaming Responses**: See AI thoughts and research progress in real-time
+- ✅ **Web Search Integration**: Searches the internet for current information (Tavily API)
+- ✅ **Session History**: Continue conversations where you left off
+- ✅ **Multi-Agent Swarm**: Multiple AI agents collaborate on complex tasks
+- ✅ **Tool Approval System**: Control which tools AI can use (file access, web search, etc.)
+- ✅ **Visual Orchestrator**: See how agents hand off tasks to each other
+- ✅ **Human-in-the-Loop**: AI asks for clarification when needed
 
-### Why Strands SDK?
-- **Production Proven**: Powers Amazon Q Developer, AWS Glue, VPC Reachability Analyzer
-- **Model Agnostic**: Works with Amazon Bedrock, OpenAI, Anthropic, Llama, Ollama, and more
-- **Enterprise Ready**: Built-in observability, security, and scalability
-- **Open Source**: Apache 2.0 licensed with active community support
+### 3. **Actual Use Cases**
+- Research any topic with real-time web data
+- Analyze and compare multiple perspectives
+- Generate comprehensive reports with sources
+- Code analysis and development assistance
+- Market research and competitive analysis
+- Academic research with proper citations
 
-### Strands Core Features We Leverage:
-```python
-# Simple agent creation with Strands
-from strands import Agent, tool
+## 🖥️ See It In Action
 
-@tool
-def search_web(query: str) -> str:
-    """Search the web for information"""
-    return tavily_search(query)
+### Main Interfaces Available Now:
 
-agent = Agent(
-    model="gpt-4",
-    tools=[search_web],
-    system_prompt="You are a research assistant"
-)
+**1. Conversation Mode** (`/conversation`)
+- Chat with AI using Fast, Deep, or Scholar modes
+- Real-time thought streaming
+- Source citations and screenshots
+- Session persistence
 
-# Multi-agent orchestration
-from strands.swarm import Swarm
+**2. Swarm Chat** (`/swarm`)
+- Multiple specialized agents working together
+- Visual agent handoffs
+- Tool execution monitoring
+- Session artifacts
 
-swarm = Swarm(agents=[researcher, analyst, writer])
-result = swarm.execute("Analyze AI market trends")
-```
+**3. Orchestrator** (`/orchestrator`)
+- Define complex multi-step workflows
+- Visual task execution
+- Agent coordination
 
-## ✨ Key Features
+**4. Settings** (`/settings`)
+- Configure available tools
+- Set approval requirements
+- Manage API keys
 
-### 🤖 Advanced Agent Orchestration
-**Powered by Strands' Multi-Agent Primitives:**
-- **Swarm Intelligence**: Multiple specialized agents working in concert
-- **Graph Workflows**: Define explicit agent workflows with conditional routing
-- **Dynamic Handoffs**: Agents delegate tasks based on expertise
-- **Tool Orchestration**: Automatic tool selection with approval gates
-
-### 🔬 Three Research Modes
-- **⚡ Fast Mode**: Single-pass reasoning for quick responses
-- **🔍 Deep Research**: Multi-iteration analysis with Strands' workflow patterns
-- **📚 Scholar Mode**: Academic-grade research with citations and verification
-
-### 🛠️ Enterprise Features
-- **OpenTelemetry Observability**: Full agent trajectory tracking (Strands built-in)
-- **Model Context Protocol (MCP)**: Native support for tool interoperability
-- **Session Persistence**: Continue conversations across sessions
-- **Human-in-the-Loop**: Approval workflows for sensitive operations
-- **Audit Logging**: Complete activity tracking for compliance
-
-## 🏛️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Thrivix Frontend                      │
-│         (React + TypeScript + Radix UI)                  │
-└─────────────────┬───────────────────────────────────────┘
-                  │ WebSocket / SSE
-┌─────────────────▼───────────────────────────────────────┐
-│                    Thrivix Backend                       │
-│              (FastAPI + Session Management)              │
-└─────────────────┬───────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────────────┐
-│                    Strands SDK Core                      │
-│   • Agent Engine      • Tool Registry                    │
-│   • Model Providers   • Workflow Orchestration           │
-│   • OpenTelemetry     • MCP Support                      │
-└─────────────────┬───────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────────────┐
-│                    AI Model Providers                    │
-│   AWS Bedrock │ OpenAI │ Anthropic │ Llama │ Ollama    │
-└─────────────────────────────────────────────────────────┘
-```
-
-## 📦 Installation
+## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.9+ (for Strands SDK backend)
-- Node.js 18+ (for React frontend)
-- API keys for your chosen model provider(s)
+- Python 3.9+
+- Node.js 18+
+- OpenAI API key (required)
+- Tavily API key (for web search)
 
-### Quick Start
+### Installation
 
 ```bash
-# 1. Clone the repository
+# Clone repository
 git clone https://github.com/rajulubheem/thrivix.git
 cd thrivix
 
-# 2. Backend Setup (Strands SDK + FastAPI)
+# Backend setup
 cd backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure environment
+# Create .env file
 cp .env.template .env
-# Add your API keys to .env:
-# - OPENAI_API_KEY (for GPT models)
-# - AWS_ACCESS_KEY_ID (for Bedrock)
-# - ANTHROPIC_API_KEY (for Claude)
-# - TAVILY_API_KEY (for web search)
+# Edit .env and add your API keys:
+# OPENAI_API_KEY=your_key_here
+# TAVILY_API_KEY=your_key_here
 
-# Start backend server
-python main.py  # Runs on http://localhost:8000
+# Start backend
+python main.py
 
-# 3. Frontend Setup (React)
-cd ../frontend
+# Frontend setup (new terminal)
+cd frontend
 npm install
-cp .env.template .env
-
-# Start frontend development server
-npm start  # Runs on http://localhost:3000
+npm start
 ```
 
-## 🔧 Configuration
+Open http://localhost:3000 and start using Thrivix!
 
-### Model Configuration (via Strands)
-```python
-# backend/app/config.py
-from strands.models import BedrockModel, OpenAIModel, AnthropicModel
+## 💡 How It Works
 
-# Choose your model provider
-MODEL = BedrockModel(
-    model_id="anthropic.claude-3-opus-20240229",
-    region="us-east-1"
-)
-# or
-MODEL = OpenAIModel(model_id="gpt-4")
-# or  
-MODEL = AnthropicModel(model_id="claude-3-opus-20240229")
+Thrivix uses **Strands SDK** to orchestrate AI agents. Here's the actual flow:
+
+1. **You ask a question** → Choose mode (Fast/Deep/Scholar)
+2. **Strands creates agents** → Based on the task complexity
+3. **Agents use tools** → Web search, analysis, synthesis
+4. **Real-time updates** → See thinking process and results
+5. **Get comprehensive answer** → With sources and citations
+
+## 🛠️ Technical Stack
+
+### What We Actually Use:
+- **Backend**: FastAPI + Strands SDK
+- **Frontend**: React + TypeScript + Radix UI
+- **AI Models**: OpenAI GPT-4, Claude (via API)
+- **Search**: Tavily API
+- **Streaming**: Server-Sent Events (SSE)
+- **Sessions**: File-based persistence
+
+## 📂 Project Structure
+
+```
+thrivix/
+├── frontend/
+│   ├── src/
+│   │   ├── pages/           # Main app pages
+│   │   ├── components/      # UI components
+│   │   └── hooks/          # Custom React hooks
+│   └── package.json
+├── backend/
+│   ├── app/
+│   │   ├── agents/         # AI agent definitions
+│   │   ├── api/           # API endpoints
+│   │   ├── services/      # Business logic
+│   │   └── tools/         # Agent tools (search, etc.)
+│   ├── main.py            # FastAPI server
+│   └── requirements.txt
+└── README.md
 ```
 
-### Tool Registration (Strands Pattern)
-```python
-# backend/app/tools/custom_tools.py
-from strands import tool
+## 🔑 Key Features Explained
 
-@tool
-def analyze_data(data: str, analysis_type: str) -> str:
-    """Analyze data with specified analysis type"""
-    # Your tool implementation
-    return analysis_result
+### Deep Research Mode
+When you select "Deep Research", Thrivix:
+1. Searches multiple sources
+2. Analyzes findings
+3. Cross-references information
+4. Provides citations
+5. Shows thinking process
 
-# Tools are automatically discovered by Strands
-```
+### Swarm Intelligence
+Multiple agents with different expertise:
+- Research Agent: Gathers information
+- Analysis Agent: Processes data
+- Synthesis Agent: Creates comprehensive response
 
-### Agent Configuration
-```yaml
-# backend/config/agents.yaml
-agents:
-  researcher:
-    model: gpt-4
-    tools: [search_web, extract_content, summarize]
-    system_prompt: "You are an expert researcher..."
-    
-  analyst:
-    model: claude-3-opus
-    tools: [analyze_data, create_chart, statistical_test]
-    system_prompt: "You are a data analyst..."
-```
+### Tool Approval
+Control what AI can do:
+- Web search: Auto-approved
+- File operations: Requires approval
+- System commands: Requires approval
 
-## 🚀 Deployment Options
-
-### Local Development
-```bash
-# Already covered in Quick Start
-python main.py  # Backend
-npm start       # Frontend
-```
-
-### Docker Deployment
-```bash
-# Build and run with Docker Compose
-docker-compose up --build
-
-# Or build separately
-docker build -t thrivix-backend ./backend
-docker build -t thrivix-frontend ./frontend
-```
-
-### AWS Deployment (Recommended)
-```bash
-# Deploy to AWS ECS with Fargate
-aws ecs create-cluster --cluster-name thrivix-cluster
-
-# Create task definition
-aws ecs register-task-definition \
-  --cli-input-json file://ecs-task-definition.json
-
-# Create service
-aws ecs create-service \
-  --cluster thrivix-cluster \
-  --service-name thrivix \
-  --task-definition thrivix:1 \
-  --desired-count 2
-```
-
-### Kubernetes Deployment
-```yaml
-# k8s/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: thrivix
-spec:
-  replicas: 3
-  template:
-    spec:
-      containers:
-      - name: backend
-        image: thrivix-backend:latest
-        env:
-        - name: STRANDS_MODEL_PROVIDER
-          value: "bedrock"
-```
-
-## 📊 Observability & Monitoring
-
-Thrivix inherits Strands SDK's comprehensive observability:
-
-### OpenTelemetry Integration
-```python
-# Automatic tracing of all agent operations
-from opentelemetry import trace
-from strands.observability import StrandsTracer
-
-tracer = StrandsTracer()
-
-# Every agent action is automatically traced
-# View in AWS X-Ray, CloudWatch, Jaeger, or any OTEL backend
-```
-
-### Agent Trajectory Tracking
-- Complete sequence of agent decisions
-- Tool calls with inputs/outputs
-- Model reasoning steps
-- Performance metrics
-
-## 🔌 API Reference
-
-### Core Endpoints
+## 📝 API Endpoints
 
 ```bash
-# Execute multi-agent task
-POST /api/v1/swarm/execute
+# Start conversation
+POST /api/v1/conversation/start
 {
-  "task": "Research and analyze AI startup trends",
-  "mode": "deep",
-  "agents": ["researcher", "analyst", "writer"]
+  "message": "Your question",
+  "mode": "deep"  # or "fast", "scholar"
 }
-
-# Stream results in real-time
-GET /api/v1/swarm/stream/{session_id}
-
-# Get execution status
-GET /api/v1/swarm/status/{session_id}
 
 # Continue conversation
 POST /api/v1/conversation/continue
 {
   "session_id": "xxx",
-  "message": "Tell me more about...",
-  "mode": "fast"
+  "message": "Follow-up question"
+}
+
+# Swarm execution
+POST /api/v1/swarm/chat
+{
+  "message": "Complex task",
+  "session_id": "xxx"
 }
 ```
 
-Interactive API docs: http://localhost:8000/docs
+## 🐛 Known Limitations
+
+- Deep research can take 10-30 seconds
+- Web search requires Tavily API key
+- Some features require OpenAI GPT-4 access
+- Session storage is file-based (not distributed)
 
 ## 🤝 Contributing
 
-We welcome contributions! Thrivix is built on open-source foundations:
+We welcome contributions! Areas we need help:
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing`)
-5. Open a Pull Request
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## 🔒 Security & Compliance
-
-- **Authentication**: JWT tokens with refresh mechanism
-- **Authorization**: Role-based access control (RBAC)
-- **Tool Approval**: Granular control over tool execution
-- **Data Privacy**: No data persistence without explicit consent
-- **Audit Logging**: Complete activity tracking
-- **Encryption**: TLS 1.3 for transit, AES-256 for storage
-
-## 📚 Resources & Documentation
-
-### Strands SDK Resources
-- [Strands SDK Documentation](https://strandsagents.com/)
-- [Strands GitHub Repository](https://github.com/strands-agents/sdk-python)
-- [AWS Blog: Introducing Strands Agents](https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk/)
-- [Building Multi-Agent Systems with Strands](https://aws.amazon.com/blogs/machine-learning/strands-agents-sdk-a-technical-deep-dive/)
-
-### Thrivix Documentation
-- [API Reference](https://github.com/rajulubheem/thrivix/wiki/API-Reference)
-- [Deployment Guide](./DEPLOYMENT.md)
-- [Configuration Guide](https://github.com/rajulubheem/thrivix/wiki/Configuration)
-- [Troubleshooting](https://github.com/rajulubheem/thrivix/wiki/Troubleshooting)
-
-## 🏢 Production Usage
-
-### Strands SDK is Trusted By:
-- **Amazon Q Developer** - AI assistant for developers
-- **AWS Glue** - Serverless data integration
-- **VPC Reachability Analyzer** - Network path analysis
-- **Fortune 500 Companies** - Including Accenture, PwC
-
-### Community & Support
-- [GitHub Issues](https://github.com/rajulubheem/thrivix/issues)
-- [Discussions](https://github.com/rajulubheem/thrivix/discussions)
-- [Discord Community](https://discord.gg/thrivix) (Coming Soon)
-
-## 📈 Performance Benchmarks
-
-| Metric | Performance |
-|--------|------------|
-| Agent Response Time | < 2s (fast mode) |
-| Concurrent Users | 1000+ |
-| Tool Execution | < 500ms |
-| Research Completion | 10-30s (deep mode) |
-| Uptime | 99.9% |
-
-## 🎯 Roadmap
-
-- [ ] Visual workflow builder
-- [ ] Custom tool marketplace
-- [ ] Agent performance analytics
-- [ ] Multi-language support
-- [ ] Mobile applications
-- [ ] Advanced caching layer
-- [ ] Federated learning support
+1. **UI/UX improvements** - Make it more beautiful
+2. **New agent tools** - Add more capabilities
+3. **Performance optimization** - Make it faster
+4. **Bug fixes** - Help us squash bugs
+5. **Documentation** - Improve guides and examples
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+Apache License 2.0 - See [LICENSE](LICENSE) file
 
-## 🙏 Acknowledgments
+## 🙏 Credits
 
-- **[Strands Agents Team](https://github.com/strands-agents)** - For creating the powerful SDK that makes Thrivix possible
-- **AWS Open Source** - For supporting and promoting Strands SDK
-- **Model Providers** - OpenAI, Anthropic, AWS Bedrock
-- **[Tavily](https://tavily.com)** - For web search API
-- **Open Source Community** - For continuous support and feedback
+- Built with [Strands SDK](https://github.com/strands-agents/sdk-python) - The powerful agent framework
+- UI components from [Radix UI](https://www.radix-ui.com/)
+- Web search by [Tavily](https://tavily.com/)
+- AI models by OpenAI and Anthropic
+
+## 💬 Support
+
+- **Issues**: [GitHub Issues](https://github.com/rajulubheem/thrivix/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/rajulubheem/thrivix/discussions)
 
 ---
 
 <div align="center">
-  <h3>🌟 Star us on GitHub!</h3>
-  <p>If you find Thrivix useful, please consider giving us a star!</p>
+  <strong>Thrivix - Where AI Agents Collaborate</strong>
   <br>
-  <strong>Built with ❤️ using Strands SDK</strong>
-  <br>
-  <sub>The production-ready AI agent platform</sub>
+  <sub>Built with Strands SDK | Real Features | No Hype</sub>
 </div>
