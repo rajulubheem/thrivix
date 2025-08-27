@@ -1,195 +1,234 @@
-# Thrivix - GitHub Deployment Guide
+# Deployment Guide
 
-## Repository Setup
+## Quick Start
 
-Your Thrivix project is now ready for deployment to GitHub. Follow these steps:
-
-### 1. Create GitHub Repository
-
-1. Go to https://github.com/rajulubheem
-2. Click "New" to create a new repository
-3. Name it: `thrivix`
-4. Description: "AI-Powered Multi-Agent Intelligence Platform"
-5. Set as Public (for open source)
-6. DO NOT initialize with README, .gitignore, or license (we already have them)
-7. Click "Create repository"
-
-### 2. Push to GitHub
-
-After creating the empty repository on GitHub, run these commands in your terminal:
+### Local Development
 
 ```bash
-cd /Users/bheemarajulu/project_wksp/thrivix
+# Run the setup script
+./scripts/setup.sh
 
-# Add GitHub remote
-git remote add origin https://github.com/rajulubheem/thrivix.git
-
-# Push to GitHub
-git branch -M main
-git push -u origin main
+# Add your API keys to backend/.env
+# Start backend: cd backend && python main.py
+# Start frontend: cd frontend && npm start
 ```
 
-### 3. Set Up GitHub Pages (Optional)
+### Docker Deployment
 
-To host documentation:
-
-1. Go to Settings → Pages in your GitHub repository
-2. Source: Deploy from a branch
-3. Branch: main, folder: /docs (if you add documentation)
-4. Save
-
-### 4. Add Topics and Description
-
-In your GitHub repository:
-
-1. Click the gear icon next to "About"
-2. Add topics: `ai`, `multi-agent`, `research`, `chatbot`, `react`, `fastapi`, `gpt-4`, `openai`
-3. Add website (if deployed)
-4. Save changes
-
-### 5. Create Release
-
-1. Go to Releases → Create a new release
-2. Tag version: `v1.0.0`
-3. Release title: "Thrivix v1.0.0 - Initial Release"
-4. Describe the release:
-   - Major features
-   - Installation instructions
-   - Known issues (if any)
-5. Publish release
-
-## Project Structure
-
-```
-thrivix/
-├── frontend/          # React TypeScript frontend
-├── backend/           # FastAPI Python backend
-├── .gitignore        # Git ignore rules
-├── LICENSE           # Apache 2.0 license
-├── README.md         # Main documentation
-└── DEPLOYMENT.md     # This file
-```
-
-## Environment Setup for Contributors
-
-Contributors need to:
-
-1. Copy environment templates:
 ```bash
-cp backend/.env.template backend/.env
-cp frontend/.env.template frontend/.env
+# Copy environment template
+cp .env.production .env
+
+# Edit .env with your API keys
+# Required: OPENAI_API_KEY and TAVILY_API_KEY
+
+# Run deployment script
+./scripts/deploy.sh
 ```
 
-2. Add their API keys to the `.env` files
+## Deployment Options
 
-3. Install dependencies:
+### 1. Docker Compose (Recommended)
+
+The easiest way to deploy the full stack:
+
 ```bash
-# Backend
+docker-compose up -d
+```
+
+Access:
+- Frontend: http://localhost
+- Backend API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+
+### 2. Manual Deployment
+
+#### Backend
+
+```bash
 cd backend
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
 
-# Frontend
-cd ../frontend
+#### Frontend
+
+```bash
+cd frontend
 npm install
+npm run build
+npm install -g serve
+serve -s build -l 3000
 ```
 
-## Continuous Integration (Optional)
+### 3. Cloud Deployment
 
-Add GitHub Actions workflow for CI/CD:
+#### AWS EC2
 
-Create `.github/workflows/ci.yml`:
+1. Launch EC2 instance (Ubuntu 22.04)
+2. Install Docker and Docker Compose
+3. Clone repository
+4. Configure environment variables
+5. Run docker-compose
 
-```yaml
-name: CI
+#### Heroku
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+```bash
+# Install Heroku CLI
+# Create Heroku app
+heroku create your-app-name
 
-jobs:
-  test-backend:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.9'
-    - name: Install dependencies
-      run: |
-        cd backend
-        pip install -r requirements.txt
-    - name: Run tests
-      run: |
-        cd backend
-        pytest
+# Set environment variables
+heroku config:set OPENAI_API_KEY=your-key
+heroku config:set TAVILY_API_KEY=your-key
 
-  test-frontend:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Setup Node
-      uses: actions/setup-node@v2
-      with:
-        node-version: '18'
-    - name: Install dependencies
-      run: |
-        cd frontend
-        npm ci
-    - name: Run tests
-      run: |
-        cd frontend
-        npm test -- --watchAll=false
+# Deploy
+git push heroku main
 ```
 
-## Security Considerations
+#### DigitalOcean App Platform
 
-Before making public:
+1. Connect GitHub repository
+2. Configure environment variables
+3. Deploy with automatic builds
 
-1. **Double-check** no API keys or secrets are committed
-2. **Review** all configuration files
-3. **Scan** with git-secrets or similar tools
-4. **Add** security policy (SECURITY.md)
+## Environment Variables
 
-## Community Guidelines
+### Required
+
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `TAVILY_API_KEY`: Your Tavily API key for web search
+
+### Optional
+
+- `AWS_REGION`: AWS region for Bedrock (default: us-west-2)
+- `AWS_ACCESS_KEY_ID`: AWS access key
+- `AWS_SECRET_ACCESS_KEY`: AWS secret key
+- `DEFAULT_MODEL_ID`: Default AI model (default: gpt-4o-mini)
+- `MAX_HANDOFFS`: Maximum agent handoffs (default: 20)
+
+## Production Considerations
+
+### Security
+
+1. **API Keys**: Never commit API keys to repository
+2. **HTTPS**: Use reverse proxy (nginx/Caddy) with SSL
+3. **Firewall**: Configure firewall rules
+4. **Updates**: Keep dependencies updated
+
+### Performance
+
+1. **Database**: Consider PostgreSQL for production
+2. **Redis**: Add Redis for caching and sessions
+3. **CDN**: Use CDN for frontend assets
+4. **Monitoring**: Add application monitoring
+
+### Scaling
+
+1. **Horizontal Scaling**: Use Kubernetes for orchestration
+2. **Load Balancing**: Add load balancer for multiple instances
+3. **Auto-scaling**: Configure based on CPU/memory usage
+
+## SSL/TLS Setup
+
+### Using Caddy (Automatic HTTPS)
+
+```caddyfile
+yourdomain.com {
+    reverse_proxy frontend:80
+}
+
+api.yourdomain.com {
+    reverse_proxy backend:8000
+}
+```
+
+### Using Nginx with Certbot
+
+```bash
+# Install Certbot
+sudo apt install certbot python3-certbot-nginx
+
+# Get certificate
+sudo certbot --nginx -d yourdomain.com
+
+# Auto-renewal
+sudo certbot renew --dry-run
+```
+
+## Monitoring
+
+### Health Checks
+
+- Backend: `GET /health`
+- Frontend: `GET /`
+
+### Logging
+
+Logs are stored in:
+- `./logs/` - Application logs
+- Docker: `docker-compose logs -f`
+
+### Metrics
 
 Consider adding:
+- Prometheus for metrics
+- Grafana for visualization
+- Sentry for error tracking
 
-1. **CONTRIBUTING.md** - Contribution guidelines
-2. **CODE_OF_CONDUCT.md** - Community standards
-3. **Issue templates** - Bug reports, feature requests
-4. **Pull request template** - PR guidelines
+## Backup
+
+### Database Backup
+
+```bash
+# SQLite backup
+cp data/strands_swarm.db data/backup-$(date +%Y%m%d).db
+
+# PostgreSQL backup
+pg_dump strands_db > backup-$(date +%Y%m%d).sql
+```
+
+### Session Backup
+
+```bash
+tar -czf sessions-backup-$(date +%Y%m%d).tar.gz sessions/
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Port already in use**
+   ```bash
+   # Find process using port
+   lsof -i :8000
+   # Kill process
+   kill -9 <PID>
+   ```
+
+2. **Docker permissions**
+   ```bash
+   sudo usermod -aG docker $USER
+   newgrp docker
+   ```
+
+3. **API key errors**
+   - Verify keys in .env file
+   - Check for typos or extra spaces
+   - Ensure keys are active
+
+### Debug Mode
+
+Enable debug logging:
+```bash
+export DEBUG=true
+export LOG_LEVEL=DEBUG
+```
 
 ## Support
 
-For deployment issues:
-- Check GitHub status: https://www.githubstatus.com/
-- Review GitHub docs: https://docs.github.com/
-- Ask in discussions: https://github.com/rajulubheem/thrivix/discussions
-
-## Verification Checklist
-
-Before going live:
-
-- [ ] All sensitive data removed
-- [ ] Dependencies up to date
-- [ ] README is comprehensive
-- [ ] License is correct
-- [ ] .gitignore is complete
-- [ ] Environment templates provided
-- [ ] No broken links in documentation
-- [ ] Code passes linting
-- [ ] Basic tests pass
-
-## Success!
-
-Once deployed, your repository will be available at:
-https://github.com/rajulubheem/thrivix
-
-Share it with the community and start collaborating!
-
----
-
-Created with ❤️ by Bheem Rajulu
+- GitHub Issues: [Report issues](https://github.com/yourusername/strands-ai-agent/issues)
+- Documentation: Check README.md for usage
+- API Docs: http://localhost:8000/docs when running
