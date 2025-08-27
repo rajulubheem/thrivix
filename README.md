@@ -34,6 +34,99 @@ Thrivix is a powerful AI platform that lets you have intelligent conversations w
 - Market research and competitive analysis
 - Academic research with proper citations
 
+## 🤖 The Power of Swarm Intelligence
+
+### What Makes Our Swarm Special?
+
+Thrivix leverages **Strands SDK's multi-agent orchestration** to create truly collaborative AI teams. This isn't just multiple chatbots - it's a coordinated team of specialists that:
+
+1. **Understand Context**: Each agent sees what others have done
+2. **Hand Off Tasks**: Agents automatically delegate to specialists
+3. **Share Knowledge**: Common memory across the swarm
+4. **Work in Parallel**: Multiple agents can work simultaneously
+
+### Our Specialized Agents
+
+#### 🔍 **Research Agent**
+```python
+"Your role is to:
+- Gather information from various sources
+- Analyze requirements and context
+- Use web search tools to find current information
+- Share findings with the team"
+```
+**Tools**: Web search, Document analysis
+**Handoff**: → Architect (when research complete)
+
+#### 🏗️ **Architect Agent**
+```python
+"Your role is to:
+- Design system architecture
+- Create technical specifications
+- Define interfaces and data models
+- Plan implementation approach"
+```
+**Tools**: Diagramming, Schema design
+**Handoff**: → Coder (when design ready)
+
+#### 💻 **Coder Agent**
+```python
+"Your role is to:
+- Implement solutions based on designs
+- Write clean, efficient code
+- Create necessary files and modules
+- Follow best practices"
+```
+**Tools**: Code interpreter, File operations
+**Handoff**: → Reviewer (when code complete)
+
+#### ✅ **Reviewer Agent**
+```python
+"Your role is to:
+- Review code for quality
+- Suggest improvements
+- Verify requirements are met
+- Ensure best practices"
+```
+**Tools**: Code analysis, Testing tools
+**Handoff**: → Analyst (for metrics) or Complete
+
+#### 📊 **Analyst Agent**
+```python
+"Your role is to:
+- Analyze data and patterns
+- Create visualizations
+- Perform statistical analysis
+- Extract insights"
+```
+**Tools**: Data analysis, Visualization
+**Handoff**: → Any agent needing analysis
+
+### Real Example: "Build a Todo App"
+
+When you ask the swarm to "Build a todo app", here's what happens:
+
+1. **Research Agent** investigates best practices, UI patterns, frameworks
+2. **Architect Agent** designs the component structure, data flow
+3. **Coder Agent** implements the HTML/CSS/JavaScript
+4. **Reviewer Agent** checks code quality, suggests improvements
+5. **You receive**: Complete, working code with explanations
+
+All of this happens with full visibility - you see each agent's work, decisions, and handoffs in real-time!
+
+## 🎭 Orchestrator - Visual Workflow Builder
+
+The Orchestrator (`/orchestrator`) lets you:
+- **Define Complex Workflows**: Create multi-step processes with conditional logic
+- **Visual DAG Execution**: See your workflow as a directed graph
+- **Agent Coordination**: Assign different agents to different steps
+- **Approval Gates**: Add human checkpoints in automated workflows
+
+Example workflows:
+- "Research → Analyze → Report → Review → Publish"
+- "Code → Test → Deploy → Monitor"
+- "Data Collection → Processing → ML Training → Evaluation"
+
 ## 🖥️ See It In Action
 
 ### Main Interfaces Available Now:
@@ -45,15 +138,17 @@ Thrivix is a powerful AI platform that lets you have intelligent conversations w
 - Session persistence
 
 **2. Swarm Chat** (`/swarm`)
-- Multiple specialized agents working together
-- Visual agent handoffs
-- Tool execution monitoring
-- Session artifacts
+- **Live Agent Collaboration**: Watch multiple agents work together
+- **Visual Handoffs**: See when agents pass tasks to specialists
+- **Tool Execution Monitoring**: Track what tools agents use
+- **Shared Context**: All agents see the full conversation
+- **Session Artifacts**: Download generated files and reports
 
 **3. Orchestrator** (`/orchestrator`)
-- Define complex multi-step workflows
-- Visual task execution
-- Agent coordination
+- **Workflow Designer**: Create complex multi-step processes
+- **Visual Execution**: Watch your workflow run step-by-step
+- **Agent Assignment**: Choose which agent handles each step
+- **Conditional Logic**: Add decision points and branches
 
 **4. Settings** (`/settings`)
 - Configure available tools
@@ -98,15 +193,30 @@ npm start
 
 Open http://localhost:3000 and start using Thrivix!
 
-## 💡 How It Works
+## 💡 How Strands Powers Thrivix
 
-Thrivix uses **Strands SDK** to orchestrate AI agents. Here's the actual flow:
+Thrivix leverages [Strands SDK 1.0](https://aws.amazon.com/blogs/opensource/introducing-strands-agents-1-0-production-ready-multi-agent-orchestration-made-simple/)'s production-ready features:
 
-1. **You ask a question** → Choose mode (Fast/Deep/Scholar)
-2. **Strands creates agents** → Based on the task complexity
-3. **Agents use tools** → Web search, analysis, synthesis
-4. **Real-time updates** → See thinking process and results
-5. **Get comprehensive answer** → With sources and citations
+### Multi-Agent Primitives We Use:
+- **Swarms**: Self-organizing teams with shared memory
+- **Handoffs**: Automatic task delegation between specialists  
+- **Graphs**: Explicit workflows with conditional routing
+- **Tools as Agents**: Agents can spawn sub-agents dynamically
+
+### The Strands Advantage:
+```python
+# Simple swarm creation with Strands
+from strands.multiagent import Swarm
+
+swarm = Swarm(
+    agents=[researcher, architect, coder, reviewer],
+    shared_memory=True,
+    auto_handoff=True
+)
+
+result = await swarm.execute("Build a todo app")
+# Agents automatically coordinate and hand off tasks!
+```
 
 ## 🛠️ Technical Stack
 
@@ -118,49 +228,6 @@ Thrivix uses **Strands SDK** to orchestrate AI agents. Here's the actual flow:
 - **Streaming**: Server-Sent Events (SSE)
 - **Sessions**: File-based persistence
 
-## 📂 Project Structure
-
-```
-thrivix/
-├── frontend/
-│   ├── src/
-│   │   ├── pages/           # Main app pages
-│   │   ├── components/      # UI components
-│   │   └── hooks/          # Custom React hooks
-│   └── package.json
-├── backend/
-│   ├── app/
-│   │   ├── agents/         # AI agent definitions
-│   │   ├── api/           # API endpoints
-│   │   ├── services/      # Business logic
-│   │   └── tools/         # Agent tools (search, etc.)
-│   ├── main.py            # FastAPI server
-│   └── requirements.txt
-└── README.md
-```
-
-## 🔑 Key Features Explained
-
-### Deep Research Mode
-When you select "Deep Research", Thrivix:
-1. Searches multiple sources
-2. Analyzes findings
-3. Cross-references information
-4. Provides citations
-5. Shows thinking process
-
-### Swarm Intelligence
-Multiple agents with different expertise:
-- Research Agent: Gathers information
-- Analysis Agent: Processes data
-- Synthesis Agent: Creates comprehensive response
-
-### Tool Approval
-Control what AI can do:
-- Web search: Auto-approved
-- File operations: Requires approval
-- System commands: Requires approval
-
 ## 📝 API Endpoints
 
 ```bash
@@ -171,18 +238,18 @@ POST /api/v1/conversation/start
   "mode": "deep"  # or "fast", "scholar"
 }
 
-# Continue conversation
-POST /api/v1/conversation/continue
+# Execute swarm task
+POST /api/v1/swarm/execute
 {
-  "session_id": "xxx",
-  "message": "Follow-up question"
+  "task": "Build a REST API for user management",
+  "agents": ["researcher", "architect", "coder", "reviewer"]
 }
 
-# Swarm execution
-POST /api/v1/swarm/chat
+# Create orchestrated workflow
+POST /api/v1/orchestrator/create
 {
-  "message": "Complex task",
-  "session_id": "xxx"
+  "workflow": "research_and_report",
+  "steps": ["research", "analyze", "write", "review"]
 }
 ```
 
@@ -197,11 +264,11 @@ POST /api/v1/swarm/chat
 
 We welcome contributions! Areas we need help:
 
-1. **UI/UX improvements** - Make it more beautiful
-2. **New agent tools** - Add more capabilities
-3. **Performance optimization** - Make it faster
-4. **Bug fixes** - Help us squash bugs
-5. **Documentation** - Improve guides and examples
+1. **New Agent Types** - Create specialized agents (Designer, QA, DevOps)
+2. **Tool Development** - Add more agent capabilities
+3. **UI Improvements** - Better visualization of agent collaboration
+4. **Performance** - Optimize agent coordination
+5. **Documentation** - More examples and tutorials
 
 ## 📄 License
 
@@ -209,7 +276,8 @@ Apache License 2.0 - See [LICENSE](LICENSE) file
 
 ## 🙏 Credits
 
-- Built with [Strands SDK](https://github.com/strands-agents/sdk-python) - The powerful agent framework
+- Built with [Strands SDK](https://github.com/strands-agents/sdk-python) - Production-ready multi-agent orchestration
+- Strands is trusted by AWS teams including Amazon Q Developer
 - UI components from [Radix UI](https://www.radix-ui.com/)
 - Web search by [Tavily](https://tavily.com/)
 - AI models by OpenAI and Anthropic
@@ -224,5 +292,5 @@ Apache License 2.0 - See [LICENSE](LICENSE) file
 <div align="center">
   <strong>Thrivix - Where AI Agents Collaborate</strong>
   <br>
-  <sub>Built with Strands SDK | Real Features | No Hype</sub>
+  <sub>Experience the Power of Multi-Agent AI | Built with Strands SDK</sub>
 </div>
