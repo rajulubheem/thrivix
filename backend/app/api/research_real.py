@@ -22,8 +22,18 @@ logger = logging.getLogger(__name__)
 # Store active research sessions
 research_sessions: Dict[str, Dict[str, Any]] = {}
 
-# Initialize OpenAI client
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize OpenAI client lazily to avoid import-time errors
+_openai_client = None
+
+def get_openai_client():
+    """Get or create OpenAI client instance"""
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        _openai_client = AsyncOpenAI(api_key=api_key)
+    return _openai_client
 
 class ResearchStartRequest(BaseModel):
     query: str
@@ -74,7 +84,7 @@ Provide:
 
 Format as JSON."""
 
-        analysis_response = await openai_client.chat.completions.create(
+        analysis_response = await get_openai_client().chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": "You are a research assistant."}, 
                      {"role": "user", "content": analysis_prompt}],
@@ -167,7 +177,7 @@ Provide a detailed response that:
 Format the response in markdown with clear sections."""
 
         # Stream the response
-        stream = await openai_client.chat.completions.create(
+        stream = await get_openai_client().chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": "You are a research assistant providing comprehensive, well-cited answers."},

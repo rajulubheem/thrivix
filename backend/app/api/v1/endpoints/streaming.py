@@ -176,9 +176,11 @@ class RedisSessionStorage(SessionStorage):
         if not self._initialized:
             try:
                 import aioredis
-                self.redis = await aioredis.create_redis_pool(
+                # Use the new aioredis 2.0 API
+                self.redis = await aioredis.from_url(
                     settings.REDIS_URL or 'redis://localhost:6379',
-                    encoding='utf-8'
+                    encoding='utf-8',
+                    decode_responses=True
                 )
                 self._initialized = True
                 logger.info("Redis session storage initialized")
@@ -205,6 +207,7 @@ class RedisSessionStorage(SessionStorage):
         data["created_at"] = datetime.utcnow().isoformat()
         data["last_accessed"] = datetime.utcnow().isoformat()
 
+        # Use the new aioredis 2.0 setex syntax
         await self.redis.setex(
             key,
             ttl,

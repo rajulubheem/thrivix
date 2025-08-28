@@ -10,7 +10,7 @@ openai>=1.0.0
 
 # Database
 sqlalchemy==2.0.35
-asyncpg==0.29.0
+# asyncpg==0.29.0  # Optional: PostgreSQL async driver (install separately if needed)
 alembic==1.13.2
 aiosqlite==0.19.0
 
@@ -55,3 +55,8 @@ aiohttp>=3.8.0
 beautifulsoup4==4.12.3
 feedparser==6.0.11
 lxml==5.1.0
+Pillow==11.3.0  # For image processing in animated browser
+
+# Strands Agents Extensions
+strands-agents-tools==0.2.5
+strands-agents-builder==0.1.8

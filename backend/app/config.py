@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Tavily Settings
     TAVILY_API_KEY: Optional[str] = None
     
+    # Additional API Keys
+    ANTHROPIC_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: Optional[str] = None
+    GOOGLE_CX: Optional[str] = None
+    SERP_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+    
     # AWS Settings for Bedrock
     AWS_REGION: str = "us-west-2"
     AWS_ACCESS_KEY_ID: Optional[str] = None

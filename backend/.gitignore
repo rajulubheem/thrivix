@@ -1,0 +1,6 @@
+.env
+research_sessions/
+*.db
+__pycache__/
+*.pyc
+.venv/
