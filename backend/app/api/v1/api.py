@@ -31,53 +31,80 @@ api_router.include_router(admin.router, tags=["admin"])
 api_router.include_router(graph_endpoints.router, tags=["graph"])
 api_router.include_router(graph_demo.router, prefix="/graph-demo", tags=["graph-demo"])
 
-# Include research routes (real version with Strands agents)
+# Include simple fast research endpoint
+from app.api import research_fast
+api_router.include_router(research_fast.router, tags=["fast-research"])
+
+# Keep conversation endpoint for other modes if needed
+from app.api import research_conversation
+api_router.include_router(research_conversation.router, tags=["research-conversation"])
+
+# Include other research routes (may fail due to import errors)
 try:
     # Include Strands-based research with real tools
     from app.api import research_strands_real
     api_router.include_router(research_strands_real.router, tags=["research-strands-real"])
+except ImportError:
+    pass
+
+try:
     # Include Strands-based research
     from app.api import research_strands
     api_router.include_router(research_strands.router, tags=["research-strands"])
-    # Include REAL research with LLM integration
-    from app.api import research_real
-    api_router.include_router(research_real.router, tags=["research-real"])
-    # Include Polling-based research (NEW)
+except ImportError:
+    pass
+
+try:
+    # Include Polling-based research (may fail due to OPENAI_API_KEY)
     from app.api import research_polling_real
     api_router.include_router(research_polling_real.router, tags=["research-polling-real"])
+except ImportError:
+    pass
+
+try:
     from app.api import research_routes_real
     api_router.include_router(research_routes_real.router, tags=["research"])
+except ImportError:
+    pass
+
+try:
     # Also include streaming research routes
     from app.api import research_streaming
     api_router.include_router(research_streaming.router, tags=["research-streaming"])
+except ImportError:
+    pass
+
+try:
     # Include enhanced v2 streaming
     from app.api import research_streaming_v2
     api_router.include_router(research_streaming_v2.router, tags=["research-streaming-v2"])
+except ImportError:
+    pass
+
+try:
     # Include real-time streaming
     from app.api import research_streaming_realtime
     api_router.include_router(research_streaming_realtime.router, tags=["research-streaming-realtime"])
-    # Include polling-based research (like SwarmChat)
-    from app.api import research_polling
-    api_router.include_router(research_polling.router, tags=["research-polling"])
+except ImportError:
+    pass
+
+try:
     # Include enhanced polling with better prompts
     from app.api import research_polling_enhanced
     api_router.include_router(research_polling_enhanced.router, tags=["research-polling-enhanced"])
+except ImportError:
+    pass
+
+try:
     # Include REAL AI research (authentic reasoning)
     from app.api import research_real_ai
     api_router.include_router(research_real_ai.router, tags=["research-real-ai"])
+except ImportError:
+    pass
+
+try:
     # Include Clean research with citations
     from app.api import research_clean
     api_router.include_router(research_clean.router, tags=["research-clean"])
-    # Include Conversation-based research with session management
-    from app.api import research_conversation
-    api_router.include_router(research_conversation.router, tags=["research-conversation"])
 except ImportError:
-    try:
-        from app.api import research_routes_simple
-        api_router.include_router(research_routes_simple.router, tags=["research"])
-    except ImportError:
-        try:
-            from app.api import research_routes
-            api_router.include_router(research_routes.router, tags=["research"])
-        except ImportError:
-            pass  # Research routes not available
+    pass
