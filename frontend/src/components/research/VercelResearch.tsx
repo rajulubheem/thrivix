@@ -8,9 +8,12 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { 
   Search, Sparkles, ArrowRight, Loader2, CheckCircle2,
-  Globe, ExternalLink, User, Bot, X, AlertCircle, Brain
+  Globe, ExternalLink, User, Bot, X, AlertCircle, Brain,
+  Printer, Download
 } from 'lucide-react';
 import ThoughtsPanel from './ThoughtsPanel';
+import ResearchSourcesFeed from './ResearchSourcesFeed';
+import { handlePrint, handleDownloadReport } from '../../utils/researchExportUtils';
 import './VercelResearch.css';
 
 interface ResearchStep {
@@ -50,6 +53,8 @@ export default function VercelResearch() {
   const [progress, setProgress] = useState(0);
   const [requiresApproval, setRequiresApproval] = useState(false);
   const [approvalMessage, setApprovalMessage] = useState('');
+  const [messages, setMessages] = useState<any[]>([]);
+  const [bookmarkedSources, setBookmarkedSources] = useState<Set<string>>(new Set());
   
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const contentEndRef = useRef<HTMLDivElement>(null);
@@ -123,6 +128,38 @@ export default function VercelResearch() {
       console.error('Polling error:', err);
     }
   }, []);
+
+  const toggleBookmark = (sourceId: string) => {
+    setBookmarkedSources(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(sourceId)) {
+        newSet.delete(sourceId);
+      } else {
+        newSet.add(sourceId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSourceClick = (source: Source) => {
+    window.open(source.url, '_blank');
+  };
+
+  const handlePrintReport = () => {
+    const allMessages = [
+      { role: 'user' as const, content: query },
+      { role: 'assistant' as const, content, sources, thoughts }
+    ];
+    handlePrint(allMessages, sessionId, 'Vercel Research', sources);
+  };
+
+  const handleDownload = () => {
+    const allMessages = [
+      { role: 'user' as const, content: query },
+      { role: 'assistant' as const, content, sources, thoughts }
+    ];
+    handleDownloadReport(allMessages, sessionId, 'Vercel Research', sources);
+  };
 
   const handleSearch = async () => {
     if (!query.trim() || isSearching) return;
@@ -230,8 +267,50 @@ export default function VercelResearch() {
             <Sparkles className="brand-icon" />
             <span className="brand-text">Deep Research AI</span>
           </div>
-          <div className="nav-badge">
-            <span>Powered by Strands AI</span>
+          <div className="nav-actions" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            {content && (
+              <>
+                <button 
+                  onClick={handlePrintReport}
+                  className="nav-action-btn"
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '6px',
+                    padding: '8px 16px',
+                    background: 'transparent',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    borderRadius: '8px',
+                    color: 'white',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Printer size={16} />
+                  <span>Print</span>
+                </button>
+                <button 
+                  onClick={handleDownload}
+                  className="nav-action-btn"
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '6px',
+                    padding: '8px 16px',
+                    background: 'transparent',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    borderRadius: '8px',
+                    color: 'white',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Download size={16} />
+                  <span>Download</span>
+                </button>
+              </>
+            )}
+            <div className="nav-badge">
+              <span>Powered by Strands AI</span>
+            </div>
           </div>
         </div>
       </nav>
@@ -375,43 +454,18 @@ export default function VercelResearch() {
         {/* Research Content */}
         {content && (
           <div className="content-container">
-            {/* Sources */}
+            {/* Sources - Using new ResearchSourcesFeed component */}
             {sources.length > 0 && (
               <div className="sources-container">
-                <h3 className="sources-title">Sources ({sources.length} found)</h3>
-                <div className="sources-grid">
-                  {sources.map((source, idx) => (
-                    <a
-                      key={source.id}
-                      href={source.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="source-card"
-                    >
-                      <div className="source-number">{idx + 1}</div>
-                      {source.thumbnail && (
-                        <img 
-                          src={source.thumbnail} 
-                          alt={source.title}
-                          className="source-thumbnail"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.style.display = 'none';
-                          }}
-                        />
-                      )}
-                      <div className="source-info">
-                        <div className="source-content">
-                          <div className="source-title">{source.title}</div>
-                          <div className="source-domain">
-                            <Globe size={10} />
-                            {source.domain}
-                          </div>
-                        </div>
-                      </div>
-                    </a>
-                  ))}
-                </div>
+                <ResearchSourcesFeed
+                  currentSources={sources}
+                  onSourceClick={handleSourceClick}
+                  onBookmark={toggleBookmark}
+                  bookmarkedSources={bookmarkedSources}
+                  activeMessageId={sessionId}
+                  showGroupHeaders={false}
+                  compactMode={false}
+                />
               </div>
             )}
 
