@@ -8,6 +8,10 @@ from typing import Dict, Any, List, Optional
 import aiohttp
 import structlog
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 logger = structlog.get_logger()
 

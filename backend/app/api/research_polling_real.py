@@ -12,6 +12,10 @@ from datetime import datetime
 import os
 import aiohttp
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 router = APIRouter(prefix="/research", tags=["research-polling"])
 logger = logging.getLogger(__name__)
