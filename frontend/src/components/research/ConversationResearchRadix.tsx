@@ -1,17 +1,13 @@
 /**
- * ConversationResearch with Enhanced Radix UI Interface
+ * ConversationResearch with Unified Theme System
  */
 import React from 'react';
-import { Theme } from '@radix-ui/themes';
-import ConversationResearchEnhanced from './ConversationResearchEnhanced';
-import '@radix-ui/themes/styles.css';
+import ConversationResearchFixed from './ConversationResearchFixed';
 
 const ConversationResearchRadix: React.FC = () => {
-  return (
-    <Theme appearance="dark" accentColor="violet" radius="medium" scaling="95%">
-      <ConversationResearchEnhanced />
-    </Theme>
-  );
+  // Simply use the fixed version with unified theme
+  // No Radix Theme wrapper needed as we're using our unified theme system
+  return <ConversationResearchFixed />;
 };
 
 export default ConversationResearchRadix;

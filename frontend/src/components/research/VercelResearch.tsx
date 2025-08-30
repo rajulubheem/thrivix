@@ -462,7 +462,7 @@ export default function VercelResearch() {
                   onSourceClick={handleSourceClick}
                   onBookmark={toggleBookmark}
                   bookmarkedSources={bookmarkedSources}
-                  activeMessageId={sessionId}
+                  activeMessageId={sessionId || undefined}
                   showGroupHeaders={false}
                   compactMode={false}
                 />

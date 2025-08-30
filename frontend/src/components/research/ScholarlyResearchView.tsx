@@ -909,7 +909,7 @@ const ScholarlyResearchView: React.FC = () => {
       navigate(`/conversation/${newSessionId}`);
       setIsContinuation(false);
     } else {
-      setIsContinuation(shouldContinue);
+      setIsContinuation(!!shouldContinue);
     }
 
     const userMessage: Message = {
@@ -940,7 +940,7 @@ const ScholarlyResearchView: React.FC = () => {
       
       if (shouldContinue && modeConfig[mode].continueEndpoint) {
         // Use continue endpoint for deep/scholar modes
-        endpoint = modeConfig[mode].continueEndpoint;
+        endpoint = modeConfig[mode].continueEndpoint!;
         body = {
           query: input,
           session_id: currentSessionId,

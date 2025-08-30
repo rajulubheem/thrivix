@@ -1,0 +1,607 @@
+/* 
+ * Component-Specific Theme Overrides
+ * Ensures consistent theming across all pages and components
+ */
+
+/* ============================================
+   SWARM CHAT PAGE OVERRIDES
+   /swarm
+   ============================================ */
+.swarm-chat-container,
+.modern-swarm-chat {
+  background: var(--bg-base) !important;
+  color: var(--text-primary) !important;
+}
+
+.swarm-chat .left-panel,
+.swarm-chat .agent-panel {
+  background: var(--bg-chat-sidebar) !important;
+  border-right: 1px solid var(--border-default) !important;
+}
+
+.swarm-chat .center-panel,
+.swarm-chat .chat-area {
+  background: var(--bg-chat-main) !important;
+}
+
+.swarm-chat .right-panel,
+.swarm-chat .artifacts-panel {
+  background: var(--bg-chat-sidebar) !important;
+  border-left: 1px solid var(--border-default) !important;
+}
+
+.swarm-chat .message-container {
+  background: transparent !important;
+}
+
+.swarm-chat .message.user .message-bubble,
+.swarm-chat .message.user .message-content {
+  background: var(--bg-message-user) !important;
+  color: var(--text-on-accent) !important;
+}
+
+.swarm-chat .message.assistant .message-bubble,
+.swarm-chat .message.assistant .message-content,
+.swarm-chat .message.agent .message-content {
+  background: var(--bg-message-assistant) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-muted) !important;
+}
+
+.swarm-chat .chat-input-wrapper,
+.swarm-chat .input-container {
+  background: var(--bg-surface) !important;
+  border-top: 1px solid var(--border-default) !important;
+}
+
+.swarm-chat textarea,
+.swarm-chat input[type="text"] {
+  background: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+.swarm-chat textarea:focus,
+.swarm-chat input[type="text"]:focus {
+  border-color: var(--border-accent) !important;
+  box-shadow: var(--shadow-glow) !important;
+}
+
+/* Agent Cards in Swarm */
+.agent-card,
+.swarm-agent-card {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.agent-card .agent-name,
+.agent-card h3 {
+  color: var(--text-primary) !important;
+}
+
+.agent-card .agent-role,
+.agent-card .agent-description {
+  color: var(--text-secondary) !important;
+}
+
+.agent-card.active {
+  border-color: var(--accent-royal) !important;
+  box-shadow: var(--shadow-glow) !important;
+}
+
+/* Tool Execution Cards */
+.tool-execution-card,
+.tool-call-card {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.tool-execution-card .tool-name {
+  color: var(--accent-royal) !important;
+}
+
+.tool-execution-card .tool-params {
+  background: var(--bg-subtle) !important;
+  color: var(--text-secondary) !important;
+}
+
+.tool-result {
+  background: var(--bg-subtle) !important;
+  border: 1px solid var(--border-muted) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ============================================
+   CONVERSATION/RESEARCH PAGE OVERRIDES
+   /conversation
+   ============================================ */
+.conversation-container,
+.research-container,
+.conversation-research {
+  background: var(--bg-base) !important;
+  color: var(--text-primary) !important;
+}
+
+.conversation-sidebar,
+.research-sidebar {
+  background: var(--bg-chat-sidebar) !important;
+  border-right: 1px solid var(--border-default) !important;
+}
+
+.conversation-main,
+.research-main {
+  background: var(--bg-chat-main) !important;
+}
+
+.conversation-header,
+.research-header {
+  background: var(--bg-surface) !important;
+  border-bottom: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Mode Selector Buttons */
+.mode-selector {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.mode-button {
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  border: none !important;
+}
+
+.mode-button:hover {
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+.mode-button.active {
+  background: var(--accent-royal) !important;
+  color: var(--text-on-accent) !important;
+}
+
+/* Thinking/Thoughts Panel */
+.thoughts-panel,
+.thinking-panel {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+}
+
+.thought-item {
+  background: var(--bg-subtle) !important;
+  border-left: 3px solid var(--accent-royal) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Source Cards */
+.source-card,
+.citation-card {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.source-card:hover {
+  border-color: var(--accent-royal) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.source-title {
+  color: var(--text-primary) !important;
+}
+
+.source-url {
+  color: var(--text-link) !important;
+}
+
+.source-snippet {
+  color: var(--text-secondary) !important;
+}
+
+/* Follow-up Questions */
+.follow-up-questions {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+.follow-up-question {
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-muted) !important;
+}
+
+.follow-up-question:hover {
+  border-color: var(--accent-royal) !important;
+  background: var(--bg-elevated) !important;
+}
+
+/* ============================================
+   ORCHESTRATOR PAGE OVERRIDES
+   /orchestrator
+   ============================================ */
+.orchestrator-container,
+.unified-orchestrator {
+  background: var(--bg-base) !important;
+  color: var(--text-primary) !important;
+}
+
+.orchestrator-sidebar {
+  background: var(--bg-chat-sidebar) !important;
+  border-right: 1px solid var(--border-default) !important;
+}
+
+.orchestrator-main {
+  background: var(--bg-chat-main) !important;
+}
+
+.orchestrator-header {
+  background: var(--bg-surface) !important;
+  border-bottom: 1px solid var(--border-default) !important;
+}
+
+/* Workflow Cards */
+.workflow-card,
+.task-card {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.workflow-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.workflow-status.running {
+  background: var(--color-info-bg) !important;
+  color: var(--color-info) !important;
+}
+
+.workflow-status.completed {
+  background: var(--color-success-bg) !important;
+  color: var(--color-success) !important;
+}
+
+.workflow-status.failed {
+  background: var(--color-error-bg) !important;
+  color: var(--color-error) !important;
+}
+
+/* Progress Bars */
+.progress-bar {
+  background: var(--bg-subtle) !important;
+  border: 1px solid var(--border-muted) !important;
+}
+
+.progress-fill {
+  background: var(--accent-royal) !important;
+}
+
+/* ============================================
+   SETTINGS PAGE OVERRIDES
+   /settings
+   ============================================ */
+.settings-container,
+.settings-page {
+  background: var(--bg-base) !important;
+  color: var(--text-primary) !important;
+}
+
+.settings-sidebar {
+  background: var(--bg-chat-sidebar) !important;
+  border-right: 1px solid var(--border-default) !important;
+}
+
+.settings-content {
+  background: var(--bg-chat-main) !important;
+  padding: 2rem;
+}
+
+.settings-section {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.settings-section h2 {
+  color: var(--text-primary) !important;
+  margin-bottom: 1rem;
+}
+
+.settings-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.settings-item:last-child {
+  border-bottom: none;
+}
+
+.settings-label {
+  color: var(--text-primary) !important;
+  font-weight: 500;
+}
+
+.settings-description {
+  color: var(--text-secondary) !important;
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+/* Toggle Switches */
+.toggle-switch {
+  background: var(--bg-subtle) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+.toggle-switch.active {
+  background: var(--accent-royal) !important;
+  border-color: var(--accent-royal) !important;
+}
+
+/* Tool Settings */
+.tool-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.tool-settings-card {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.tool-settings-card h3 {
+  color: var(--text-primary) !important;
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.tool-settings-card p {
+  color: var(--text-secondary) !important;
+  font-size: 0.875rem;
+}
+
+.tool-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-muted);
+}
+
+/* ============================================
+   RADIX UI COMPONENT OVERRIDES
+   ============================================ */
+/* Radix Buttons */
+[data-radix-collection-item] button {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+[data-radix-collection-item] button:hover {
+  background: var(--bg-subtle) !important;
+  border-color: var(--accent-royal) !important;
+}
+
+/* Radix Dialogs/Modals */
+[role="dialog"] {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+/* Radix Dropdown Menu */
+[role="menu"] {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+}
+
+[role="menuitem"] {
+  color: var(--text-primary) !important;
+}
+
+[role="menuitem"]:hover {
+  background: var(--bg-subtle) !important;
+}
+
+/* Radix Tabs */
+[role="tablist"] {
+  background: var(--bg-surface) !important;
+  border-bottom: 1px solid var(--border-default) !important;
+}
+
+[role="tab"] {
+  color: var(--text-secondary) !important;
+}
+
+[role="tab"][aria-selected="true"] {
+  color: var(--accent-royal) !important;
+  border-bottom: 2px solid var(--accent-royal) !important;
+}
+
+/* Radix Tooltips */
+[role="tooltip"] {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+/* ============================================
+   MARKDOWN CONTENT STYLING
+   ============================================ */
+.markdown-content {
+  color: var(--text-primary) !important;
+  line-height: 1.6;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  color: var(--text-primary) !important;
+  margin: 1rem 0 0.5rem 0;
+}
+
+.markdown-content p {
+  color: var(--text-primary) !important;
+  margin: 0.5rem 0;
+}
+
+.markdown-content code {
+  background: var(--bg-subtle) !important;
+  color: var(--accent-royal) !important;
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 0.875em;
+}
+
+.markdown-content pre {
+  background: var(--bg-subtle) !important;
+  border: 1px solid var(--border-muted) !important;
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.markdown-content pre code {
+  background: transparent !important;
+  padding: 0;
+  color: var(--text-primary) !important;
+}
+
+.markdown-content blockquote {
+  border-left: 4px solid var(--accent-royal) !important;
+  background: var(--bg-subtle) !important;
+  padding: 0.5rem 1rem;
+  margin: 0.5rem 0;
+  color: var(--text-secondary) !important;
+}
+
+.markdown-content a {
+  color: var(--text-link) !important;
+  text-decoration: underline;
+}
+
+.markdown-content a:hover {
+  opacity: 0.8;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+  color: var(--text-primary) !important;
+}
+
+.markdown-content li {
+  margin: 0.25rem 0;
+  color: var(--text-primary) !important;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+.markdown-content th {
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+  padding: 0.5rem;
+  border: 1px solid var(--border-default) !important;
+  text-align: left;
+}
+
+.markdown-content td {
+  padding: 0.5rem;
+  border: 1px solid var(--border-muted) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ============================================
+   ACCESSIBILITY IMPROVEMENTS
+   ============================================ */
+/* Focus visible for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid var(--accent-royal) !important;
+  outline-offset: 2px;
+}
+
+/* Skip to content link */
+.skip-to-content {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--accent-royal);
+  color: var(--text-on-accent);
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+  z-index: 100;
+}
+
+.skip-to-content:focus {
+  top: 0;
+}
+
+/* Screen reader only text */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ============================================
+   IMPORTANT OVERRIDES - LAST PRIORITY
+   ============================================ */
+/* Force fix any remaining dark backgrounds in light mode */
+:root:not(.dark) [style*="background: #0f172a"],
+:root:not(.dark) [style*="background: #1e293b"],
+:root:not(.dark) [style*="background-color: #0f172a"],
+:root:not(.dark) [style*="background-color: #1e293b"] {
+  background: var(--bg-surface) !important;
+}
+
+/* Force fix any text visibility issues */
+:root.dark .message:not(.user) *,
+:root.dark .card *,
+:root.dark .panel *,
+:root.dark .sidebar * {
+  color: inherit;
+}
+
+/* Ensure user messages stay white in both themes */
+.message.user .message-content,
+.message.user .message-content * {
+  color: var(--text-on-accent) !important;
+}

@@ -974,7 +974,7 @@ const ConversationResearchFixed: React.FC = () => {
               onSourceClick={handleSourceClick}
               onBookmark={toggleBookmark}
               bookmarkedSources={bookmarkedSources}
-              activeMessageId={sessionId}
+              activeMessageId={sessionId || undefined}
               showGroupHeaders={false}
               compactMode={true}
             />

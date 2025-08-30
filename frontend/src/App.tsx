@@ -11,6 +11,7 @@ import { UnifiedOrchestratorV2 } from './pages/UnifiedOrchestratorV2';
 import UnifiedOrchestratorV3 from './pages/UnifiedOrchestratorV3';
 import ConversationResearch from './components/research/ConversationResearch';
 import ConversationResearchRadix from './components/research/ConversationResearchRadix';
+import ScholarlyResearchView from './components/research/ScholarlyResearchView';
 import SwarmChat from './pages/SwarmChat';
 import TrueSwarmChat from './pages/TrueSwarmChat';
 import TrueSwarmRadix from './pages/TrueSwarmRadix';
@@ -44,8 +45,8 @@ function App() {
 
             {/* Research Interfaces */}
             <Route path="/research" element={<VercelResearch />} />
-            <Route path="/conversation" element={<ConversationResearchRadix />} />
-            <Route path="/conversation/:sessionId" element={<ConversationResearchRadix />} />
+            <Route path="/conversation" element={<ScholarlyResearchView />} />
+            <Route path="/conversation/:sessionId" element={<ScholarlyResearchView />} />
             
             {/* True Swarm Chat */}
             <Route path="/true-swarm" element={<TrueSwarmRadix />} />
