@@ -175,9 +175,9 @@ class RedisSessionStorage(SessionStorage):
         """Lazy initialization of Redis connection"""
         if not self._initialized:
             try:
-                import aioredis
-                # Use the new aioredis 2.0 API
-                self.redis = await aioredis.from_url(
+                import redis.asyncio as redis
+                # Use the redis async API
+                self.redis = redis.from_url(
                     settings.REDIS_URL or 'redis://localhost:6379',
                     encoding='utf-8',
                     decode_responses=True

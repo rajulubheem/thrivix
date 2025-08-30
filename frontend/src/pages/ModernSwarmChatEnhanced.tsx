@@ -1170,9 +1170,14 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
 
   const finalizeStreamingMessage = useCallback((agent: string) => {
     setMessages(prev => {
-      const lastMsg = prev[prev.length - 1];
-      if (lastMsg?.metadata?.agent === agent && lastMsg?.status === 'streaming') {
-        const finalizedMsg = { ...lastMsg, status: 'sent' as const };
+      // Find the specific streaming message for this agent
+      const msgIndex = prev.findIndex(
+        m => m.metadata?.agent === agent && m.status === 'streaming'
+      );
+      
+      if (msgIndex >= 0) {
+        const streamingMsg = prev[msgIndex];
+        const finalizedMsg = { ...streamingMsg, status: 'sent' as const };
         
         // Extract artifacts asynchronously to avoid blocking
         setTimeout(() => extractArtifacts([finalizedMsg]), 0);
@@ -1182,7 +1187,10 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
           saveMessageToSession('assistant', finalizedMsg.content, { agent });
         }
         
-        return [...prev.slice(0, -1), finalizedMsg];
+        // Replace the streaming message with the finalized one
+        const updated = [...prev];
+        updated[msgIndex] = finalizedMsg;
+        return updated;
       }
       return prev;
     });
@@ -1218,10 +1226,18 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
     let activeSessionId = sessionId || currentSession?.session_id;
     let isNewSession = false;
     
-    // Force new session if we're at /swarm without a session ID
-    if (!activeSessionId || (!sessionId && window.location.pathname === '/swarm')) {
-      console.log('Creating new session for first message...');
+    // Force new session if we're at /swarm without a session ID in the URL
+    // This ensures clicking "Swarm mode" always creates a new session
+    if (!sessionId && window.location.pathname === '/swarm') {
+      console.log('At /swarm root - creating new session...');
       isNewSession = true;
+      activeSessionId = null; // Force new session creation
+    } else if (!activeSessionId) {
+      console.log('No active session - creating new session...');
+      isNewSession = true;
+    }
+    
+    if (isNewSession) {
       const newSession = await createSession({
         title: query.substring(0, 50) || `Swarm Session ${new Date().toLocaleDateString()}`,
         agents_config: {
