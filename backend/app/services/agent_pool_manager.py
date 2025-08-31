@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
+import threading
 
 from app.services.circuit_breaker import CircuitBreaker
 
@@ -60,9 +61,14 @@ class AgentPoolManager:
         self.is_stopped = False
         self.monitor_task: Optional[asyncio.Task] = None
         
-        # Resource monitoring
+        # Resource monitoring  
         self.resource_violations = 0
-        self.max_resource_violations = 5
+        self.max_resource_violations = 10  # Increased from 5 to allow more work
+        
+        # Thread safety for agent spawning
+        self._spawn_lock = asyncio.Lock()
+        self._spawning_agents: Set[str] = set()  # Track agents currently being spawned
+        self._state_lock = threading.RLock()  # For synchronizing state changes
     
     async def start_execution(self, execution_id: str):
         """Start a new execution with monitoring"""
@@ -99,78 +105,103 @@ class AgentPoolManager:
         logger.info(f"🛑 Agent pool manager stopped (force={force})")
     
     async def can_spawn_agent(self, role: str) -> tuple[bool, str]:
-        """Check if we can spawn a new agent"""
-        if self.is_stopped:
-            return False, "Execution is stopped"
-        
-        if self.circuit_breaker.is_open:
-            return False, "Circuit breaker is open"
-        
-        if len(self.active_agents) >= self.max_concurrent_agents:
-            return False, f"Max concurrent agents reached ({self.max_concurrent_agents})"
-        
-        if self.total_agents_spawned >= self.max_total_agents:
-            return False, f"Max total agents reached ({self.max_total_agents})"
-        
-        if self._execution_time_exceeded():
-            return False, f"Max execution time exceeded ({self.max_execution_time}s)"
-        
-        return True, "OK"
+        """Thread-safe check if we can spawn a new agent"""
+        with self._state_lock:
+            if self.is_stopped:
+                return False, "Execution is stopped"
+            
+            if self.circuit_breaker.is_open:
+                return False, "Circuit breaker is open"
+            
+            # Include agents currently being spawned in the count
+            total_active = len(self.active_agents) + len(self._spawning_agents)
+            if total_active >= self.max_concurrent_agents:
+                return False, f"Max concurrent agents reached ({self.max_concurrent_agents})"
+            
+            if self.total_agents_spawned >= self.max_total_agents:
+                return False, f"Max total agents reached ({self.max_total_agents})"
+            
+            if self._execution_time_exceeded():
+                return False, f"Max execution time exceeded ({self.max_execution_time}s)"
+            
+            # Check if this role is already being spawned
+            if role in self._spawning_agents:
+                return False, f"Agent role '{role}' is already being spawned"
+            
+            return True, "OK"
     
     async def register_agent(self, agent_name: str, role: str) -> str:
-        """Register a new agent and return agent ID"""
-        can_spawn, reason = await self.can_spawn_agent(role)
-        if not can_spawn:
-            raise Exception(f"Cannot spawn agent: {reason}")
-        
-        agent_id = str(uuid.uuid4())
-        agent_process = AgentProcess(
-            agent_id=agent_id,
-            name=agent_name,
-            role=role,
-            start_time=time.time(),
-            status="idle",
-            last_activity=time.time()
-        )
-        
-        self.active_agents[agent_id] = agent_process
-        self.total_agents_spawned += 1
-        
-        logger.info(f"🤖 Agent registered: {agent_name} ({role}) - {len(self.active_agents)}/{self.max_concurrent_agents} active")
-        return agent_id
+        """Thread-safe agent registration"""
+        async with self._spawn_lock:
+            # Double-check after acquiring lock
+            can_spawn, reason = await self.can_spawn_agent(role)
+            if not can_spawn:
+                raise Exception(f"Cannot spawn agent: {reason}")
+            
+            # Mark role as being spawned
+            with self._state_lock:
+                self._spawning_agents.add(role)
+            
+            try:
+                agent_id = str(uuid.uuid4())
+                agent_process = AgentProcess(
+                    agent_id=agent_id,
+                    name=agent_name,
+                    role=role,
+                    start_time=time.time(),
+                    status="idle",
+                    last_activity=time.time()
+                )
+                
+                with self._state_lock:
+                    self.active_agents[agent_id] = agent_process
+                    self.total_agents_spawned += 1
+                
+                logger.info(f"🤖 Agent registered: {agent_name} ({role}) - {len(self.active_agents)}/{self.max_concurrent_agents} active")
+                return agent_id
+                
+            finally:
+                # Remove from spawning set
+                with self._state_lock:
+                    self._spawning_agents.discard(role)
     
     async def mark_agent_running(self, agent_id: str, process_id: Optional[int] = None):
-        """Mark agent as running"""
-        if agent_id in self.active_agents:
-            self.active_agents[agent_id].status = "running"
-            self.active_agents[agent_id].process_id = process_id or os.getpid()
-            self.active_agents[agent_id].last_activity = time.time()
-            logger.debug(f"🏃 Agent {agent_id} marked as running")
+        """Thread-safe mark agent as running"""
+        with self._state_lock:
+            if agent_id in self.active_agents:
+                self.active_agents[agent_id].status = "running"
+                self.active_agents[agent_id].process_id = process_id or os.getpid()
+                self.active_agents[agent_id].last_activity = time.time()
+                logger.debug(f"🏃 Agent {agent_id} marked as running")
     
     async def mark_agent_completed(self, agent_id: str, success: bool = True):
-        """Mark agent as completed and move to history"""
-        if agent_id not in self.active_agents:
-            return
-        
-        agent = self.active_agents[agent_id]
-        agent.status = "completed" if success else "failed"
-        
-        # Move to history
-        self.agent_history.append(agent)
-        del self.active_agents[agent_id]
-        
-        if not success:
-            self.circuit_breaker._on_failure()
-        else:
-            self.circuit_breaker._on_success()
-        
-        logger.info(f"✅ Agent {agent_id} completed ({agent.status}) - {len(self.active_agents)} active")
+        """Thread-safe mark agent as completed and move to history"""
+        with self._state_lock:
+            if agent_id not in self.active_agents:
+                return
+            
+            agent = self.active_agents[agent_id]
+            agent.status = "completed" if success else "failed"
+            
+            # Move to history
+            self.agent_history.append(agent)
+            del self.active_agents[agent_id]
+            
+            # Remove from spawning set if it was there
+            self._spawning_agents.discard(agent.role)
+            
+            if not success:
+                self.circuit_breaker._on_failure()
+            else:
+                self.circuit_breaker._on_success()
+            
+            logger.info(f"✅ Agent {agent_id} completed ({agent.status}) - {len(self.active_agents)} active")
     
     async def _monitor_resources(self):
         """Monitor system resources and agent health"""
         while not self.is_stopped:
             try:
-                await asyncio.sleep(2)  # Check every 2 seconds
+                await asyncio.sleep(5)  # Check every 5 seconds (was 2) - less aggressive
                 
                 # Check execution timeout
                 if self._execution_time_exceeded():

@@ -4,7 +4,8 @@ Event Bus System for Event-Driven Swarm
 import asyncio
 import time
 import uuid
-from typing import Dict, List, Callable, Any, Optional
+import threading
+from typing import Dict, List, Callable, Any, Optional, Set
 from collections import defaultdict
 from dataclasses import dataclass, field
 import logging
@@ -40,16 +41,43 @@ class EventBus:
         self.active = True
         self._lock = asyncio.Lock()
         
+        # Thread-safe event deduplication
+        self._processed_events: Set[str] = set()
+        self._deduplication_lock = threading.RLock()
+        
+        # Limit event history size to prevent memory leaks
+        self.max_history_size = 1000
+        
     async def emit(self, event_type: str, data: dict, source: str = None):
-        """Emit an event that other agents can react to"""
+        """Thread-safe emit an event that other agents can react to"""
         event = SwarmEvent(
             type=event_type,
             data=data,
             source=source
         )
         
+        # Check for duplicate events
+        with self._deduplication_lock:
+            event_signature = f"{event_type}:{hash(str(sorted(data.items())))}"
+            if event_signature in self._processed_events:
+                logger.debug(f"🔄 Duplicate event detected, skipping: {event_type}")
+                return
+            self._processed_events.add(event_signature)
+        
         async with self._lock:
             self.event_history.append(event)
+            
+            # Limit history size to prevent memory leaks
+            if len(self.event_history) > self.max_history_size:
+                # Remove oldest events
+                removed_events = self.event_history[:len(self.event_history) - self.max_history_size]
+                self.event_history = self.event_history[-self.max_history_size:]
+                
+                # Clean up processed events for removed history
+                with self._deduplication_lock:
+                    for old_event in removed_events:
+                        old_signature = f"{old_event.type}:{hash(str(sorted(old_event.data.items())))}"
+                        self._processed_events.discard(old_signature)
             
         logger.info(f"📡 Event emitted: {event_type} from {source}")
         logger.debug(f"Event data: {json.dumps(data, default=str)[:200]}")
@@ -105,15 +133,18 @@ class EventBus:
                 self.listeners[event_pattern].remove(callback)
     
     def get_recent_events(self, count: int = 10, event_type: str = None) -> List[SwarmEvent]:
-        """Get recent events, optionally filtered by type"""
-        events = self.event_history[-count:]
-        if event_type:
-            events = [e for e in events if e.type == event_type or e.type.startswith(event_type)]
-        return events
+        """Thread-safe get recent events, optionally filtered by type"""
+        with self._deduplication_lock:
+            events = self.event_history[-count:]
+            if event_type:
+                events = [e for e in events if e.type == event_type or e.type.startswith(event_type)]
+            return events
     
     def clear_history(self):
-        """Clear event history"""
-        self.event_history.clear()
+        """Thread-safe clear event history"""
+        with self._deduplication_lock:
+            self.event_history.clear()
+            self._processed_events.clear()
     
     async def wait_for_event(self, event_type: str, timeout: float = None) -> Optional[SwarmEvent]:
         """Wait for a specific event to occur"""
@@ -141,6 +172,21 @@ class EventBus:
         """Shutdown the event bus"""
         self.active = False
         await self.emit("system.shutdown", {}, "event_bus")
+        
+        # Clean up resources
+        with self._deduplication_lock:
+            self._processed_events.clear()
+    
+    def get_processed_events_count(self) -> int:
+        """Get count of processed events for debugging"""
+        with self._deduplication_lock:
+            return len(self._processed_events)
+    
+    def is_event_processed(self, event_type: str, data: dict) -> bool:
+        """Check if an event has been processed already"""
+        with self._deduplication_lock:
+            event_signature = f"{event_type}:{hash(str(sorted(data.items())))}"
+            return event_signature in self._processed_events
 
 
 # Global event bus instance

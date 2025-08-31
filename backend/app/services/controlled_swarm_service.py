@@ -5,8 +5,9 @@ import asyncio
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 import logging
+import threading
 
 from app.schemas.swarm import SwarmExecutionRequest, SwarmExecutionResponse, ExecutionStatus
 from app.services.agent_pool_manager import AgentPoolManager
@@ -38,6 +39,10 @@ class ControlledSwarmService:
         # Circuit breakers for different failure types
         self.spawn_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=60)
         self.execution_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=120)
+        
+        # Thread-safe tracking of spawned roles per execution
+        self._spawned_roles_lock = threading.RLock()
+        self._spawned_roles_by_execution: Dict[str, Set[str]] = {}
         
     async def execute_swarm_async(
         self,
@@ -156,6 +161,56 @@ class ControlledSwarmService:
             )
         
         return result
+    
+    async def _spawn_agent_atomic(
+        self, 
+        execution_id: str, 
+        request, 
+        original_query: str, 
+        accumulated_results: list,
+        callback_handler
+    ) -> Optional[str]:
+        """Atomically spawn a single agent with race condition protection"""
+        agent_role = request.data.get("role", "writer")
+        reason = request.data.get("reason", "AI requested agent")
+        
+        # Check if this role is already spawned for this execution
+        with self._spawned_roles_lock:
+            spawned_roles = self._spawned_roles_by_execution.get(execution_id, set())
+            if agent_role in spawned_roles:
+                logger.info(f"🔄 Role {agent_role} already spawned for execution {execution_id}")
+                return None
+            
+            # Mark as spawning to prevent other threads from spawning the same role
+            spawned_roles.add(agent_role)
+        
+        try:
+            new_agent_id = await self._spawn_controlled_agent(
+                execution_id=execution_id,
+                role=agent_role,
+                task=f"Previous context: {accumulated_results[-1] if accumulated_results else original_query}. Task: {reason}",
+                context={"reason": reason, "priority": request.data.get("priority", "medium")},
+                callback_handler=callback_handler
+            )
+            
+            if new_agent_id:
+                logger.info(f"✅ Atomically spawned {agent_role} agent: {new_agent_id}")
+                return new_agent_id
+            else:
+                logger.warning(f"⚠️ Failed to spawn {agent_role} agent")
+                # Remove from spawned roles on failure
+                with self._spawned_roles_lock:
+                    spawned_roles = self._spawned_roles_by_execution.get(execution_id, set())
+                    spawned_roles.discard(agent_role)
+                return None
+                
+        except Exception as spawn_error:
+            logger.error(f"❌ Error spawning agent {agent_role}: {spawn_error}")
+            # Remove from spawned roles on error
+            with self._spawned_roles_lock:
+                spawned_roles = self._spawned_roles_by_execution.get(execution_id, set())
+                spawned_roles.discard(agent_role)
+            raise spawn_error
     
     @CircuitBreaker(failure_threshold=3, recovery_timeout=60)
     async def _spawn_controlled_agent(
@@ -322,6 +377,10 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
         accumulated_results = []
         processed_events = set()  # Track processed events to avoid duplicates
         
+        # Initialize thread-safe spawned roles tracking for this execution
+        with self._spawned_roles_lock:
+            self._spawned_roles_by_execution[execution_id] = set()
+        
         while loop_count < max_loops and not self.pool_manager.is_stopped:
             loop_count += 1
             logger.info(f"🔄 Control loop {loop_count}/{max_loops}")
@@ -350,42 +409,66 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
                     logger.info(f"🔄 Agents still active after wait, continuing...")
                     continue
                 
-                # Only spawn ONE new agent at a time to prevent overwhelming
-                recent_events = event_bus.get_recent_events(10)  # Get more recent events
-                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]  # Remove loop count filter
+                # Spawn ALL needed agents (up to user's max limit) to enable true swarm intelligence
+                recent_events = event_bus.get_recent_events(15)  # Get more recent events
+                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]  # Get all agent requests
                 
                 logger.info(f"🔍 Loop {loop_count}: Found {len(recent_events)} recent events, {len(spawn_requests)} spawn requests")
                 
-                # Allow spawning in first 5 loops to give more chances
-                if spawn_requests and loop_count <= 5:
-                    # Only spawn the MOST RECENT agent request, not multiple
-                    latest_request = spawn_requests[-1]
-                    logger.info(f"🔄 Found agent spawn request, spawning ONE agent...")
+                # Thread-safe filtering of already spawned agent roles to prevent duplicates
+                unique_spawn_requests = {}
+                with self._spawned_roles_lock:
+                    spawned_roles = self._spawned_roles_by_execution.get(execution_id, set())
+                    for req in spawn_requests:
+                        role = req.data.get("role", "writer")
+                        # Only add if we haven't spawned this role yet
+                        if role not in spawned_roles and role not in unique_spawn_requests:
+                            unique_spawn_requests[role] = req
+                
+                # Spawn all needed agents (within max limit) - let the swarm self-organize!
+                if unique_spawn_requests:
+                    agents_to_spawn = list(unique_spawn_requests.values())
+                    logger.info(f"🔄 Found {len(agents_to_spawn)} unique agent types needed: {list(unique_spawn_requests.keys())}")
                     
-                    try:
-                        agent_role = latest_request.data.get("role", "writer")
-                        reason = latest_request.data.get("reason", "AI requested agent")
+                    # Spawn agents atomically to prevent race conditions
+                    spawn_tasks = []
+                    for req in agents_to_spawn:
+                        role = req.data.get("role", "writer")
                         
-                        # Spawn only ONE agent
-                        new_agent_id = await self._spawn_controlled_agent(
-                            execution_id=execution_id,
-                            role=agent_role,
-                            task=f"Previous context: {accumulated_results[-1] if accumulated_results else original_query}. Task: {reason}",
-                            context={"reason": reason, "priority": latest_request.data.get("priority", "medium")},
-                            callback_handler=callback_handler
-                        )
-                        
-                        if new_agent_id:
-                            logger.info(f"✅ Spawned {agent_role} agent: {new_agent_id}")
-                            # Wait for this agent to start working before next loop
-                            await asyncio.sleep(3)
-                        else:
-                            logger.warning(f"⚠️ Failed to spawn {agent_role} agent")
-                            
-                    except Exception as spawn_error:
-                        logger.error(f"❌ Error spawning agent: {spawn_error}")
+                        # Atomic check and spawn to prevent race conditions
+                        try:
+                            spawn_task = self._spawn_agent_atomic(
+                                execution_id=execution_id,
+                                request=req,
+                                original_query=original_query,
+                                accumulated_results=accumulated_results,
+                                callback_handler=callback_handler
+                            )
+                            spawn_tasks.append(spawn_task)
+                        except Exception as e:
+                            logger.info(f"⚠️ Cannot spawn {role}: {e}")
                     
-                    # Continue loop to let the new agent work
+                    # Execute all spawns in parallel
+                    if spawn_tasks:
+                        spawn_results = await asyncio.gather(*spawn_tasks, return_exceptions=True)
+                        successful_spawns = [r for r in spawn_results if r and not isinstance(r, Exception)]
+                        logger.info(f"✅ Successfully spawned {len(successful_spawns)} agents in parallel")
+                        
+                        # Log successful spawns (roles already tracked atomically in _spawn_agent_atomic)
+                        successful_roles = []
+                        for i, result in enumerate(spawn_results):
+                            if result and not isinstance(result, Exception):
+                                role = agents_to_spawn[i].data.get("role", "writer")
+                                successful_roles.append(role)
+                        
+                        if successful_roles:
+                            logger.info(f"📝 Successfully spawned roles: {successful_roles}")
+                        
+                        # Brief pause to let agents initialize
+                        if successful_spawns:
+                            await asyncio.sleep(1)
+                    
+                    # Continue loop to let new agents work
                     continue
                 else:
                     logger.info("✅ No active agents and no pending spawn requests - execution complete")
@@ -419,6 +502,15 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
                                     "execution_id": execution_id
                                 }
                             )
+                        
+                        # Check if this result indicates task completion
+                        if "TASK COMPLETE" in result:
+                            logger.info(f"🎯 Agent {event.source} marked task as complete")
+                            # If we have good results and agent says complete, we're done
+                            if len(accumulated_results) > 0:
+                                logger.info("✅ Task completion detected - stopping execution")
+                                self.pool_manager.is_stopped = True
+                                break
                         
             
             # If we have results and no active agents, we're done
@@ -492,6 +584,10 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
                 pass
         
         self.agent_registry.clear()
+        
+        # Clean up spawned roles tracking
+        with self._spawned_roles_lock:
+            self._spawned_roles_by_execution.pop(execution_id, None)
         
         # Remove from active executions
         if execution_id in self.active_executions:
