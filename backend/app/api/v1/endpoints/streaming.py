@@ -559,6 +559,7 @@ async def start_streaming(
     # Execute in background
     async def run_execution():
         """Run the swarm execution in background"""
+        logger.info(f"🚀 BACKGROUND TASK STARTED for session {session_id}")
         try:
             # Update status
             session = await storage.get(session_id)
@@ -614,8 +615,32 @@ async def start_streaming(
                     "timestamp": datetime.utcnow().isoformat()
                 })
             
-            # Use appropriate service
-            if hasattr(settings, 'USE_REALTIME_STREAMING') and settings.USE_REALTIME_STREAMING:
+            # Use appropriate service based on execution mode
+            if request.execution_mode == "event_driven":
+                # Use CONTROLLED event-driven service with user-configurable limits
+                from app.services.controlled_swarm_service import ControlledSwarmService
+                
+                # Extract user configuration from request context
+                user_config = {}
+                if hasattr(request, 'context') and request.context:
+                    swarm_config = request.context.get('swarm_config', {})
+                    user_config = {
+                        "max_concurrent_agents": swarm_config.get("max_concurrent_agents", 3),
+                        "max_total_agents": swarm_config.get("max_total_agents", 8),
+                        "max_execution_time": swarm_config.get("max_execution_time", 180),
+                        "max_agent_runtime": swarm_config.get("max_agent_runtime", 60)
+                    }
+                
+                service = ControlledSwarmService(config=user_config)
+                # Store service globally so stop endpoint can access it
+                import app.api.v1.endpoints.streaming as streaming_module
+                streaming_module._global_swarm_service = service
+                # Store mapping between session_id and execution_id for stop functionality
+                if not hasattr(streaming_module, '_session_execution_map'):
+                    streaming_module._session_execution_map = {}
+                streaming_module._session_execution_map[session_id] = request.execution_id or session_id
+                logger.info(f"🎯 Using CONTROLLED event-driven swarm with user config: {user_config}")
+            elif hasattr(settings, 'USE_REALTIME_STREAMING') and settings.USE_REALTIME_STREAMING:
                 service = RealtimeSwarmService()
             else:
                 service = EnhancedSwarmService()
@@ -668,8 +693,17 @@ async def start_streaming(
                 strands_svc.save_agents(session_id, session.get("agents", agent_dicts))
                 logger.info(f"💾 Saved agents to persistent storage for {session_id}")
             
-            # Execute with DAG if beneficial, otherwise use normal swarm
-            if use_dag:  # This will never execute now
+            # Execute based on mode
+            logger.info(f"🔍 DEBUG: Background task execution_mode = '{request.execution_mode}'")
+            if request.execution_mode == "event_driven":
+                # Event-driven execution in background task - EXECUTE HERE
+                logger.info("🎯 Executing event-driven swarm in background task")
+                result = await service.execute_swarm_async(
+                    request=request,
+                    user_id="stream_user",
+                    callback_handler=stream_callback
+                )
+            elif use_dag:  # This will never execute now
                 # Build and execute DAG
                 # graph = swarm_dag_adapter.build_dag_from_agents(agents_for_dag, request.task)
                 graph = None  # DAG disabled
@@ -742,7 +776,16 @@ async def start_streaming(
             session = await storage.get(session_id)
             if session:
                 session["status"] = "complete"
-                session["result"] = result
+                # Serialize the result object properly
+                if result:
+                    if hasattr(result, 'dict'):
+                        session["result"] = result.dict()
+                    elif hasattr(result, 'model_dump'):
+                        session["result"] = result.model_dump()
+                    else:
+                        session["result"] = str(result)
+                else:
+                    session["result"] = None
                 session["metrics"]["end_time"] = datetime.utcnow().isoformat()
                 await storage.set(session_id, session)
                 
@@ -780,6 +823,7 @@ async def start_streaming(
                 })
 
     # Add to background tasks
+    logger.info(f"🔥 Adding background task for session {session_id}")
     background_tasks.add_task(run_execution)
 
     return JSONResponse({
@@ -788,6 +832,57 @@ async def start_streaming(
         "poll_url": f"/api/v1/streaming/poll/{session_id}"
     })
 
+
+@router.post("/streaming/stop/{session_id}")
+async def stop_execution(session_id: str):
+    """Stop a running swarm execution"""
+    try:
+        # Get the storage instance
+        storage = get_stream_storage()
+        
+        # Update session status to stopped
+        session = await storage.get(session_id)
+        if session:
+            session["status"] = "stopped"
+            await storage.set(session_id, session)
+            
+            # Stop the event-driven swarm execution - use global instance
+            try:
+                from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
+                import app.api.v1.endpoints.streaming as streaming_module
+                
+                # Get the execution_id mapped to this session_id
+                execution_id = session_id  # Default fallback
+                if hasattr(streaming_module, '_session_execution_map'):
+                    execution_id = streaming_module._session_execution_map.get(session_id, session_id)
+                
+                # Try to find existing instance and stop with correct execution_id
+                if hasattr(streaming_module, '_global_swarm_service'):
+                    stopped = await streaming_module._global_swarm_service.stop_execution(execution_id)
+                    logger.info(f"🛑 Stop request processed for execution {execution_id} (session {session_id}) - success: {stopped}")
+                else:
+                    # No active service found
+                    stopped = False
+                    logger.warning(f"🛑 No active service found for execution {execution_id}")
+                    
+            except Exception as stop_error:
+                logger.error(f"Error stopping swarm execution: {stop_error}")
+            
+            # Add stop chunk
+            await storage.append_chunk(session_id, {
+                "type": "execution_stopped",
+                "message": "Execution stopped by user",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            
+            logger.info(f"🛑 Execution stopped for session {session_id}")
+            return {"status": "stopped", "session_id": session_id}
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+            
+    except Exception as e:
+        logger.error(f"Error stopping execution: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/streaming/poll/{session_id}")
 async def poll_stream(
@@ -1354,7 +1449,16 @@ async def execute_swarm_with_context(
         session = await storage.get(session_id)
         if session:
             session["status"] = "complete"
-            session["result"] = result
+            # Serialize the result object properly
+            if result:
+                if hasattr(result, 'dict'):
+                    session["result"] = result.dict()
+                elif hasattr(result, 'model_dump'):
+                    session["result"] = result.model_dump()
+                else:
+                    session["result"] = str(result)
+            else:
+                session["result"] = None
             await storage.set(session_id, session)
             
             # CRITICAL: Save ALL context including messages to Strands for future continuation
@@ -1405,3 +1509,43 @@ async def execute_swarm_with_context(
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         })
+
+
+@router.get("/streaming/status/{session_id}")
+async def get_execution_status(session_id: str):
+    """Get detailed execution status including agent pool information"""
+    try:
+        # Get basic session info
+        storage = get_stream_storage()
+        session = await storage.get(session_id)
+        
+        base_status = {
+            "session_id": session_id,
+            "session_found": session is not None,
+            "session_status": session.get("status") if session else None
+        }
+        
+        # Get execution ID
+        import app.api.v1.endpoints.streaming as streaming_module
+        execution_id = session_id
+        if hasattr(streaming_module, '_session_execution_map'):
+            execution_id = streaming_module._session_execution_map.get(session_id, session_id)
+        
+        # Get detailed service status if available
+        if hasattr(streaming_module, '_global_swarm_service'):
+            service = streaming_module._global_swarm_service
+            if hasattr(service, 'get_execution_status'):
+                detailed_status = service.get_execution_status(execution_id)
+                base_status.update(detailed_status)
+            elif hasattr(service, 'pool_manager'):
+                base_status["pool_manager"] = service.pool_manager.status
+        
+        return base_status
+        
+    except Exception as e:
+        logger.error(f"Failed to get execution status: {e}")
+        return {
+            "session_id": session_id,
+            "error": str(e),
+            "session_found": False
+        }
