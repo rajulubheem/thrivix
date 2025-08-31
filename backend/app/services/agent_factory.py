@@ -486,8 +486,59 @@ Focus on preventing defects and ensuring quality.""",
             )
         }
     
-    def create_agent(self, role: AgentRole, **kwargs) -> AgentConfig:
+    def create_agent(self, role, **kwargs) -> AgentConfig:
         """Create an agent from a template with advanced prompts"""
+        # Handle both string and AgentRole enum
+        if isinstance(role, str):
+            # Try to find matching role by value
+            role_enum = None
+            for agent_role in AgentRole:
+                if agent_role.value == role.lower():
+                    role_enum = agent_role
+                    break
+            
+            if not role_enum:
+                # Try partial match or common aliases
+                role_map = {
+                    "research": AgentRole.RESEARCHER,
+                    "researcher": AgentRole.RESEARCHER,
+                    "architect": AgentRole.ARCHITECT,
+                    "developer": AgentRole.DEVELOPER,
+                    "dev": AgentRole.DEVELOPER,
+                    "reviewer": AgentRole.REVIEWER,
+                    "review": AgentRole.REVIEWER,
+                    "tester": AgentRole.TESTER,
+                    "test": AgentRole.TESTER,
+                    "qa": AgentRole.QA_ENGINEER,
+                    "documentation": AgentRole.DOCUMENTATION,
+                    "docs": AgentRole.DOCUMENTATION,
+                    "documenter": AgentRole.DOCUMENTATION,
+                    "ui": AgentRole.UI_UX,
+                    "ux": AgentRole.UI_UX,
+                    "frontend": AgentRole.FRONTEND_DEV,
+                    "backend": AgentRole.BACKEND_DEV,
+                    "api": AgentRole.API_SPECIALIST,
+                    "database": AgentRole.DATABASE_EXPERT,
+                    "db": AgentRole.DATABASE_EXPERT,
+                    "cloud": AgentRole.CLOUD_ARCHITECT,
+                    "devops": AgentRole.DEVOPS,
+                    "security": AgentRole.SECURITY,
+                    "ml": AgentRole.ML_ENGINEER,
+                    "data": AgentRole.DATA_SCIENTIST,
+                    "pm": AgentRole.PROJECT_MANAGER,
+                    "manager": AgentRole.PROJECT_MANAGER,
+                    "business": AgentRole.BUSINESS_ANALYST,
+                    "analyst": AgentRole.BUSINESS_ANALYST,
+                    "mobile": AgentRole.MOBILE_DEV
+                }
+                role_enum = role_map.get(role.lower())
+                
+            if not role_enum:
+                logger.warning(f"Unknown agent role: {role}, using RESEARCHER as default")
+                role_enum = AgentRole.RESEARCHER
+            
+            role = role_enum
+        
         template = self.templates.get(role)
         if not template:
             raise ValueError(f"Unknown agent role: {role}")

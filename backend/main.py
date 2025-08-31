@@ -5,8 +5,12 @@ Run with: python main.py or uvicorn app.main:app
 """
 
 import uvicorn
+from dotenv import load_dotenv
 from app.main import app
 from app.config import Settings
+
+# Load environment variables
+load_dotenv()
 
 settings = Settings()
 

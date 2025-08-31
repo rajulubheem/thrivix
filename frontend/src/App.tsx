@@ -18,6 +18,7 @@ import TrueSwarmRadix from './pages/TrueSwarmRadix';
 import ToolSettingsV2 from './pages/ToolSettingsV2';
 import SettingsPage from './pages/SettingsPage';
 import VercelResearch from './components/research/VercelResearch';
+import { EventDrivenSwarmInterface } from './components/swarm/EventDrivenSwarmInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
 
@@ -52,6 +53,9 @@ function App() {
             <Route path="/true-swarm" element={<TrueSwarmRadix />} />
             <Route path="/true-swarm/:sessionId" element={<TrueSwarmRadix />} />
             <Route path="/true-swarm-old" element={<TrueSwarmChat />} />
+            
+            {/* Event-Driven Swarm with Human-in-Loop */}
+            <Route path="/event-swarm" element={<EventDrivenSwarmInterface />} />
 
             {/* Redirect any other routes to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

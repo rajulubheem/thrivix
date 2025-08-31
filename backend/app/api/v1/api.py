@@ -4,8 +4,21 @@ from app.api.v1.endpoints import swarm, swarm_dag, sse, agents, orchestrator, to
 from app.api.v1 import tool_approval, dynamic_tools, simple_approval, dynamic_tool_registry, tool_help, tool_debug, file_viewer
 from app.api import graph_endpoints, graph_demo
 
+# Import event endpoints separately to handle import errors
+try:
+    from app.api.v1.endpoints import event_swarm, event_test
+    EVENT_ENDPOINTS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import event endpoints: {e}")
+    EVENT_ENDPOINTS_AVAILABLE = False
+
 api_router = APIRouter()
 api_router.include_router(swarm.router, prefix="/swarm", tags=["swarm"])
+
+# Include event endpoints if available
+if EVENT_ENDPOINTS_AVAILABLE:
+    api_router.include_router(event_swarm.router, prefix="/event-swarm", tags=["event-swarm"])
+    api_router.include_router(event_test.router, prefix="/event-test", tags=["event-test"])
 api_router.include_router(swarm_dag.router, prefix="/swarm-dag", tags=["swarm-dag"])
 api_router.include_router(sse.router, prefix="/sse", tags=["sse"])
 api_router.include_router(streaming.router, tags=["streaming"])
