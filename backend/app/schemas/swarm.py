@@ -36,6 +36,7 @@ class SwarmExecutionRequest(BaseModel):
     execution_timeout: Optional[int] = 300
     node_timeout: Optional[int] = 60
     execution_id: Optional[str] = None
+    session_id: Optional[str] = None  # For human-loop compatibility
     background: bool = False
     use_orchestrator: Optional[bool] = True
     context: Optional[Dict[str, Any]] = None  # For preserving session context

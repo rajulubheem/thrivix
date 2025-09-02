@@ -56,6 +56,7 @@ function App() {
             
             {/* Event-Driven Swarm with Human-in-Loop */}
             <Route path="/event-swarm" element={<EventDrivenSwarmInterface />} />
+            
 
             {/* Redirect any other routes to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

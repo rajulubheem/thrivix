@@ -1127,9 +1127,10 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
             content: updated[lastMsgIndex].content + content
           };
         } else {
-          // Create new streaming message
+          // Create new streaming message - this ensures ALL agent outputs are displayed
+          console.log(`💬 Creating streaming message for agent: ${agent}`);
           updated.push({
-            id: `msg-${Date.now()}-${agent}`,
+            id: `msg-${Date.now()}-${agent}-${Math.random()}`,
             role: 'assistant' as const,
             content,
             timestamp: new Date(),
@@ -1144,6 +1145,44 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
   }, []);
   
   const appendStreamingMessage = useCallback((agent: string, token: string) => {
+    // CRITICAL FIX: Ensure agent exists in activeAgents before streaming
+    setActiveAgents(prev => {
+      const agentExists = prev.some(a => a.name === agent);
+      if (!agentExists) {
+        console.log(`🚀 STREAMING FIX: Auto-adding missing agent: ${agent}`);
+        const newAgent: LocalAgent = {
+          id: agent.toLowerCase().replace(/\s+/g, '_'),
+          name: agent,
+          role: 'Dynamically generated agent',
+          status: 'thinking',
+          progress: 25,
+          icon: Bot,
+          color: 'text-blue-500',
+          tasks: 0,
+          successRate: 95,
+          currentTask: 'Generating content...',
+          toolsUsed: [],
+          lastUpdate: new Date().toLocaleTimeString()
+        };
+        
+        // Also update session agents map
+        if (sessionId) {
+          setSessionAgentsMap(mapPrev => {
+            const updated = new Map(mapPrev);
+            const sessionAgents = updated.get(sessionId) || [];
+            if (!sessionAgents.some(a => a.name === agent)) {
+              updated.set(sessionId, [...sessionAgents, newAgent]);
+              sessionStorage.setItem(`sessionAgents_${sessionId}`, JSON.stringify([...sessionAgents, newAgent]));
+            }
+            return updated;
+          });
+        }
+        
+        return [...prev, newAgent];
+      }
+      return prev;
+    });
+    
     // Buffer tokens
     const current = streamingBufferRef.current.get(agent) || '';
     streamingBufferRef.current.set(agent, current + token);
@@ -1166,7 +1205,7 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
         }, 16 - timeSinceLastUpdate);
       }
     }
-  }, [flushStreamingBuffer]);
+  }, [flushStreamingBuffer, sessionId]);
 
   const finalizeStreamingMessage = useCallback((agent: string) => {
     setMessages(prev => {
@@ -1231,7 +1270,7 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
     if (!sessionId && window.location.pathname === '/swarm') {
       console.log('At /swarm root - creating new session...');
       isNewSession = true;
-      activeSessionId = null; // Force new session creation
+      activeSessionId = undefined; // Force new session creation
     } else if (!activeSessionId) {
       console.log('No active session - creating new session...');
       isNewSession = true;

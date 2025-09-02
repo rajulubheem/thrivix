@@ -337,3 +337,132 @@ async def execute_event_swarm_test(
     except Exception as e:
         logger.error(f"[TEST] Event swarm execution failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# 🚨 EMERGENCY STOP CONTROLS 🚨
+
+class StopRequest(BaseModel):
+    execution_id: str
+    force: bool = True
+
+
+@router.post("/stop")
+async def stop_execution(
+    request: StopRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """🚨 EMERGENCY STOP - Force stop a specific execution"""
+    try:
+        logger.warning(f"🚨 EMERGENCY STOP requested for execution {request.execution_id} by user {current_user.get('id')}")
+        
+        # Stop the specific execution
+        success = event_swarm_service.stop_execution(request.execution_id)
+        
+        # Emit stop event
+        await global_event_bus.emit("execution.emergency_stop", {
+            "execution_id": request.execution_id,
+            "stopped_by": current_user.get("id"),
+            "force": request.force,
+            "timestamp": datetime.utcnow().isoformat()
+        }, source="emergency_stop")
+        
+        return {
+            "execution_id": request.execution_id,
+            "status": "stopped",
+            "success": success,
+            "message": "🛑 Execution stopped successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to stop execution {request.execution_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop execution: {str(e)}")
+
+
+@router.post("/emergency-stop-all")
+async def emergency_stop_all(
+    current_user: dict = Depends(get_current_user)
+):
+    """🚨 NUCLEAR OPTION - Force stop ALL running executions"""
+    try:
+        logger.error(f"🚨🚨🚨 EMERGENCY STOP ALL requested by user {current_user.get('id')} 🚨🚨🚨")
+        
+        # Get all active executions and stop them
+        stopped_count = 0
+        if hasattr(event_swarm_service, 'active_executions'):
+            executions_to_stop = list(event_swarm_service.active_executions.keys())
+            
+            for execution_id in executions_to_stop:
+                try:
+                    event_swarm_service.stop_execution(execution_id)
+                    stopped_count += 1
+                    logger.warning(f"🛑 Force stopped execution: {execution_id}")
+                except Exception as e:
+                    logger.error(f"Failed to stop execution {execution_id}: {e}")
+        
+        # Emit emergency stop all event
+        await global_event_bus.emit("execution.emergency_stop_all", {
+            "stopped_count": stopped_count,
+            "stopped_by": current_user.get("id"),
+            "timestamp": datetime.utcnow().isoformat()
+        }, source="emergency_stop_all")
+        
+        return {
+            "status": "emergency_stopped",
+            "stopped_executions": stopped_count,
+            "message": f"🚨 Emergency stop completed - {stopped_count} executions stopped"
+        }
+        
+    except Exception as e:
+        logger.error(f"Emergency stop all failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Emergency stop failed: {str(e)}")
+
+
+@router.get("/status/{execution_id}")
+async def get_execution_status(
+    execution_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get detailed status of a specific execution"""
+    try:
+        if hasattr(event_swarm_service, 'get_execution_status'):
+            status = event_swarm_service.get_execution_status(execution_id)
+        else:
+            # Fallback status check
+            status = {
+                "execution_id": execution_id,
+                "status": "unknown", 
+                "message": "Status monitoring not available"
+            }
+            
+        return status
+        
+    except Exception as e:
+        logger.error(f"Failed to get status for execution {execution_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
+
+
+@router.get("/list-active")
+async def list_active_executions(
+    current_user: dict = Depends(get_current_user)
+):
+    """List all currently active executions"""
+    try:
+        active_executions = []
+        
+        if hasattr(event_swarm_service, 'active_executions'):
+            for execution_id, details in event_swarm_service.active_executions.items():
+                active_executions.append({
+                    "execution_id": execution_id,
+                    "status": details.get("status", "unknown"),
+                    "start_time": details.get("start_time"),
+                    "user_id": details.get("user_id")
+                })
+        
+        return {
+            "active_executions": active_executions,
+            "total_count": len(active_executions)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list active executions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list executions: {str(e)}")

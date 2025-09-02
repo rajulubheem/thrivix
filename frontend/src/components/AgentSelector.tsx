@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Agent, AgentTemplate } from '../../types/swarm';
+import { Agent, AgentTemplate } from '../types/swarm';
 import './AgentSelector.css';
 
 interface AgentSelectorProps {

@@ -5,6 +5,8 @@ import uuid
 import logging
 from typing import Dict, List, Optional
 from app.services.event_aware_agent import EventAwareAgent, AgentCapabilities
+from app.services.human_loop_agent import HumanLoopAgent
+from app.services.agent_memory_store import get_memory_store
 from app.services.event_bus import event_bus, SwarmEvent
 
 logger = logging.getLogger(__name__)
@@ -12,62 +14,12 @@ logger = logging.getLogger(__name__)
 class DynamicAgentFactory:
     """Create agents on-the-fly based on needs"""
     
-    def __init__(self):
-        self.agent_templates = {
-            "analyzer": {
-                "system_prompt": """You are an intelligent task analyzer in a multi-agent swarm system. Your role is to understand tasks and provide comprehensive analysis.
-
-Your responsibilities:
-1. Analyze the given task thoroughly
-2. Provide clear, actionable insights
-3. Make intelligent decisions about next steps
-4. Complete tasks that only require analysis
-
-IMPORTANT: You have AI-powered decision making. After completing your analysis, the system will intelligently determine what agents (if any) are needed next based on your output. You don't need to explicitly request other agents - just focus on providing the best possible analysis.
-
-For simple tasks that only require analysis, provide a complete response and indicate the task is finished.
-For complex tasks, provide your analysis and let the system determine what specialist work is needed.""",
-                "tools": [],
-                "skills": ["analysis", "planning", "task_breakdown", "decision_making"],
-                "listens_to": ["task.started", "analysis.needed"],
-                "emits": ["task.analyzed", "task.complete", "agent.needed"]
-            },
-            "researcher": {
-                "system_prompt": "You are a research specialist. Find information, analyze sources, and provide comprehensive research.",
-                "tools": ["web_search", "arxiv", "wikipedia"],
-                "skills": ["research", "information_gathering", "fact_checking"],
-                "listens_to": ["research.needed", "agent.needed", "clarification.needed"],
-                "emits": ["research.complete", "agent.needed"]
-            },
-            "developer": {
-                "system_prompt": "You are a senior developer. Write clean, efficient code and solve technical problems.",
-                "tools": ["code_interpreter", "file_editor"],
-                "skills": ["coding", "debugging", "architecture", "testing"],
-                "listens_to": ["code.needed", "bug.found", "agent.needed"],
-                "emits": ["code.complete", "test.needed", "review.needed"]
-            },
-            "writer": {
-                "system_prompt": "You are a content writer. Create clear, engaging content based on research and requirements.",
-                "tools": ["file_editor"],
-                "skills": ["writing", "editing", "documentation"],
-                "listens_to": ["content.needed", "documentation.needed", "agent.needed"],
-                "emits": ["content.complete", "review.needed"]
-            },
-            "reviewer": {
-                "system_prompt": "You review and provide feedback on work. Ensure quality and suggest improvements.",
-                "tools": [],
-                "skills": ["review", "quality_assurance", "feedback"],
-                "listens_to": ["review.needed", "agent.needed"],
-                "emits": ["review.complete", "revision.needed"]
-            },
-            "coordinator": {
-                "system_prompt": "You coordinate between agents and ensure smooth task execution.",
-                "tools": [],
-                "skills": ["coordination", "orchestration", "planning"],
-                "listens_to": ["coordination.needed", "conflict.detected"],
-                "emits": ["agent.needed", "handoff.requested", "task.complete"]
-            }
-        }
+    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None):
+        self.human_loop_enabled = human_loop_enabled
+        self.execution_id = execution_id
+        self.memory_store = get_memory_store() if human_loop_enabled else None
+        # No more hardcoded agent templates - everything is AI-driven now
+        self.ai_role_analyzer = None  # Will be initialized when needed
         
         self.active_agents: Dict[str, EventAwareAgent] = {}
         self.spawned_count = 0
@@ -93,10 +45,13 @@ For complex tasks, provide your analysis and let the system determine what speci
         for agent in self.active_agents.values():
             if agent.role == role and agent.state == "idle":
                 logger.info(f"Found idle agent: {agent.name}")
-                # Trigger the agent with the context
+                # Trigger the agent with the context, including session_id if available
+                activation_data = {"task": context, "role": role, "reason": reason}
+                if "session_id" in event.data:
+                    activation_data["session_id"] = event.data["session_id"]
                 await agent.activate(SwarmEvent(
                     type="agent.needed",
-                    data={"task": context, "role": role, "reason": reason},
+                    data=activation_data,
                     source=event.source
                 ))
                 return
@@ -104,10 +59,13 @@ For complex tasks, provide your analysis and let the system determine what speci
         # Spawn new agent
         agent = await self.spawn_agent(role, {"context": context})
         if agent:
-            # Activate the new agent with the context as task
+            # Activate the new agent with the context as task, including session_id if available
+            activation_data = {"task": context, "role": role, "reason": reason}
+            if "session_id" in event.data:
+                activation_data["session_id"] = event.data["session_id"]
             await agent.activate(SwarmEvent(
                 type="agent.needed",
-                data={"task": context, "role": role, "reason": reason},
+                data=activation_data,
                 source=event.source
             ))
     
@@ -119,19 +77,33 @@ For complex tasks, provide your analysis and let the system determine what speci
             await agent.activate(event)
     
     async def spawn_agent(self, role: str, context: dict = None) -> Optional[EventAwareAgent]:
-        """Create a new agent with specific role"""
-        template = self.agent_templates.get(role)
+        """Create a new agent dynamically based on specific needs"""
+        
+        # Extract detailed requirements from context/role
+        requirements = context.get("context", "") if context else ""
+        reason = context.get("reason", "") if context else ""
+        
+        # Ensure role is a string (extract from dict if needed)
+        if isinstance(role, dict):
+            role_str = role.get("role", "general_specialist")
+            if not requirements:
+                requirements = role.get("reason", "")
+        else:
+            role_str = str(role)
+        
+        # Generate dynamic agent template based on specific needs
+        template = await self._create_dynamic_template(role_str, requirements, reason)
         
         if not template:
-            logger.warning(f"No template for role: {role}")
-            # Create generic agent
-            template = self._create_generic_template(role)
+            logger.warning(f"Failed to create dynamic template for: {role}")
+            return None
         
-        # Create unique name
-        agent_name = f"{role}_{self.spawned_count:03d}"
+        # Create unique name based on specialty
+        specialty_name = template.get("specialty_name", role)
+        agent_name = f"{specialty_name}_{self.spawned_count:03d}"
         self.spawned_count += 1
         
-        # Create capabilities
+        # Create capabilities dynamically
         capabilities = AgentCapabilities(
             skills=template.get("skills", []),
             tools=template.get("tools", []),
@@ -139,13 +111,25 @@ For complex tasks, provide your analysis and let the system determine what speci
             emits=template.get("emits", [])
         )
         
-        # Create agent
-        agent = EventAwareAgent(
-            name=agent_name,
-            role=role,
-            system_prompt=template["system_prompt"],
-            capabilities=capabilities
-        )
+        # Create agent - use HumanLoopAgent if human loop is enabled
+        if self.human_loop_enabled and self.execution_id:
+            agent = HumanLoopAgent(
+                name=agent_name,
+                role=role,
+                system_prompt=template["system_prompt"],
+                capabilities=capabilities,
+                execution_id=self.execution_id,
+                memory_store=self.memory_store
+            )
+            logger.info(f"🤖✨ Created HumanLoopAgent: {agent_name} for execution {self.execution_id}")
+        else:
+            agent = EventAwareAgent(
+                name=agent_name,
+                role=role,
+                system_prompt=template["system_prompt"],
+                capabilities=capabilities
+            )
+            logger.info(f"🔧✨ Created EventAwareAgent: {agent_name} (human_loop_enabled={self.human_loop_enabled}, execution_id={self.execution_id})")
         
         # Add to active agents
         self.active_agents[agent_name] = agent
@@ -167,53 +151,243 @@ For complex tasks, provide your analysis and let the system determine what speci
         logger.info(f"✨ Spawned agent: {agent_name} ({role})")
         return agent
     
-    async def spawn_specialist(self, specialty: str) -> Optional[EventAwareAgent]:
-        """Create a specialist agent for specific need"""
-        # Determine role based on specialty
-        role_mapping = {
-            "python": "developer",
-            "javascript": "developer",
-            "research": "researcher",
-            "writing": "writer",
-            "analysis": "analyzer",
-            "review": "reviewer"
-        }
-        
-        role = role_mapping.get(specialty.lower(), "coordinator")
-        return await self.spawn_agent(role, {"specialty": specialty})
+    async def _create_dynamic_template(self, role: str, requirements: str, reason: str) -> dict:
+        """Use AI to create a fully dynamic agent template based on specific needs"""
+        try:
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
+            import os
+            from dotenv import load_dotenv
+            
+            load_dotenv()
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+            if not api_key:
+                logger.warning("No OpenAI API key - using minimal fallback")
+                return self._minimal_fallback_template(role, requirements)
+            
+            # Create AI template generator with enhanced capabilities
+            model = OpenAIModel(
+                client_args={"api_key": api_key},
+                model_id="gpt-4o-mini", 
+                params={"max_tokens": 600, "temperature": 0.2}
+            )
+            
+            template_generator = Agent(
+                name="dynamic_template_generator",
+                system_prompt="""You are an advanced AI agent template generator. Create highly specialized agent configurations that are perfectly tailored to specific tasks.
+
+Your mission: Generate agents that are EXPERTS in their specific domain, not generic workers.
+
+Given a role description, requirements, and reason, create a JSON template with:
+
+{
+  "specialty_name": "highly_specific_agent_name",
+  "system_prompt": "Detailed, role-specific system prompt that makes this agent an expert",
+  "skills": ["domain_specific_skill1", "domain_specific_skill2", ...],
+  "tools": ["relevant_tool1", "relevant_tool2", ...],
+  "listens_to": ["specific_event_types"],
+  "emits": ["specific_output_events"]
+}
+
+Key principles:
+- specialty_name should be descriptive and specific (e.g., "quantum_physics_researcher", "react_component_architect")
+- system_prompt should establish expertise and specific behavioral patterns
+- skills should reflect deep domain knowledge
+- tools should match the specific work needed
+- events should be meaningful to the agent's workflow
+
+Available tools: web_search, code_interpreter, file_editor, data_analysis, arxiv, wikipedia
+
+Make this agent THE expert for this exact use case. Think like you're hiring a specialist consultant.
+
+Return ONLY valid JSON.""",
+                model=model
+            )
+            
+            enhanced_prompt = f"""Create an expert specialist agent template for:
+
+Role: {role}
+Requirements: {requirements}
+Reason: {reason}
+
+This agent should be THE definitive expert for this specific need. Design it as if you're creating a world-class specialist consultant who excels at exactly this type of work.
+
+Focus on:
+- Deep specialization over generalization
+- Specific expertise that matches the exact need
+- Behavioral patterns that optimize for this use case
+- Tools and skills perfectly aligned with the work
+
+Generate the template now."""
+
+            # Use stream_async to get the result
+            result_content = ""
+            async for event in template_generator.stream_async(enhanced_prompt):
+                if "data" in event:
+                    result_content += event["data"]
+                elif "result" in event:
+                    result = event["result"]
+                    if hasattr(result, 'content'):
+                        result_content = result.content
+                    else:
+                        result_content = str(result)
+                    break
+            
+            # Use the accumulated content from streaming
+            response = result_content.strip()
+            
+            # Parse JSON response with error resilience
+            import json
+            try:
+                template = json.loads(response)
+                specialty = template.get('specialty_name', role)
+                logger.info(f"✅ Generated expert template for {specialty}")
+                return template
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse template JSON: {e}")
+                logger.error(f"Raw response: {response[:200]}...")
+                return self._minimal_fallback_template(role, requirements)
+                
+        except Exception as e:
+            logger.error(f"Dynamic template generation failed: {e}")
+            return self._minimal_fallback_template(role, requirements)
     
-    def _create_generic_template(self, role: str) -> dict:
-        """Create a generic agent template"""
+    def _minimal_fallback_template(self, role: str, requirements: str) -> dict:
+        """Minimal fallback template when AI generation fails"""
+        # Ensure role is a string
+        role_str = str(role) if not isinstance(role, str) else role
+        requirements_str = str(requirements) if not isinstance(requirements, str) else requirements
+        
         return {
-            "system_prompt": f"You are a {role} specialist. Help with tasks related to {role}.",
+            "specialty_name": role_str.replace(" ", "_").lower(),
+            "system_prompt": f"You are a {role_str} specialist. {requirements_str}. Complete your assigned task professionally and efficiently.",
+            "skills": [role_str.lower().replace(" ", "_"), "problem_solving"],
             "tools": [],
-            "skills": [role],
-            "listens_to": [f"{role}.needed", "agent.needed"],
-            "emits": [f"{role}.complete"]
+            "listens_to": ["agent.needed"],
+            "emits": ["task.complete"]
         }
     
-    async def analyze_task_needs(self, task: str) -> List[str]:
-        """Analyze task to determine which agents are needed"""
-        # For now, simple keyword-based analysis
-        # In production, this would use LLM to analyze
-        
-        needed_roles = ["analyzer"]  # Always start with analyzer
-        
-        task_lower = task.lower()
-        
-        if any(word in task_lower for word in ["research", "find", "search", "information"]):
-            needed_roles.append("researcher")
-        
-        if any(word in task_lower for word in ["code", "program", "implement", "develop", "app", "script"]):
-            needed_roles.append("developer")
-        
-        if any(word in task_lower for word in ["write", "content", "article", "document"]):
-            needed_roles.append("writer")
-        
-        if any(word in task_lower for word in ["review", "check", "quality", "feedback"]):
-            needed_roles.append("reviewer")
-        
-        return needed_roles
+    async def spawn_specialist(self, specialty: str) -> Optional[EventAwareAgent]:
+        """Create a specialist agent for specific need using AI analysis"""
+        # Use the specialty directly as a role description for AI analysis
+        return await self.spawn_agent(specialty, {"specialty": specialty, "context": f"Specialist needed for: {specialty}"})
+    
+    
+    async def analyze_task_needs(self, task: str) -> List[dict]:
+        """Use AI to analyze task and determine what specialized agents are needed"""
+        try:
+            # Initialize AI role analyzer if needed
+            if not self.ai_role_analyzer:
+                await self._initialize_ai_role_analyzer()
+            
+            if not self.ai_role_analyzer:
+                return [{"role": "general_task_agent", "reason": "AI analysis unavailable"}]
+            
+            # Analyze task with AI
+            analysis_prompt = f"""Analyze this task and determine what specialized agents are needed: "{task}"
+
+Respond with a JSON array of agent requirements, each with:
+{{"role": "specific_role_description", "reason": "why this agent is needed", "priority": "high/medium/low"}}
+
+Focus on:
+- What SPECIFIC expertise is needed (not generic roles)
+- Break complex tasks into specialized capabilities
+- Consider the full workflow from start to finish
+- Be specific about agent purposes
+
+Examples:
+- Instead of "researcher" → "academic literature researcher for satellite technology"
+- Instead of "writer" → "technical research paper writer with aerospace expertise"  
+- Instead of "developer" → "Python simulation developer for orbital mechanics"
+
+Return ONLY the JSON array, no other text."""
+
+            # Use stream_async to get the analysis result
+            analysis_content = ""
+            try:
+                async for event in self.ai_role_analyzer.stream_async(analysis_prompt):
+                    if "data" in event:
+                        analysis_content += event["data"]
+                    elif "result" in event:
+                        result = event["result"]
+                        if hasattr(result, 'content'):
+                            analysis_content = result.content
+                        else:
+                            analysis_content = str(result)
+                        break
+                        
+                if not analysis_content.strip():
+                    logger.error("AI role analyzer returned empty content")
+                    return [{"role": "task_specialist", "reason": f"Complete task: {task}", "priority": "high"}]
+                    
+            except Exception as stream_error:
+                logger.error(f"Error during AI role analysis streaming: {stream_error}")
+                return [{"role": "task_specialist", "reason": f"Complete task: {task}", "priority": "high"}]
+            
+            response = analysis_content.strip()
+            logger.info(f"AI role analyzer response: {response[:200]}...")
+            
+            # Parse AI response
+            import json
+            try:
+                agent_needs = json.loads(response)
+                logger.info(f"✅ AI identified {len(agent_needs)} specialized agents needed")
+                return agent_needs
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse AI task analysis: {e}")
+                return [{"role": "general_analyst", "reason": "Parse AI analysis of task", "priority": "high"}]
+                
+        except Exception as e:
+            logger.error(f"AI task analysis failed: {e}")
+            return [{"role": "fallback_agent", "reason": f"Handle task: {task}", "priority": "high"}]
+    
+    async def _initialize_ai_role_analyzer(self):
+        """Initialize the AI role analyzer"""
+        try:
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
+            import os
+            from dotenv import load_dotenv
+            
+            load_dotenv()
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+            if not api_key:
+                logger.warning("No OpenAI API key - AI role analysis disabled")
+                return
+            
+            model = OpenAIModel(
+                client_args={"api_key": api_key},
+                model_id="gpt-4o-mini",
+                params={"max_tokens": 500, "temperature": 0.1}
+            )
+            
+            self.ai_role_analyzer = Agent(
+                name="ai_role_analyzer",
+                system_prompt="""You are an intelligent task analysis specialist that determines what specialized AI agents are needed for complex tasks.
+
+Your job is to:
+1. Break down tasks into specific expertise areas
+2. Identify what specialized capabilities are needed
+3. Suggest agent roles that are SPECIFIC, not generic
+4. Consider the full workflow and all steps needed
+
+Always be specific about agent roles:
+- "satellite orbital mechanics specialist" not "researcher"  
+- "Python web application developer" not "developer"
+- "academic paper formatting expert" not "writer"
+- "aerospace quality assurance tester" not "reviewer"
+
+Respond with clear JSON showing exactly what agents are needed and why.""",
+                model=model
+            )
+            
+            logger.info("✅ AI role analyzer initialized")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize AI role analyzer: {e}")
+            self.ai_role_analyzer = None
     
     async def _cleanup_agents(self, event):
         """Clean up agents when task is complete"""

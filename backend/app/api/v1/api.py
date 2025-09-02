@@ -19,6 +19,13 @@ api_router.include_router(swarm.router, prefix="/swarm", tags=["swarm"])
 if EVENT_ENDPOINTS_AVAILABLE:
     api_router.include_router(event_swarm.router, prefix="/event-swarm", tags=["event-swarm"])
     api_router.include_router(event_test.router, prefix="/event-test", tags=["event-test"])
+
+# Include human-in-the-loop endpoints
+try:
+    from app.api.v1.endpoints import human_loop
+    api_router.include_router(human_loop.router, prefix="/event-swarm", tags=["human-loop"])
+except ImportError as e:
+    print(f"Warning: Could not import human-loop endpoints: {e}")
 api_router.include_router(swarm_dag.router, prefix="/swarm-dag", tags=["swarm-dag"])
 api_router.include_router(sse.router, prefix="/sse", tags=["sse"])
 api_router.include_router(streaming.router, tags=["streaming"])

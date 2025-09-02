@@ -224,10 +224,14 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
         self.event_bus.clear_history()
         
         try:
-            # Emit task started event with streaming callback
+            # Calculate session_id early for consistency
+            session_id = getattr(request, 'session_id', None) or execution_id
+            
+            # Emit task started event with streaming callback and session_id
             await self.event_bus.emit("task.started", {
                 "task": request.task,
                 "execution_id": execution_id,
+                "session_id": session_id,
                 "user_id": user_id,
                 "streaming_callback": callback_handler  # Pass callback to agents
             }, source="system")
@@ -248,7 +252,6 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             # Execute with event-driven coordination
             if request.execution_mode == "event_driven":
                 # Use TRUE event-driven execution with dynamic spawning
-                session_id = getattr(request, 'session_id', None) or execution_id
                 return await self.execute_true_event_driven(
                     request.task, 
                     execution_id,
@@ -401,8 +404,12 @@ EVENT-DRIVEN COORDINATION:
         start_time = time.time()
         # No artificial limits - let user control via UI
         
-        # Initialize factory for this execution - use new instance
-        factory = DynamicAgentFactory()
+        # Use session_id as execution_id to match frontend
+        actual_execution_id = session_id if session_id else execution_id
+        logger.info(f"🔗 Using execution_id: {actual_execution_id} (session_id: {session_id})")
+        
+        # Initialize factory for this execution - use new instance with human loop enabled
+        factory = DynamicAgentFactory(human_loop_enabled=True, execution_id=actual_execution_id)
         
         # Set up event streaming
         async def stream_event(event: SwarmEvent):
@@ -428,10 +435,10 @@ EVENT-DRIVEN COORDINATION:
         # Register event streamer for all events
         event_bus.on("*", lambda e: asyncio.create_task(stream_event(e)))
         
-        # Emit task start event
+        # Emit task start event with session_id for human-loop compatibility
         await event_bus.emit(
             "task.started",
-            {"task": task, "execution_id": execution_id},
+            {"task": task, "execution_id": execution_id, "session_id": session_id},
             source="system"
         )
         
@@ -451,7 +458,7 @@ EVENT-DRIVEN COORDINATION:
                 logger.info(f"Activating agent {agent.name} with task")
                 await agent.activate(SwarmEvent(
                     type="task.started",
-                    data={"task": task, "message": task},
+                    data={"task": task, "message": task, "session_id": session_id, "execution_id": execution_id},
                     source="system"
                 ))
                 logger.info(f"Agent {agent.name} activated")
@@ -538,14 +545,18 @@ EVENT-DRIVEN COORDINATION:
                     task_completed = True
                     break
                     
-                # Also check if analyzer says task is complete
+                # Check if analyzer explicitly says the ENTIRE SWARM TASK is complete (not just analysis)
                 elif event.type == "agent.completed" and event.source.startswith("analyzer"):
                     output = event.data.get("output", "")
-                    if "complete" in output.lower() or "finished" in output.lower() or "done" in output.lower():
-                        logger.info("✅ Task completion detected from analyzer output")
+                    # Only consider it complete if analyzer explicitly says entire task/project is done
+                    # AND there are no pending agent spawn requests
+                    if ("entire task complete" in output.lower() or 
+                        "project complete" in output.lower() or
+                        "swarm task complete" in output.lower()):
+                        logger.info("✅ Entire task completion detected from analyzer output")
                         await event_bus.emit("task.complete", {
                             "agent": event.source,
-                            "reason": "analyzer_completion_detected",
+                            "reason": "analyzer_full_completion_detected",
                             "final_output": output
                         }, source="system")
                         task_completed = True
@@ -560,20 +571,25 @@ EVENT-DRIVEN COORDINATION:
                 all_idle = all(agent.state == "idle" for agent in active_agents.values())
                 
                 if all_idle and timeout_counter > 10:  # After 5 seconds of idle
-                    # Check if we have any completed work
+                    # Check if we have any completed work AND no pending agent spawn requests
                     completed_events = [
                         e for e in recent_events 
                         if e.type == "agent.completed" and len(e.data.get("output", "")) > 50
                     ]
                     
-                    if len(completed_events) > 0:
-                        logger.info("All agents idle with completed work - marking task complete")
+                    # Check for pending agent spawn requests
+                    spawn_requests = [e for e in recent_events if e.type == "agent.needed"]
+                    
+                    if len(completed_events) > 0 and len(spawn_requests) == 0:
+                        logger.info("All agents idle with completed work and no pending spawn requests - marking task complete")
                         await event_bus.emit("task.complete", {
-                            "reason": "all_agents_idle_with_work",
+                            "reason": "all_agents_idle_with_work_no_pending_requests",
                             "completed_agents": len(completed_events)
                         }, source="system")
                         task_completed = True
                         break
+                    elif len(spawn_requests) > 0:
+                        logger.info(f"All agents idle but have {len(spawn_requests)} pending spawn requests - continuing execution")
                     elif timeout_counter > 40:  # After 20 seconds
                         logger.warning("Agents idle too long without substantial work")
                         break

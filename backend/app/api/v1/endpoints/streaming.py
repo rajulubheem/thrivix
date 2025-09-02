@@ -129,6 +129,15 @@ class InMemorySessionStorage(SessionStorage):
             end_index = min(offset + limit, total_chunks)
             result = chunks[offset:end_index]
 
+            # CRITICAL FIX: Sort delta chunks by sequence number if present
+            # This fixes the text formatting issue where tokens arrive out of order
+            def sort_key(chunk):
+                if chunk.get("type") == "delta" and "sequence" in chunk:
+                    return (chunk["sequence"], chunk.get("timestamp", ""))
+                return (0, chunk.get("timestamp", ""))
+            
+            result.sort(key=sort_key)
+
             logger.info(f"get_chunks: session={session_id[:8]}, offset={offset}, limit={limit}, total={total_chunks}, returning={len(result)}")
 
             # Double-check result size
@@ -308,6 +317,10 @@ async def start_streaming(
     }
     strands_service.save_context(session_id, initial_context)
 
+    # Temporary buffer for ordering chunks per agent
+    agent_chunk_buffers = {}
+    agent_expected_sequence = {}
+    
     # Callback handler for streaming
     async def stream_callback(**kwargs):
         """Process streaming events"""
@@ -315,6 +328,10 @@ async def start_streaming(
             event_type = kwargs.get("type", "unknown")
             agent = kwargs.get("agent")
             data = kwargs.get("data", {})
+            
+            # Only log important events, not every token
+            if event_type not in ["text_generation"]:
+                logger.info(f"🔄 STREAM CALLBACK: type={event_type}, agent={agent}")
 
             event = None
 
@@ -333,25 +350,62 @@ async def start_streaming(
 
             elif event_type == "text_generation" and agent:
                 chunk = data.get("chunk", "") or data.get("text", "")
-                if chunk:
-                    # Send chunks immediately without any batching
-                    event = {
+                sequence = data.get("sequence")
+                
+                if chunk and sequence:
+                    # CRITICAL FIX: Buffer chunks to ensure proper ordering
+                    if agent not in agent_chunk_buffers:
+                        agent_chunk_buffers[agent] = {}
+                        agent_expected_sequence[agent] = 1
+                    
+                    # Store chunk in buffer with sequence number
+                    chunk_event = {
                         "type": "delta",
+                        "agent": agent,
+                        "content": chunk,
+                        "sequence": sequence,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    
+                    if data.get("is_tool_result"):
+                        chunk_event["is_tool_result"] = True
+                    
+                    agent_chunk_buffers[agent][sequence] = chunk_event
+                    
+                    # Flush consecutive chunks in order
+                    expected_seq = agent_expected_sequence[agent]
+                    while expected_seq in agent_chunk_buffers[agent]:
+                        ordered_event = agent_chunk_buffers[agent].pop(expected_seq)
+                        await storage.append_chunk(session_id, ordered_event)
+                        expected_seq += 1
+                    
+                    agent_expected_sequence[agent] = expected_seq
+                    return  # Return immediately to prevent any delay
+                
+                elif chunk:
+                    # Fallback for chunks without sequence numbers
+                    event = {
+                        "type": "delta", 
                         "agent": agent,
                         "content": chunk,
                         "timestamp": datetime.utcnow().isoformat()
                     }
-
-                    # Pass through is_tool_result flag if present
                     if data.get("is_tool_result"):
                         event["is_tool_result"] = True
-                    
-                    # Store immediately for real-time streaming
                     await storage.append_chunk(session_id, event)
-                    return  # Return immediately to prevent any delay
+                    return
 
             elif event_type == "agent_completed" and agent:
-                # No buffering - chunks are sent immediately
+                # Flush any remaining buffered chunks for this agent
+                if agent in agent_chunk_buffers:
+                    remaining_sequences = sorted(agent_chunk_buffers[agent].keys())
+                    for seq in remaining_sequences:
+                        remaining_event = agent_chunk_buffers[agent].pop(seq)
+                        await storage.append_chunk(session_id, remaining_event)
+                    # Clean up agent buffers
+                    del agent_chunk_buffers[agent]
+                    if agent in agent_expected_sequence:
+                        del agent_expected_sequence[agent]
 
                 session = await storage.get(session_id)
                 accumulated_text = ""
@@ -436,6 +490,16 @@ async def start_streaming(
             elif event_type == "tool_executed":
                 event = {
                     "type": "tool_executed",
+                    "agent": agent,
+                    "data": data,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+
+            elif event_type == "ai_decision":
+                # Handle AI decision events from event_aware_agent.py
+                logger.info(f"🧠 AI DECISION EVENT: agent={agent}, data={data}")
+                event = {
+                    "type": "ai_decision",
                     "agent": agent,
                     "data": data,
                     "timestamp": datetime.utcnow().isoformat()
@@ -698,6 +762,11 @@ async def start_streaming(
             if request.execution_mode == "event_driven":
                 # Event-driven execution in background task - EXECUTE HERE
                 logger.info("🎯 Executing event-driven swarm in background task")
+                
+                # CRITICAL: Set session_id on request for human-loop compatibility
+                request.session_id = session_id
+                logger.info(f"🔗 Set session_id on request: {session_id}")
+                
                 result = await service.execute_swarm_async(
                     request=request,
                     user_id="stream_user",

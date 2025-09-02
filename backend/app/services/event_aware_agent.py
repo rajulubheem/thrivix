@@ -157,10 +157,19 @@ class EventAwareAgent:
             tools = []
             if "web_search" in self.capabilities.tools:
                 try:
-                    from app.tools.tavily_search import tavily_search
+                    from app.tools.tavily_search_tool import tavily_search
                     tools.append(tavily_search)
-                except:
-                    pass
+                    logger.info("✅ Added tavily_search tool")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not load tavily_search_tool: {e}")
+                    # Try alternative tool imports
+                    try:
+                        from app.tools.tavily_strands import tavily_search
+                        tools.append(tavily_search)
+                        logger.info("✅ Added tavily_search tool (alternative)")
+                    except Exception as e2:
+                        logger.warning(f"⚠️ Could not load alternative tavily tool: {e2}")
+                        pass
             
             # Create agent with NO callback handler - we'll use stream_async
             strands_agent = Agent(
@@ -297,80 +306,100 @@ class EventAwareAgent:
                 params={"max_tokens": 1000, "temperature": 0.3}
             )
             
-            decision_prompt = f"""You are coordinating a swarm of AI agents. Based on the output below from the '{self.role}' agent, decide what should happen next.
+            decision_prompt = f"""You are coordinating a dynamic swarm of specialized AI agents. Based on the output below from the '{self.role}' agent, decide what should happen next.
 
-Available agent roles:
-- researcher: Gathers information, searches web, analyzes data
-- developer: Writes code, implements solutions
-- writer: Creates content, documentation, articles
-- reviewer: Reviews and provides feedback
-- coordinator: Manages workflow between agents
+IMPORTANT: Do NOT use generic agent roles. Create SPECIFIC specialist roles based on what is actually needed.
+
+Examples of GOOD specific roles:
+- "satellite orbital dynamics researcher"
+- "aerospace technical paper writer" 
+- "small satellite systems design engineer"
+- "academic peer review specialist for space technology"
+- "Python orbital mechanics simulation developer"
+
+Examples of BAD generic roles:
+- "researcher" 
+- "writer"
+- "developer"
+- "reviewer"
 
 Current output from {self.role} agent:
 "{output}"
 
-Analyze this output and decide:
-1. Is the task complete? (yes/no)
-2. What additional work is needed? 
-3. Which agents should be spawned to continue?
+Critical Analysis Rules:
+1. If this is just an OUTLINE or PLAN, the task is NOT complete - actual work still needs to be done
+2. If this is a SUMMARY or ANALYSIS, specialists are needed to do the real work
+3. Be specific about what type of specialist is needed based on the domain and task
+4. Consider the full pipeline: research → creation → review → refinement
 
 Respond in this exact JSON format:
 {{
-    "task_complete": true/false,
-    "reasoning": "explanation of your decision",
+    "task_complete": false,
+    "reasoning": "explanation of why more work is needed or why task is complete",
     "needed_agents": [
         {{
-            "role": "agent_role",
-            "reason": "why this agent is needed",
+            "role": "highly_specific_specialist_description",
+            "reason": "exactly what this specialist will do",
             "priority": "high/medium/low"
         }}
     ],
-    "next_phase": "description of what happens next"
+    "next_phase": "what specific work happens next"
 }}"""
             
             decision_agent = Agent(
-                name="decision_maker",
-                system_prompt="You are a swarm coordination expert. Analyze agent outputs and make intelligent decisions about what should happen next.",
+                name="dynamic_swarm_coordinator",
+                system_prompt="""You are an advanced swarm coordination AI that creates highly specialized agents dynamically. Your mission is to analyze what work has been done and determine what specific expert specialists are needed next.
+
+Key principles:
+- Never use generic roles - always create specific specialist descriptions
+- If something is just outlined or planned, the actual work still needs specialists
+- Consider the full workflow: research → creation → review → improvement
+- Be ambitious about creating the right specialists for high-quality results
+- Think about domain expertise, not just task categories
+
+You excel at recognizing when preliminary work (analysis, outlines, plans) needs to transition into specialized execution by expert agents.""",
                 model=model
             )
             
-            # Get AI decision using the correct API - handle sync/async properly
+            # Use stream_async to get the AI decision
             try:
-                if hasattr(decision_agent, 'run'):
-                    try:
-                        decision_result = await decision_agent.run(decision_prompt)
-                    except TypeError:
-                        decision_result = decision_agent.run(decision_prompt)
-                elif hasattr(decision_agent, '__call__'):
-                    try:
-                        decision_result = await decision_agent(decision_prompt)
-                    except TypeError:
-                        decision_result = decision_agent(decision_prompt)
-                elif hasattr(decision_agent, 'invoke'):
-                    try:
-                        decision_result = await decision_agent.invoke(decision_prompt)
-                    except TypeError:
-                        decision_result = decision_agent.invoke(decision_prompt)
-                else:
-                    logger.warning(f"Unknown decision agent API, using fallback")
-                    await self._fallback_trigger_logic(output)
-                    return
+                decision_content = ""
+                async for event in decision_agent.stream_async(decision_prompt):
+                    if "data" in event:
+                        decision_content += event["data"]
+                    elif "result" in event:
+                        result = event["result"]
+                        if hasattr(result, 'content'):
+                            decision_content = result.content
+                        else:
+                            decision_content = str(result)
+                        break
                 
-                # Extract actual result from AgentResult object if needed
-                if hasattr(decision_result, 'content'):
-                    decision_result = decision_result.content
-                elif hasattr(decision_result, 'output'):
-                    decision_result = decision_result.output
-                elif hasattr(decision_result, 'text'):
-                    decision_result = decision_result.text
-                elif hasattr(decision_result, 'result'):
-                    decision_result = decision_result.result
+                decision_result = decision_content.strip()
                     
             except Exception as api_error:
                 logger.error(f"Decision agent API failed: {api_error}")
                 await self._fallback_trigger_logic(output)
                 return
             logger.info(f"AI decision for {self.name}: {str(decision_result)[:200]}...")
+            
+            # Send AI decision to frontend via streaming callback if available
+            streaming_callback = getattr(self, 'callback_handler', None)
+            if streaming_callback:
+                try:
+                    await streaming_callback(
+                        type="ai_decision",
+                        agent=self.name,
+                        data={
+                            "agent": self.name,
+                            "decision": str(decision_result),
+                            "reasoning": "AI decision made",
+                            "chunk": f"🧠 AI Decision: {str(decision_result)[:100]}..."
+                        }
+                    )
+                    logger.info(f"✅ Sent AI decision to frontend via callback for {self.name}")
+                except Exception as callback_error:
+                    logger.warning(f"Failed to send AI decision via callback: {callback_error}")
             
             # Parse the AI decision
             await self._process_ai_decision(str(decision_result), output)
@@ -386,14 +415,36 @@ Respond in this exact JSON format:
         import re
         
         try:
-            # Try to extract JSON from the response
-            json_match = re.search(r'\{.*\}', decision_text, re.DOTALL)
-            if json_match:
-                decision_json = json.loads(json_match.group())
-            else:
-                logger.warning("Could not extract JSON from AI decision, falling back")
-                await self._fallback_trigger_logic(original_output)
-                return
+            # Try multiple ways to extract JSON from the response
+            decision_json = None
+            
+            # Try direct JSON parsing first
+            try:
+                decision_json = json.loads(decision_text)
+                logger.info("Parsed JSON directly from AI decision")
+            except json.JSONDecodeError:
+                # Try to find JSON within the text using regex
+                json_patterns = [
+                    r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',  # Simple nested braces
+                    r'\{.*?"task_complete".*?\}',        # Find JSON containing task_complete
+                    r'```json\s*(\{.*?\})\s*```',        # JSON in code blocks
+                ]
+                
+                for pattern in json_patterns:
+                    json_match = re.search(pattern, decision_text, re.DOTALL)
+                    if json_match:
+                        json_text = json_match.group(1) if json_match.groups() else json_match.group()
+                        try:
+                            decision_json = json.loads(json_text)
+                            logger.info(f"Extracted JSON using pattern: {pattern[:20]}...")
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                
+                if not decision_json:
+                    logger.warning(f"Could not parse JSON from AI decision: {decision_text[:200]}...")
+                    await self._fallback_trigger_logic(original_output)
+                    return
             
             # Check if task is complete
             if decision_json.get("task_complete", False):
@@ -448,29 +499,106 @@ Respond in this exact JSON format:
             await self._fallback_trigger_logic(original_output)
     
     async def _fallback_trigger_logic(self, output: str):
-        """Simple fallback logic when AI decision making fails"""
-        # Simple completion check
-        if len(output) > 100 and ("complete" in output.lower() or "done" in output.lower() or "finished" in output.lower()):
+        """Dynamic fallback logic when AI decision making fails"""
+        output_lower = output.lower()
+        
+        # Only mark as complete if it's clearly a final result, not just analysis or outline
+        if (len(output) > 500 and 
+            any(phrase in output_lower for phrase in [
+                "task is now complete", "final result", "completed successfully",
+                "no further action needed", "deliverable is ready"
+            ]) and
+            not any(phrase in output_lower for phrase in [
+                "outline", "plan", "summary", "analysis", "next steps", "should be"
+            ])):
             await event_bus.emit(
                 "task.complete",
                 {
                     "agent": self.name,
                     "final_output": output,
-                    "reasoning": "Simple completion detection",
+                    "reasoning": "Fallback completion detection - appears to be final result",
                     "decision_maker": "fallback"
                 },
                 source=self.name
             )
             logger.info(f"Fallback logic: Task marked complete by {self.name}")
         else:
-            # If analyzer hasn't requested anything and has substantial output, mark as complete
-            if self.role == "analyzer" and len(output) > 200:
+            # For analysis tasks, create dynamic specialized agents based on context
+            if self.role in ["analyzer", "analyst"] and len(output) > 150:
+                logger.info(f"Fallback: Creating dynamic specialists for complex task")
+                
+                # Create context-aware specialist agents
+                needed_agents = []
+                
+                # Identify domain and task type to create specific specialists
+                if any(word in output_lower for word in ["satellite", "space", "orbital", "aerospace"]):
+                    if any(word in output_lower for word in ["research", "paper", "study", "publication"]):
+                        needed_agents.extend([
+                            {"role": "aerospace literature researcher", "reason": "Research satellite technology and space systems"},
+                            {"role": "technical research paper writer for space systems", "reason": "Write comprehensive research paper on satellite technology"},
+                            {"role": "aerospace peer review specialist", "reason": "Review and validate technical accuracy"}
+                        ])
+                    elif any(word in output_lower for word in ["design", "develop", "build", "system"]):
+                        needed_agents.extend([
+                            {"role": "satellite systems design engineer", "reason": "Design and specify satellite components"},
+                            {"role": "orbital mechanics simulation specialist", "reason": "Model satellite trajectories and dynamics"}
+                        ])
+                
+                # General content creation tasks
+                elif any(word in output_lower for word in ["write", "document", "article", "content", "paper", "report"]):
+                    content_type = "technical documentation"
+                    if "blog" in output_lower: content_type = "blog content"
+                    elif "academic" in output_lower: content_type = "academic paper"
+                    elif "tutorial" in output_lower: content_type = "tutorial content"
+                    
+                    needed_agents.append({
+                        "role": f"{content_type} specialist writer",
+                        "reason": f"Create high-quality {content_type} based on requirements"
+                    })
+                
+                # Software development tasks
+                elif any(word in output_lower for word in ["code", "program", "app", "software", "implement"]):
+                    tech_stack = "general programming"
+                    if "python" in output_lower: tech_stack = "Python development"
+                    elif "javascript" in output_lower or "react" in output_lower: tech_stack = "JavaScript/React development"
+                    elif "web" in output_lower: tech_stack = "web application development"
+                    
+                    needed_agents.append({
+                        "role": f"{tech_stack} specialist",
+                        "reason": f"Implement solution using {tech_stack} expertise"
+                    })
+                
+                # If no specific context, create a general task completion specialist
+                if not needed_agents:
+                    task_type = self.current_task or "assigned task"
+                    needed_agents.append({
+                        "role": f"task completion specialist for {task_type[:50]}",
+                        "reason": "Complete the specific requirements of this task"
+                    })
+                
+                # Emit agent spawn requests
+                for agent_spec in needed_agents:
+                    await event_bus.emit(
+                        "agent.needed",
+                        {
+                            "role": agent_spec["role"],
+                            "reason": agent_spec["reason"],
+                            "priority": "high",
+                            "context": output[:500],
+                            "decision_maker": "fallback_dynamic"
+                        },
+                        source=self.name
+                    )
+                    logger.info(f"Fallback spawned dynamic agent: {agent_spec['role']}")
+            
+            else:
+                # For non-analyzer agents or short outputs, just mark complete
                 await event_bus.emit(
-                    "task.complete",
+                    "task.complete", 
                     {
                         "agent": self.name,
                         "final_output": output,
-                        "reasoning": "Analyzer completed substantial analysis",
+                        "reasoning": "Simple task completed by specialist agent",
                         "decision_maker": "fallback"
                     },
                     source=self.name

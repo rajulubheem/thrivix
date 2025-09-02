@@ -12,7 +12,8 @@ import {
   Shield,
   Code,
   Layers,
-  Globe
+  Globe,
+  Activity
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -25,11 +26,11 @@ import { ModernLayout } from '../components/layout/ModernLayout';
 const features = [
   {
     icon: Users,
-    title: 'Multi-Agent Collaboration',
-    description: 'Deploy specialized agents that work together to solve complex problems',
-    link: '/swarm',
+    title: 'Event-Driven Agent Swarm',
+    description: 'Truly dynamic AI agents that spawn specialists based on task needs with real-time transparency',
+    link: '/event-swarm',
     color: 'text-blue-500',
-    badge: 'Production Ready'
+    badge: 'Advanced'
   },
   {
     icon: Brain,

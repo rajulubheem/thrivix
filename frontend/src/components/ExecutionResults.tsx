@@ -1,6 +1,6 @@
 // ExecutionResults.tsx - Better display for results and artifacts
 import React, { useState } from 'react';
-import { SwarmExecutionResult, Artifact } from '../../types/swarm';
+import { SwarmExecutionResult, Artifact } from '../types/swarm';
 import './ExecutionResults.css';
 
 interface ExecutionResultsProps {

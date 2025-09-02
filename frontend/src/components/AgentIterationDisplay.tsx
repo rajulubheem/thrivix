@@ -1,11 +1,11 @@
-import React from 'react';
-import './AgentIterationDisplay.css';
+import React from "react";
+import "./AgentIterationDisplay.css";
 
 interface AgentIterationProps {
   agentName: string;
   iteration: number;
   maxIterations: number;
-  status: 'reasoning' | 'using_tools' | 'completing' | 'finished';
+  status: "reasoning" | "using_tools" | "completing" | "finished";
   tools?: string[];
   timestamp: Date;
 }
@@ -16,25 +16,35 @@ const AgentIterationDisplay: React.FC<AgentIterationProps> = ({
   maxIterations,
   status,
   tools = [],
-  timestamp
+  timestamp,
 }) => {
   const getStatusIcon = () => {
     switch (status) {
-      case 'reasoning': return '🧠';
-      case 'using_tools': return '🔧';
-      case 'completing': return '✅';
-      case 'finished': return '🎯';
-      default: return '🔄';
+      case "reasoning":
+        return "🧠";
+      case "using_tools":
+        return "🔧";
+      case "completing":
+        return "✅";
+      case "finished":
+        return "🎯";
+      default:
+        return "🔄";
     }
   };
 
   const getStatusText = () => {
     switch (status) {
-      case 'reasoning': return 'Analyzing & Reasoning';
-      case 'using_tools': return 'Using Tools';
-      case 'completing': return 'Finalizing Work';
-      case 'finished': return 'Iteration Complete';
-      default: return 'Processing';
+      case "reasoning":
+        return "Analyzing & Reasoning";
+      case "using_tools":
+        return "Using Tools";
+      case "completing":
+        return "Finalizing Work";
+      case "finished":
+        return "Iteration Complete";
+      default:
+        return "Processing";
     }
   };
 
@@ -56,10 +66,10 @@ const AgentIterationDisplay: React.FC<AgentIterationProps> = ({
           <span className="status-text">{getStatusText()}</span>
         </div>
       </div>
-      
+
       <div className="iteration-progress">
         <div className="progress-bar">
-          <div 
+          <div
             className="progress-fill"
             style={{ width: `${getProgressPercentage()}%` }}
           />
@@ -83,9 +93,7 @@ const AgentIterationDisplay: React.FC<AgentIterationProps> = ({
       )}
 
       <div className="iteration-meta">
-        <span className="timestamp">
-          {timestamp.toLocaleTimeString()}
-        </span>
+        <span className="timestamp">{timestamp.toLocaleTimeString()}</span>
       </div>
     </div>
   );

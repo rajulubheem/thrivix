@@ -14,6 +14,8 @@ from app.services.agent_pool_manager import AgentPoolManager
 from app.services.circuit_breaker import CircuitBreaker
 from app.services.event_bus import event_bus
 from app.services.event_aware_agent import EventAwareAgent, AgentCapabilities
+from app.services.human_loop_agent import HumanLoopAgent
+from app.services.agent_memory_store import get_memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,48 @@ class ControlledSwarmService:
         # Thread-safe tracking of spawned roles per execution
         self._spawned_roles_lock = threading.RLock()
         self._spawned_roles_by_execution: Dict[str, Set[str]] = {}
+        
+        # Human-in-the-loop and memory management
+        self.memory_store = get_memory_store()
+        self.enable_human_loop = config.get("enable_human_loop", True)
+        self.human_interactions: Dict[str, Dict] = {}  # Track pending human interactions
+        
+        # Register for human interaction events
+        if self.enable_human_loop:
+            self._register_human_interaction_handlers()
+    
+    def _register_human_interaction_handlers(self):
+        """Register handlers to track human interactions"""
+        event_bus.on("human.approval.needed", self._track_human_interaction)
+        event_bus.on("human.question", self._track_human_interaction)
+        event_bus.on("human.handoff.requested", self._track_human_interaction)
+        event_bus.on("human.approval.response", self._resolve_human_interaction)
+        event_bus.on("human.response", self._resolve_human_interaction)
+    
+    async def _track_human_interaction(self, event):
+        """Track when a human interaction is needed"""
+        interaction_id = event.data.get("id")
+        if interaction_id:
+            self.human_interactions[interaction_id] = {
+                "status": "pending",
+                "type": event.type,
+                "timestamp": event.timestamp,
+                "data": event.data
+            }
+            logger.info(f"📋 Tracking human interaction: {interaction_id} ({event.type})")
+    
+    async def _resolve_human_interaction(self, event):
+        """Track when a human interaction is resolved"""
+        # Try to find the interaction ID from the event
+        interaction_id = None
+        if event.type.startswith("human.approval.response"):
+            interaction_id = event.type.split(".")[-1]  # Extract from "human.approval.response.{id}"
+        elif event.type.startswith("human.response"):
+            interaction_id = event.type.split(".")[-1]  # Extract from "human.response.{id}"
+        
+        if interaction_id and interaction_id in self.human_interactions:
+            self.human_interactions[interaction_id]["status"] = "resolved"
+            logger.info(f"✅ Resolved human interaction: {interaction_id}")
         
     async def execute_swarm_async(
         self,
@@ -111,6 +155,10 @@ class ControlledSwarmService:
     ) -> str:
         """Main execution loop with strict controls"""
         
+        # Extract session_id for human-loop compatibility
+        session_id = request.session_id
+        logger.info(f"🔗 Controlled swarm execution with session_id: {session_id}")
+        
         # Send initial status update
         if callback_handler:
             await callback_handler(
@@ -130,7 +178,8 @@ class ControlledSwarmService:
                 execution_id=execution_id,
                 role="analyzer",
                 task=request.task,
-                callback_handler=callback_handler
+                callback_handler=callback_handler,
+                session_id=session_id
             )
             
             if not initial_agent_id:
@@ -145,7 +194,7 @@ class ControlledSwarmService:
             raise Exception(f"Initial agent spawn failed: {e}")
         
         # Step 2: Controlled execution loop
-        result = await self._controlled_execution_loop(execution_id, request.task, callback_handler)
+        result = await self._controlled_execution_loop(execution_id, request.task, callback_handler, session_id)
         
         # Send completion status
         if callback_handler:
@@ -168,7 +217,8 @@ class ControlledSwarmService:
         request, 
         original_query: str, 
         accumulated_results: list,
-        callback_handler
+        callback_handler,
+        session_id: str = None
     ) -> Optional[str]:
         """Atomically spawn a single agent with race condition protection"""
         agent_role = request.data.get("role", "writer")
@@ -188,9 +238,16 @@ class ControlledSwarmService:
             new_agent_id = await self._spawn_controlled_agent(
                 execution_id=execution_id,
                 role=agent_role,
-                task=f"Previous context: {accumulated_results[-1] if accumulated_results else original_query}. Task: {reason}",
-                context={"reason": reason, "priority": request.data.get("priority", "medium")},
-                callback_handler=callback_handler
+                task=f"Original task: {original_query}. Your specific role: {reason}",
+                context={
+                    "reason": reason, 
+                    "priority": request.data.get("priority", "medium"),
+                    "original_query": original_query,
+                    "accumulated_results": accumulated_results,  # Pass full context
+                    "agent_role": agent_role
+                },
+                callback_handler=callback_handler,
+                session_id=session_id
             )
             
             if new_agent_id:
@@ -219,7 +276,8 @@ class ControlledSwarmService:
         role: str,
         task: str,
         context: dict = None,
-        callback_handler=None
+        callback_handler=None,
+        session_id: str = None
     ) -> Optional[str]:
         """Spawn agent with strict controls"""
         
@@ -233,8 +291,8 @@ class ControlledSwarmService:
             # Register with pool manager
             agent_id = await self.pool_manager.register_agent(f"{role}_{len(self.agent_registry)}", role)
             
-            # Create controlled agent
-            agent = await self._create_controlled_agent(role, agent_id, execution_id, callback_handler)
+            # Create controlled agent with session_id for human-loop compatibility
+            agent = await self._create_controlled_agent(role, agent_id, execution_id, callback_handler, session_id)
             
             # Store in registry
             self.agent_registry[agent_id] = agent
@@ -258,74 +316,210 @@ class ControlledSwarmService:
         role: str,
         agent_id: str,
         execution_id: str,
-        callback_handler
-    ) -> EventAwareAgent:
+        callback_handler,
+        session_id: str = None
+    ) -> HumanLoopAgent:
         """Create an event-aware agent with controls"""
         
-        # Define capabilities based on role
-        capabilities_map = {
-            "analyzer": AgentCapabilities(
-                skills=["analysis", "task_breakdown"],
-                tools=["web_search"],
-                listens_to=["agent.needed", "task.analyze"],
-                emits=["analysis.complete", "agent.needed"]
-            ),
-            "researcher": AgentCapabilities(
-                skills=["research", "information_gathering"],
-                tools=["web_search"],
-                listens_to=["agent.needed", "research.needed"],
-                emits=["research.complete"]
-            ),
-            "writer": AgentCapabilities(
-                skills=["writing", "content_creation"],
-                tools=[],
-                listens_to=["agent.needed", "content.needed"],
-                emits=["content.complete"]
+        # Generate dynamic capabilities based on role using AI
+        capabilities = await self._generate_dynamic_capabilities(role)
+        
+        # Generate AI-driven system prompt
+        system_prompt = await self._generate_dynamic_system_prompt(role)
+        
+        # Use HumanLoopAgent if human interaction is enabled
+        if self.enable_human_loop:
+            # Use session_id if provided, otherwise fall back to execution_id
+            effective_execution_id = session_id or execution_id
+            logger.info(f"🔗🤖 Creating HumanLoopAgent with execution_id: {effective_execution_id} (session_id: {session_id}, original: {execution_id})")
+            logger.info(f"🔗🤖 HumanLoopAgent config: role={role}, enable_human_loop={self.enable_human_loop}")
+            
+            agent = HumanLoopAgent(
+                name=f"{role}_{agent_id[:8]}",
+                role=role,
+                system_prompt=system_prompt,
+                capabilities=capabilities,
+                execution_id=effective_execution_id,
+                memory_store=self.memory_store
             )
-        }
-        
-        capabilities = capabilities_map.get(role, AgentCapabilities(
-            skills=[role],
-            tools=[],
-            listens_to=["agent.needed"],
-            emits=["task.complete"]
-        ))
-        
-        # Create agent with controlled system prompt
-        system_prompt = self._get_controlled_system_prompt(role)
-        
-        agent = EventAwareAgent(
-            name=f"{role}_{agent_id[:8]}",
-            role=role,
-            system_prompt=system_prompt,
-            capabilities=capabilities
-        )
+            # Set the callback handler for streaming output
+            agent.callback_handler = callback_handler
+            logger.info(f"✅🤖 Successfully created HumanLoopAgent: {agent.name} (callback_handler: {callback_handler is not None})")
+        else:
+            logger.info(f"⚠️ Creating regular EventAwareAgent because enable_human_loop={self.enable_human_loop}")
+            agent = EventAwareAgent(
+                name=f"{role}_{agent_id[:8]}",
+                role=role,
+                system_prompt=system_prompt,
+                capabilities=capabilities
+            )
+            # Set the callback handler for streaming output
+            agent.callback_handler = callback_handler
+            logger.info(f"✅🤖 Successfully created EventAwareAgent: {agent.name} (callback_handler: {callback_handler is not None})")
         
         return agent
     
-    def _get_controlled_system_prompt(self, role: str) -> str:
-        """Get system prompt with built-in controls"""
-        base_prompt = f"""You are a {role} agent in a CONTROLLED multi-agent system.
+    async def _generate_dynamic_capabilities(self, role: str) -> AgentCapabilities:
+        """Generate dynamic agent capabilities using AI analysis"""
+        try:
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
+            import os
+            from dotenv import load_dotenv
+            import json
+            
+            load_dotenv()
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+            if not api_key:
+                logger.warning("No OpenAI API key - using fallback capabilities")
+                return self._fallback_capabilities(role)
+            
+            # Create AI capability generator
+            model = OpenAIModel(
+                client_args={"api_key": api_key},
+                model_id="gpt-4o-mini",
+                params={"max_tokens": 300, "temperature": 0.2}
+            )
+            
+            capability_generator = Agent(
+                name="capability_generator",
+                system_prompt="""You are an intelligent agent capability generator. Analyze a role description and generate appropriate capabilities.
+
+Given a role, respond with ONLY a JSON object containing:
+{
+  "skills": ["skill1", "skill2", ...],
+  "tools": ["tool1", "tool2", ...], 
+  "listens_to": ["event1", "event2", ...],
+  "emits": ["event1", "event2", ...]
+}
+
+Skills: Core competencies this agent has
+Tools: Technical tools needed (web_search, code_interpreter, file_editor, data_analysis)
+Listens_to: Event types this agent responds to 
+Emits: Event types this agent can generate
+
+Be specific and relevant to the role. Don't be generic.""",
+                model=model
+            )
+            
+            prompt = f"Generate capabilities for this agent role: {role}"
+            
+            # Use stream_async to get capabilities
+            capabilities_content = ""
+            async for event in capability_generator.stream_async(prompt):
+                if "data" in event:
+                    capabilities_content += event["data"]
+                elif "result" in event:
+                    result = event["result"]
+                    if hasattr(result, 'content'):
+                        capabilities_content = result.content
+                    else:
+                        capabilities_content = str(result)
+                    break
+                    
+            response = capabilities_content.strip()
+            
+            # Parse JSON response
+            try:
+                capabilities_data = json.loads(response)
+                
+                return AgentCapabilities(
+                    skills=capabilities_data.get("skills", [role.lower()]),
+                    tools=capabilities_data.get("tools", []),
+                    listens_to=capabilities_data.get("listens_to", ["agent.needed"]),
+                    emits=capabilities_data.get("emits", ["task.complete"])
+                )
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse capabilities JSON: {e}")
+                return self._fallback_capabilities(role)
+                
+        except Exception as e:
+            logger.error(f"AI capability generation failed: {e}")
+            return self._fallback_capabilities(role)
+    
+    def _fallback_capabilities(self, role: str) -> AgentCapabilities:
+        """Fallback capabilities when AI generation fails"""
+        return AgentCapabilities(
+            skills=[role.lower().replace(" ", "_"), "problem_solving"],
+            tools=[],
+            listens_to=["agent.needed"],
+            emits=["task.complete"]
+        )
+    
+    async def _generate_dynamic_system_prompt(self, role: str) -> str:
+        """Generate AI-driven system prompt for the specific role"""
+        try:
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
+            import os
+            from dotenv import load_dotenv
+            
+            load_dotenv()
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+            if not api_key:
+                logger.warning("No OpenAI API key - using fallback system prompt")
+                return self._fallback_system_prompt(role)
+            
+            # Create AI prompt generator
+            model = OpenAIModel(
+                client_args={"api_key": api_key},
+                model_id="gpt-4o-mini",
+                params={"max_tokens": 400, "temperature": 0.3}
+            )
+            
+            prompt_generator = Agent(
+                name="prompt_generator",
+                system_prompt="""You are an AI system prompt generator for specialized agents. Create effective system prompts for different agent roles.
+
+Requirements for all system prompts:
+- Include CONTROLLED multi-agent system context
+- 60-second time limit for efficiency
+- Clear completion marking with "TASK COMPLETE"
+- Role-specific expertise and behaviors
+- Professional and focused tone
+- Specific to the role's function
+
+Generate a system prompt that makes the agent highly effective at their specific role.""",
+                model=model
+            )
+            
+            prompt = f"Create a specialized system prompt for a '{role}' agent in a multi-agent swarm system."
+            
+            # Use stream_async to get the system prompt
+            prompt_content = ""
+            async for event in prompt_generator.stream_async(prompt):
+                if "data" in event:
+                    prompt_content += event["data"]
+                elif "result" in event:
+                    result = event["result"]
+                    if hasattr(result, 'content'):
+                        prompt_content = result.content
+                    else:
+                        prompt_content = str(result)
+                    break
+                    
+            system_prompt = prompt_content.strip()
+            
+            logger.info(f"✅ Generated AI-driven system prompt for {role}")
+            return system_prompt
+                
+        except Exception as e:
+            logger.error(f"AI system prompt generation failed: {e}")
+            return self._fallback_system_prompt(role)
+    
+    def _fallback_system_prompt(self, role: str) -> str:
+        """Fallback system prompt when AI generation fails"""
+        return f"""You are a specialized {role} agent in a CONTROLLED multi-agent system.
 
 STRICT RULES:
-1. You have LIMITED TIME (max 60 seconds) - work efficiently
-2. Complete your task in ONE response - don't ask for more information
-3. For simple requests (jokes, basic questions), provide the answer directly
-4. Mark your completion clearly with "TASK COMPLETE" when done
-5. Do NOT ask users for clarification on simple requests
+1. You have LIMITED TIME (max 60 seconds) - work efficiently  
+2. Complete your task in ONE response
+3. Mark completion with "TASK COMPLETE" when done
+4. Focus on your role: {role}
 
-Your role: {role}
-
-IMPORTANT: If the user asks for something simple like a joke, story, or basic information - just provide it directly and mark TASK COMPLETE.
-"""
-        
-        role_specific = {
-            "analyzer": "Analyze the given task and provide a brief analysis. Be concise and actionable.",
-            "researcher": "Research the topic quickly and provide key findings. Focus on most relevant information.",
-            "writer": "Create content based on provided information. Keep it focused and well-structured."
-        }
-        
-        return base_prompt + role_specific.get(role, "Complete your assigned task efficiently.")
+Complete your assigned task efficiently and professionally."""
     
     async def _execute_agent_with_timeout(self, agent_id: str, task: str, context: dict):
         """Execute agent task with timeout protection"""
@@ -369,10 +563,10 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
             logger.error(f"❌ Agent {agent_id} failed: {e}")
             await self.pool_manager.mark_agent_completed(agent_id, success=False)
     
-    async def _controlled_execution_loop(self, execution_id: str, original_query: str, callback_handler=None) -> str:
+    async def _controlled_execution_loop(self, execution_id: str, original_query: str, callback_handler=None, session_id: str = None) -> str:
         """Main execution loop with controls"""
         loop_count = 0
-        max_loops = 10  # Hard limit on loop iterations
+        max_loops = 50  # Allow more iterations for complex multi-agent tasks
         
         accumulated_results = []
         processed_events = set()  # Track processed events to avoid duplicates
@@ -399,14 +593,20 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
             # Wait a bit for agents to work
             await asyncio.sleep(3)
             
-            # Check if any agents are still working
-            if len(self.pool_manager.active_agents) == 0:
+            # Check if any agents are still working OR waiting for human approval
+            active_agents = len(self.pool_manager.active_agents)
+            pending_human_interactions = len([h for h in self.human_interactions.values() if h.get("status") == "pending"])
+            
+            if active_agents == 0 and pending_human_interactions == 0:
                 # Wait a bit longer to ensure agents have actually completed
                 await asyncio.sleep(2)
                 
-                # Double-check no agents are still active after waiting
-                if len(self.pool_manager.active_agents) > 0:
-                    logger.info(f"🔄 Agents still active after wait, continuing...")
+                # Double-check no agents are still active and no pending human interactions
+                active_agents = len(self.pool_manager.active_agents)
+                pending_human_interactions = len([h for h in self.human_interactions.values() if h.get("status") == "pending"])
+                
+                if active_agents > 0 or pending_human_interactions > 0:
+                    logger.info(f"🔄 Still have {active_agents} active agents and {pending_human_interactions} pending human interactions, continuing...")
                     continue
                 
                 # Spawn ALL needed agents (up to user's max limit) to enable true swarm intelligence
@@ -425,50 +625,36 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
                         if role not in spawned_roles and role not in unique_spawn_requests:
                             unique_spawn_requests[role] = req
                 
-                # Spawn all needed agents (within max limit) - let the swarm self-organize!
+                # Spawn ONLY ONE agent at a time - true sequential event-driven behavior
                 if unique_spawn_requests:
-                    agents_to_spawn = list(unique_spawn_requests.values())
-                    logger.info(f"🔄 Found {len(agents_to_spawn)} unique agent types needed: {list(unique_spawn_requests.keys())}")
+                    # Get the highest priority or most recent request
+                    next_agent_request = list(unique_spawn_requests.values())[0]  # Take first one
+                    role = next_agent_request.data.get("role", "writer")
                     
-                    # Spawn agents atomically to prevent race conditions
-                    spawn_tasks = []
-                    for req in agents_to_spawn:
-                        role = req.data.get("role", "writer")
-                        
-                        # Atomic check and spawn to prevent race conditions
-                        try:
-                            spawn_task = self._spawn_agent_atomic(
-                                execution_id=execution_id,
-                                request=req,
-                                original_query=original_query,
-                                accumulated_results=accumulated_results,
-                                callback_handler=callback_handler
-                            )
-                            spawn_tasks.append(spawn_task)
-                        except Exception as e:
-                            logger.info(f"⚠️ Cannot spawn {role}: {e}")
+                    logger.info(f"🔄 Spawning SINGLE agent sequentially: {role}")
                     
-                    # Execute all spawns in parallel
-                    if spawn_tasks:
-                        spawn_results = await asyncio.gather(*spawn_tasks, return_exceptions=True)
-                        successful_spawns = [r for r in spawn_results if r and not isinstance(r, Exception)]
-                        logger.info(f"✅ Successfully spawned {len(successful_spawns)} agents in parallel")
+                    # Spawn only ONE agent
+                    try:
+                        new_agent_id = await self._spawn_agent_atomic(
+                            execution_id=execution_id,
+                            request=next_agent_request,
+                            original_query=original_query,
+                            accumulated_results=accumulated_results,
+                            callback_handler=callback_handler,
+                            session_id=session_id
+                        )
                         
-                        # Log successful spawns (roles already tracked atomically in _spawn_agent_atomic)
-                        successful_roles = []
-                        for i, result in enumerate(spawn_results):
-                            if result and not isinstance(result, Exception):
-                                role = agents_to_spawn[i].data.get("role", "writer")
-                                successful_roles.append(role)
-                        
-                        if successful_roles:
-                            logger.info(f"📝 Successfully spawned roles: {successful_roles}")
-                        
-                        # Brief pause to let agents initialize
-                        if successful_spawns:
+                        if new_agent_id:
+                            logger.info(f"✅ Successfully spawned {role} agent: {new_agent_id}")
+                            # Brief pause to let agent initialize
                             await asyncio.sleep(1)
+                        else:
+                            logger.warning(f"⚠️ Failed to spawn {role} agent")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error spawning {role}: {e}")
                     
-                    # Continue loop to let new agents work
+                    # Continue loop to let the single new agent work
                     continue
                 else:
                     logger.info("✅ No active agents and no pending spawn requests - execution complete")
@@ -486,11 +672,18 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
                 if event.id in processed_events:
                     continue
                     
-                if event.type in ["task.complete", "analysis.complete", "content.complete"]:
+                if event.type in ["task.complete", "analysis.complete", "content.complete", "agent.completed"]:
+                    # Handle different output formats
+                    result = None
                     if "final_output" in event.data:
                         result = event.data["final_output"]
+                    elif "output" in event.data:
+                        result = event.data["output"]
+                    
+                    if result and result not in accumulated_results:  # Avoid duplicates
                         accumulated_results.append(result)
                         processed_events.add(event.id)  # Mark as processed
+                        logger.info(f"📝 Captured result from {event.source}: {len(result)} characters")
                         
                         # Send the actual result content
                         if callback_handler:
@@ -503,19 +696,69 @@ IMPORTANT: If the user asks for something simple like a joke, story, or basic in
                                 }
                             )
                         
-                        # Check if this result indicates task completion
-                        if "TASK COMPLETE" in result:
-                            logger.info(f"🎯 Agent {event.source} marked task as complete")
-                            # If we have good results and agent says complete, we're done
-                            if len(accumulated_results) > 0:
-                                logger.info("✅ Task completion detected - stopping execution")
-                                self.pool_manager.is_stopped = True
-                                break
+                        # DISABLED: Text-based completion detection conflicts with AI decision logic
+                        # The AI decision system is more sophisticated and handles completion properly
+                        # Text-based detection was causing premature termination even when AI decided more agents were needed
+                        
+                        # OLD CODE (disabled to prevent conflicts):
+                        # if ("TASK COMPLETE" in result and 
+                        #     (result.strip().endswith("TASK COMPLETE") or 
+                        #      "TASK COMPLETE." in result or
+                        #      "task is complete" in result.lower() or
+                        #      "completed the task" in result.lower())):
+                        #     logger.info(f"🎯 Agent {event.source} marked task as complete")
+                        #     if len(accumulated_results) > 0:
+                        #         logger.info("✅ Task completion detected - will stop after current agents finish")
+                        #         await asyncio.sleep(3)
+                        #         self.pool_manager.is_stopped = True
+                        #         break
+                        
+                        # Instead, rely on AI decision logic and proper agent spawn handling below
                         
             
-            # If we have results and no active agents, we're done
+            # Check if we should continue - only stop if we have results AND no active agents AND no pending spawn requests
             if accumulated_results and len(self.pool_manager.active_agents) == 0:
-                break
+                # Check if there are any pending agent spawn requests
+                recent_events = event_bus.get_recent_events(10)
+                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]
+                
+                # Thread-safe filtering of already spawned agent roles
+                pending_spawn_requests = []
+                with self._spawned_roles_lock:
+                    spawned_roles = self._spawned_roles_by_execution.get(execution_id, set())
+                    for req in spawn_requests:
+                        role = req.data.get("role", "writer")
+                        if role not in spawned_roles:
+                            pending_spawn_requests.append(req)
+                
+                if not pending_spawn_requests:
+                    logger.info("✅ Have results, no active agents, and no pending spawn requests - execution complete")
+                    break
+                else:
+                    logger.info(f"🔄 Have results but {len(pending_spawn_requests)} pending spawn requests - continuing execution")
+            
+            # For simple tasks, only complete if we have output AND no pending spawn requests
+            if (loop_count > 2 and accumulated_results and 
+                len(accumulated_results) > 0 and len(accumulated_results[0]) > 50 and
+                len(self.pool_manager.active_agents) == 0):
+                
+                # Check if there are any pending agent spawn requests before stopping
+                recent_events = event_bus.get_recent_events(10)
+                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]
+                
+                pending_spawn_requests = []
+                with self._spawned_roles_lock:
+                    spawned_roles = self._spawned_roles_by_execution.get(execution_id, set())
+                    for req in spawn_requests:
+                        role = req.data.get("role", "writer")
+                        if role not in spawned_roles:
+                            pending_spawn_requests.append(req)
+                
+                if not pending_spawn_requests:
+                    logger.info("✅ Simple task completed with substantial output and no pending requests - stopping execution")
+                    break
+                else:
+                    logger.info(f"🔄 Simple task has output but {len(pending_spawn_requests)} pending spawn requests - continuing")
         
         # Force stop if we hit loop limit
         if loop_count >= max_loops:
