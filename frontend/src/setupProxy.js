@@ -1,38 +1,41 @@
 const { createProxyMiddleware } = require('http-proxy-middleware');
 
 module.exports = function(app) {
-  // Proxy API requests to backend
+  console.log('🔧 Setting up proxy middleware');
+  
+  // Proxy all API requests with special handling for SSE
   app.use(
     '/api',
     createProxyMiddleware({
       target: 'http://localhost:8000',
       changeOrigin: true,
-      ws: true,
-      // Disable buffering for streaming responses
-      selfHandleResponse: false,
+      ws: true, // Enable websocket proxy
+      logLevel: 'info',
       onProxyReq: (proxyReq, req, res) => {
-        // Add authentication header if not present
-        if (!proxyReq.getHeader('Authorization')) {
-          proxyReq.setHeader('Authorization', 'Bearer demo-token');
+        if (req.url?.includes('/events')) {
+          console.log('🌊 SSE Proxy request:', req.method, req.url);
+          proxyReq.setHeader('Accept', 'text/event-stream');
+          proxyReq.setHeader('Cache-Control', 'no-cache');
+          proxyReq.setHeader('Connection', 'keep-alive');
+        } else {
+          console.log('📡 API Proxy request:', req.method, req.url);
         }
-        // Disable buffering headers
-        proxyReq.setHeader('X-Accel-Buffering', 'no');
       },
       onProxyRes: (proxyRes, req, res) => {
-        // Ensure streaming headers are preserved
-        if (proxyRes.headers['content-type']?.includes('stream') || 
-            proxyRes.headers['content-type']?.includes('ndjson')) {
-          res.setHeader('X-Accel-Buffering', 'no');
-          res.setHeader('Cache-Control', 'no-cache');
+        if (req.url?.includes('/events')) {
+          console.log('🌊 SSE Proxy response:', proxyRes.statusCode, req.url);
+          console.log('🌊 SSE Response headers:', proxyRes.headers);
           
-          // Remove content-length to allow chunked transfer
-          delete proxyRes.headers['content-length'];
+          // Ensure proper SSE headers
+          if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
+            proxyRes.headers['access-control-allow-origin'] = '*';
+            proxyRes.headers['access-control-allow-headers'] = '*';
+            console.log('✅ SSE headers configured');
+          }
+        } else {
+          console.log('📡 API Proxy response:', proxyRes.statusCode, req.url);
         }
       }
     })
   );
-  
-  // DO NOT proxy /ws to backend - this is for webpack dev server
-  // The webpack dev server needs this for hot module replacement
-  // By not proxying it, it stays on port 3000
 };

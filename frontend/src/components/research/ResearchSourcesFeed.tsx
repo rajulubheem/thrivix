@@ -2,14 +2,15 @@
  * Research Sources Feed Component
  * TikTok-inspired vertical feed for research sources with message-based grouping
  */
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   Globe, Clock, ArrowUpRight, ChevronUp, ChevronDown,
   Bookmark, BookmarkCheck, Share2, MessageSquare,
   Zap, Brain, GraduationCap, Filter, X, Hash,
   Eye, Copy, ExternalLink, Info, TrendingUp,
   Calendar, User, Building, Tag, FileText,
-  CheckCircle, AlertCircle, ChevronLeft, ChevronRight
+  CheckCircle, AlertCircle, ChevronLeft, ChevronRight,
+  Monitor, Grid3X3, List, RotateCcw, Maximize2, RefreshCw
 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import '../../styles/research-sources-feed.css';
@@ -68,7 +69,7 @@ const ResearchSourcesFeed: React.FC<ResearchSourcesFeedProps> = ({
   const { isDark } = useTheme();
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'feed' | 'grid' | 'compact'>('feed');
+  const [viewMode, setViewMode] = useState<'feed' | 'grid' | 'compact' | 'browser'>('feed');
   const [filterType, setFilterType] = useState<'all' | 'fast' | 'deep' | 'academic' | 'scholar'>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
@@ -374,58 +375,32 @@ const ResearchSourcesFeed: React.FC<ResearchSourcesFeedProps> = ({
                       </div>
                     </div>
                     
-                    {/* Action Sidebar */}
+                    {/* Action Sidebar - Simplified */}
                     <div className="source-actions">
                       <button
-                        className={`action-btn bookmark ${
-                          bookmarkedSources.has(source.id) ? 'active' : ''
+                        className={`action-btn primary ${
+                          bookmarkedSources.has(source.id) ? 'bookmarked' : ''
                         }`}
                         onClick={(e) => {
                           e.stopPropagation();
                           onBookmark?.(source.id);
                         }}
-                        title="Bookmark"
+                        title={bookmarkedSources.has(source.id) ? 'Remove bookmark' : 'Bookmark this source'}
                       >
                         {bookmarkedSources.has(source.id) ? 
-                          <BookmarkCheck size={20} /> : <Bookmark size={20} />
+                          <BookmarkCheck size={18} /> : <Bookmark size={18} />
                         }
                       </button>
                       
                       <button
-                        className="action-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          copySourceUrl(source.url);
-                        }}
-                        title="Copy URL"
-                      >
-                        {copiedUrl === source.url ? (
-                          <CheckCircle size={20} />
-                        ) : (
-                          <Copy size={20} />
-                        )}
-                      </button>
-                      
-                      <button
-                        className="action-btn"
+                        className="action-btn secondary"
                         onClick={(e) => {
                           e.stopPropagation();
                           window.open(source.url, '_blank');
                         }}
-                        title="Open in new tab"
+                        title="Open source"
                       >
-                        <ExternalLink size={20} />
-                      </button>
-                      
-                      <button
-                        className="action-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Share functionality
-                        }}
-                        title="Share"
-                      >
-                        <Share2 size={20} />
+                        <ArrowUpRight size={18} />
                       </button>
                     </div>
                   </div>
@@ -559,6 +534,233 @@ const ResearchSourcesFeed: React.FC<ResearchSourcesFeedProps> = ({
     </div>
   );
 
+  // Mini Browser Component
+  const MiniBrowser: React.FC<{ source: Source; onBookmark: () => void; isBookmarked: boolean }> = ({ 
+    source, onBookmark, isBookmarked 
+  }) => {
+    const [isLoading, setIsLoading] = useState(true);
+    const [loadError, setLoadError] = useState(false);
+    const [useProxy, setUseProxy] = useState(false);
+    const [showFallback, setShowFallback] = useState(false);
+    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+
+    // Check if domain is known to block iframes (more conservative list)
+    const isLikelyBlocked = useMemo(() => {
+      const blockedDomains = [
+        'github.com', 'youtube.com', 'facebook.com', 
+        'twitter.com', 'linkedin.com', 'instagram.com',
+        'microsoft.com', 'apple.com', 'netflix.com'
+      ];
+      return blockedDomains.some(domain => source.domain?.toLowerCase().includes(domain));
+    }, [source.domain]);
+    
+    useEffect(() => {
+      // Reset states when source changes
+      setIsLoading(true);
+      setLoadError(false);
+      setUseProxy(false);
+      setShowFallback(false);
+      
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      
+      // Set timeout to detect failed loads (8 seconds)
+      timeoutRef.current = setTimeout(() => {
+        setIsLoading(false);
+        setLoadError(true);
+        setShowFallback(true);
+      }, 8000);
+      
+      return () => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+      };
+    }, [source.url]); // Remove circular dependencies
+
+    const handleIframeLoad = () => {
+      setIsLoading(false);
+      setLoadError(false);
+      // Clear timeout since iframe loaded successfully
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+    
+    const handleIframeError = () => {
+      setIsLoading(false);
+      setLoadError(true);
+      setShowFallback(true);
+      // Clear timeout since we got an error
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+
+    const renderFallbackPreview = () => (
+      <div className="browser-fallback">
+        <div className="fallback-header">
+          <Globe size={20} />
+          <div>
+            <h4>{source.title}</h4>
+            <span className="fallback-domain">{source.domain}</span>
+          </div>
+        </div>
+        
+        {source.snippet && (
+          <div className="fallback-content">
+            <p>{source.snippet}</p>
+          </div>
+        )}
+        
+        <div className="fallback-actions">
+          <button 
+            onClick={() => window.open(source.url, '_blank')}
+            className="fallback-btn primary"
+          >
+            <ArrowUpRight size={16} />
+            Open in New Tab
+          </button>
+          <button 
+            onClick={() => {
+              setIsLoading(true);
+              setLoadError(false);
+              setShowFallback(false);
+              
+              // Restart timeout
+              if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+              }
+              timeoutRef.current = setTimeout(() => {
+                setIsLoading(false);
+                setLoadError(true);
+                setShowFallback(true);
+              }, 8000);
+            }}
+            className="fallback-btn secondary"
+          >
+            <RotateCcw size={16} />
+            Try Again
+          </button>
+        </div>
+        
+        <div className="fallback-notice">
+          <AlertCircle size={14} />
+          <span>This site prevents embedding for security reasons</span>
+        </div>
+      </div>
+    );
+
+    const getIframeSrc = () => {
+      return source.url;
+    };
+
+    return (
+      <div className="mini-browser">
+        {/* Browser Header */}
+        <div className="mini-browser-header">
+          <div className="browser-controls">
+            <div className="traffic-lights">
+              <span className="traffic-light close"></span>
+              <span className="traffic-light minimize"></span>
+              <span className="traffic-light maximize"></span>
+            </div>
+            <div className="browser-url">
+              <Globe size={12} />
+              <span>{source.domain}</span>
+              {isLikelyBlocked && (
+                <span className="blocked-indicator" title="May be blocked from embedding">
+                  <AlertCircle size={12} />
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="browser-actions">
+            <button
+              onClick={onBookmark}
+              className={`browser-action ${isBookmarked ? 'bookmarked' : ''}`}
+              title={isBookmarked ? 'Remove bookmark' : 'Bookmark'}
+            >
+              {isBookmarked ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+            </button>
+            <button
+              onClick={() => window.open(source.url, '_blank')}
+              className="browser-action"
+              title="Open in new tab"
+            >
+              <Maximize2 size={14} />
+            </button>
+          </div>
+        </div>
+        
+        {/* Browser Content */}
+        <div className="mini-browser-content">
+          {isLoading && (
+            <div className="browser-loading">
+              <div className="loading-spinner"></div>
+              <p>Loading {source.domain}...</p>
+            </div>
+          )}
+          
+          {showFallback ? (
+            renderFallbackPreview()
+          ) : (
+            <iframe
+              ref={iframeRef}
+              src={getIframeSrc()}
+              title={source.title}
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
+              sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+              loading="lazy"
+              style={{ display: loadError && showFallback ? 'none' : 'block' }}
+            />
+          )}
+        </div>
+        
+        {/* Source Info */}
+        <div className="mini-browser-footer">
+          <h4>{source.title}</h4>
+          {source.snippet && (
+            <p className="source-snippet">{source.snippet}</p>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderBrowserView = () => (
+    <div className="sources-browser-view">
+      {filteredGroups.map((group) => (
+        <div key={group.id} className="browser-group">
+          {showGroupHeaders && (
+            <div className="browser-group-header">
+              <div className="group-info">
+                {React.createElement(researchTypeConfig[group.researchType || 'fast'].icon, { size: 16 })}
+                <span className="group-query">{group.query}</span>
+                <span className="group-count">({group.totalSources} sources)</span>
+              </div>
+            </div>
+          )}
+          
+          <div className="browser-grid">
+            {group.sources.map((source) => (
+              <MiniBrowser
+                key={source.id}
+                source={source}
+                onBookmark={() => onBookmark?.(source.id)}
+                isBookmarked={bookmarkedSources.has(source.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className={`research-sources-feed ${isDark ? 'dark' : 'light'} ${compactMode ? 'compact' : ''}`}>
       {/* Header Controls */}
@@ -586,21 +788,28 @@ const ResearchSourcesFeed: React.FC<ResearchSourcesFeedProps> = ({
               onClick={() => setViewMode('feed')}
               title="Feed View"
             >
-              <FileText size={16} />
+              <List size={16} />
             </button>
             <button
               className={`mode-btn ${viewMode === 'grid' ? 'active' : ''}`}
               onClick={() => setViewMode('grid')}
               title="Grid View"
             >
-              <Building size={16} />
+              <Grid3X3 size={16} />
             </button>
             <button
               className={`mode-btn ${viewMode === 'compact' ? 'active' : ''}`}
               onClick={() => setViewMode('compact')}
               title="Compact View"
             >
-              <Info size={16} />
+              <FileText size={16} />
+            </button>
+            <button
+              className={`mode-btn ${viewMode === 'browser' ? 'active' : ''}`}
+              onClick={() => setViewMode('browser')}
+              title="Browser Preview View"
+            >
+              <Monitor size={16} />
             </button>
           </div>
         </div>
@@ -658,6 +867,7 @@ const ResearchSourcesFeed: React.FC<ResearchSourcesFeedProps> = ({
         {viewMode === 'feed' && renderFeedView()}
         {viewMode === 'grid' && renderGridView()}
         {viewMode === 'compact' && renderCompactView()}
+        {viewMode === 'browser' && renderBrowserView()}
       </div>
       
       {/* Quick Navigation (Feed View) */}

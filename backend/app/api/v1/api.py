@@ -20,6 +20,13 @@ if EVENT_ENDPOINTS_AVAILABLE:
     api_router.include_router(event_swarm.router, prefix="/event-swarm", tags=["event-swarm"])
     api_router.include_router(event_test.router, prefix="/event-test", tags=["event-test"])
 
+# Include True Dynamic Swarm endpoints
+try:
+    from app.api.v1.endpoints import true_dynamic_swarm
+    api_router.include_router(true_dynamic_swarm.router, prefix="/true-dynamic-swarm", tags=["true-dynamic-swarm"])
+except ImportError as e:
+    print(f"Warning: Could not import true dynamic swarm endpoints: {e}")
+
 # Include human-in-the-loop endpoints
 try:
     from app.api.v1.endpoints import human_loop

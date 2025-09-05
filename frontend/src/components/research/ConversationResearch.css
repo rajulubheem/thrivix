@@ -370,15 +370,15 @@
 .message {
   margin-bottom: 2rem;
   animation: fadeIn 0.3s ease-in;
+  display: flex;
+  width: 100%;
 }
 
 .message.user {
-  display: flex;
   justify-content: flex-end;
 }
 
 .message.assistant {
-  display: flex;
   justify-content: flex-start;
 }
 
@@ -392,6 +392,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  width: 100%;
 }
 
 .message-header {
@@ -400,6 +401,15 @@
   gap: 0.5rem;
   padding: 0 0.5rem;
   margin-bottom: 0.5rem;
+  width: fit-content;
+}
+
+.message.user .message-header {
+  margin-left: auto;
+}
+
+.message.assistant .message-header {
+  margin-right: auto;
 }
 
 .message-icon {
@@ -446,18 +456,22 @@
   border-radius: 12px;
   line-height: 1.6;
   color: var(--text-primary);
+  width: fit-content;
+  max-width: 100%;
 }
 
 .message.user .message-content {
   background: linear-gradient(135deg, var(--purple-500), var(--blue-500));
   color: white;
   border-radius: 18px 18px 4px 18px;
+  margin-left: auto;
 }
 
 .message.assistant .message-content {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 4px 18px 18px 18px;
+  margin-right: auto;
 }
 
 /* Markdown Styles */
@@ -556,6 +570,11 @@
   margin-top: 0.75rem;
   padding-top: 0.75rem;
   border-top: 1px solid var(--border-color);
+  width: fit-content;
+}
+
+.message.assistant .message-actions {
+  margin-right: auto;
 }
 
 .btn-feedback {
@@ -656,6 +675,7 @@
   display: flex;
   gap: 1rem;
   align-items: flex-end;
+  width: 100%;
 }
 
 .message-input {
@@ -976,6 +996,11 @@
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border-color);
+  width: fit-content;
+}
+
+.message.assistant .message-sources {
+  margin-right: auto;
 }
 
 .sources-label {
@@ -1072,6 +1097,19 @@
   .message-wrapper {
     max-width: 85%;
   }
+  
+  .message.user .message-content,
+  .message.user .message-header {
+    margin-left: auto;
+  }
+  
+  .message.assistant .message-content,
+  .message.assistant .message-header,
+  .message.assistant .message-actions,
+  .message.assistant .message-sources,
+  .message.assistant .message-screenshots {
+    margin-right: auto;
+  }
 }
 
 @media (max-width: 768px) {
@@ -1090,4 +1128,13 @@
   .suggestion-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Message Screenshots Alignment */
+.message-screenshots {
+  width: fit-content;
+}
+
+.message.assistant .message-screenshots {
+  margin-right: auto;
 }

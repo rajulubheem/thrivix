@@ -13,7 +13,8 @@ import {
   Code,
   Layers,
   Globe,
-  Activity
+  Activity,
+  Network
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -31,6 +32,14 @@ const features = [
     link: '/event-swarm',
     color: 'text-blue-500',
     badge: 'Advanced'
+  },
+  {
+    icon: Users,
+    title: 'True Dynamic Swarm',
+    description: 'Session-based agent coordination with automatic sub-agent spawning and shared memory',
+    link: '/true-dynamic-swarm',
+    color: 'text-cyan-500',
+    badge: 'NEW'
   },
   {
     icon: Brain,

@@ -757,6 +757,127 @@ button:not(.primary):not(.btn-primary):hover {
   border-color: var(--border-accent);
 }
 
+/* ============================================
+   GLOBAL THINKING/PROGRESS PANEL OVERRIDES
+   Force consistent theming across all components
+   ============================================ */
+
+/* Thinking Box Global Overrides */
+.thinking-box, 
+[class*="thinking-box"],
+[class*="progress-panel"],
+[class*="research-progress"] {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-primary) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* Thinking Header Global Overrides */
+.thinking-header,
+[class*="thinking-header"],
+[class*="progress-header"] {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border-bottom: 1px solid var(--border-muted) !important;
+}
+
+/* Thought Items Global Overrides */
+.thought-item,
+[class*="thought-item"],
+[class*="progress-item"],
+[class*="research-step"],
+.progress-step {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-muted) !important;
+  color: var(--text-primary) !important;
+  border-radius: 0.5rem !important;
+  padding: 0.75rem 1rem !important;
+  margin: 0.5rem 0 !important;
+  box-shadow: var(--shadow-xs) !important;
+}
+
+/* Progress Type/Step Labels */
+.thought-type,
+[class*="thought-type"],
+[class*="progress-type"],
+[class*="step-type"],
+.progress-label {
+  color: var(--accent-royal) !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  font-size: 0.75rem !important;
+  letter-spacing: 0.5px !important;
+}
+
+/* Progress Content */
+.thought-content,
+[class*="thought-content"],
+[class*="progress-content"],
+[class*="step-content"] {
+  color: var(--text-primary) !important;
+  line-height: 1.5 !important;
+}
+
+/* Stop Button in Progress */
+.stop-btn,
+[class*="stop-btn"],
+[class*="stop-button"] {
+  background: var(--color-error-bg) !important;
+  color: var(--color-error) !important;
+  border: 1px solid var(--color-error) !important;
+}
+
+.stop-btn:hover,
+[class*="stop-btn"]:hover {
+  background: var(--color-error) !important;
+  color: var(--text-on-accent) !important;
+}
+
+/* Additional broad overrides for any missed elements */
+div[style*="background-color: rgb(55, 65, 81)"],
+div[style*="background-color: #374151"],
+div[style*="background-color: rgb(75, 85, 99)"],
+div[style*="background-color: #4b5563"] {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Override any hardcoded dark backgrounds */
+*[class*="bg-gray-600"],
+*[class*="bg-gray-700"],
+*[class*="bg-gray-800"],
+*[class*="bg-slate-600"],
+*[class*="bg-slate-700"],
+*[class*="bg-slate-800"] {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
+/* Modal button contrast fixes */
+.modal-content button,
+.modal-actions button {
+  font-weight: 500 !important;
+  font-size: 0.875rem !important;
+  line-height: 1.2 !important;
+}
+
+.btn-primary,
+button.btn-primary {
+  background: var(--accent-royal) !important;
+  color: white !important;
+  border: none !important;
+}
+
+.btn-secondary,
+button.btn-secondary {
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-default) !important;
+}
+
 /* Print styles */
 @media print {
   body {

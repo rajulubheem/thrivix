@@ -265,7 +265,7 @@ Based on ALL the above analysis, write your response with:
 9. **Synthesis Insights** - Key insights from final use_llm_fixed analysis
 10. **Research Gaps** - 400+ words on what remains unknown
 
-MINIMUM OUTPUT: 4000 words
+MINIMUM OUTPUT: 2000 words
 
 CRITICAL CITATION REQUIREMENTS:
 - Use inline citations [1], [2], [3] etc. for EVERY factual claim

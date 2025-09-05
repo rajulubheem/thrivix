@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Event Swarm Test - Fixed</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+        #messages { 
+            height: 400px; 
+            overflow-y: auto; 
+            background: #f5f5f5; 
+            padding: 10px; 
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            line-height: 1.5;
+        }
+        #status { padding: 10px; background: #e0f0ff; margin: 10px 0; }
+        button { padding: 10px 20px; margin: 10px 0; }
+        input { width: 100%; padding: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Event-Driven Swarm Test (Fixed)</h1>
+    
+    <div class="section">
+        <input type="text" id="task" value="Write a hello world program in Python" />
+        <button onclick="executeSwarm()">Execute Swarm</button>
+        <div id="status">Ready</div>
+    </div>
+    
+    <div class="section">
+        <h3>Agent Output</h3>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let isExecuting = false;
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        async function executeSwarm() {
+            if (isExecuting) {
+                updateStatus('Already executing!');
+                return;
+            }
+
+            const task = document.getElementById('task').value;
+            if (!task.trim()) {
+                updateStatus('Please enter a task');
+                return;
+            }
+
+            isExecuting = true;
+            document.getElementById('messages').textContent = '';
+            updateStatus('Starting execution...');
+
+            try {
+                // Start the execution
+                const response = await fetch('http://localhost:8000/api/v1/streaming/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        task: task,
+                        execution_mode: 'event_driven',
+                        agents: [],
+                        max_handoffs: 20
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to start: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                const sessionId = data.session_id;
+                
+                updateStatus(`Executing... Session: ${sessionId}`);
+                
+                // Start polling
+                await pollForUpdates(sessionId);
+                
+            } catch (error) {
+                updateStatus(`Error: ${error.message}`);
+                isExecuting = false;
+            }
+        }
+
+        async function pollForUpdates(sessionId) {
+            let offset = 0;
+            const messagesEl = document.getElementById('messages');
+            const agentMessages = new Map(); // Track messages per agent
+            let displayContent = '';
+
+            while (isExecuting) {
+                try {
+                    const response = await fetch(
+                        `http://localhost:8000/api/v1/streaming/poll/${sessionId}?offset=${offset}&timeout=5`
+                    );
+
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            updateStatus('Session expired');
+                            isExecuting = false;
+                            break;
+                        }
+                        throw new Error(`Poll failed: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    console.log('Poll response:', data); // Debug logging
+                    
+                    if (data.chunks && data.chunks.length > 0) {
+                        for (const chunk of data.chunks) {
+                            // Process agent start
+                            if (chunk.type === 'agent_start' && chunk.agent) {
+                                agentMessages.set(chunk.agent, '');
+                                displayContent += `\n🤖 Agent ${chunk.agent} started\n`;
+                                messagesEl.textContent = displayContent;
+                                messagesEl.scrollTop = messagesEl.scrollHeight;
+                            }
+                            // Process delta chunks for content - accumulate per agent
+                            else if (chunk.type === 'delta' && chunk.agent && chunk.content) {
+                                const current = agentMessages.get(chunk.agent) || '';
+                                const updated = current + chunk.content;
+                                agentMessages.set(chunk.agent, updated);
+                                
+                                // Rebuild display with all agent messages
+                                let tempDisplay = '';
+                                agentMessages.forEach((content, agent) => {
+                                    if (content) {
+                                        tempDisplay += `[${agent}]:\n${content}\n\n`;
+                                    }
+                                });
+                                messagesEl.textContent = tempDisplay;
+                                messagesEl.scrollTop = messagesEl.scrollHeight;
+                            }
+                            // Process handoff events
+                            else if (chunk.type === 'handoff') {
+                                displayContent = messagesEl.textContent;
+                                displayContent += `\n🔄 Handoff: ${chunk.from} → ${chunk.to}\n\n`;
+                                messagesEl.textContent = displayContent;
+                                messagesEl.scrollTop = messagesEl.scrollHeight;
+                            }
+                            // Process agent completion
+                            else if (chunk.type === 'agent_done' || chunk.type === 'agent_completed') {
+                                if (chunk.agent) {
+                                    displayContent = messagesEl.textContent;
+                                    displayContent += `\n✅ ${chunk.agent} completed\n`;
+                                    messagesEl.textContent = displayContent;
+                                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                                }
+                            }
+                        }
+                        offset += data.chunks.length;
+                    }
+
+                    if (data.status === 'completed' || data.status === 'complete') {
+                        updateStatus('Execution completed successfully!');
+                        isExecuting = false;
+                        break;
+                    } else if (data.status === 'failed') {
+                        updateStatus('Execution failed');
+                        isExecuting = false;
+                        break;
+                    }
+                    
+                } catch (error) {
+                    console.error('Polling error:', error);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+    </script>
+</body>
+</html>

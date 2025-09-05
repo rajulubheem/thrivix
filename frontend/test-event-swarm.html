@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Event Swarm Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+        #messages { height: 300px; overflow-y: auto; background: #f5f5f5; padding: 10px; }
+        #events { height: 200px; overflow-y: auto; background: #f0f0f0; padding: 10px; }
+        .agent { padding: 5px; margin: 5px 0; background: #e0e0e0; }
+        button { padding: 10px 20px; margin: 10px 0; }
+        input { width: 100%; padding: 5px; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Event-Driven Swarm Test</h1>
+    
+    <div class="section">
+        <h3>Task Input</h3>
+        <input type="text" id="task" value="Write hello world in Python" />
+        <button onclick="executeSwarm()">Execute Swarm</button>
+        <div id="status"></div>
+    </div>
+    
+    <div class="section">
+        <h3>Active Agents</h3>
+        <div id="agents"></div>
+    </div>
+    
+    <div class="section">
+        <h3>Messages</h3>
+        <div id="messages"></div>
+    </div>
+    
+    <div class="section">
+        <h3>Events</h3>
+        <div id="events"></div>
+    </div>
+
+    <script>
+        let isExecuting = false;
+        let agents = new Map();
+        let messages = [];
+        let events = [];
+
+        function log(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.innerHTML = `<span class="${type}">${message}</span>`;
+            console.log(message);
+        }
+
+        function updateUI() {
+            // Update agents
+            const agentsEl = document.getElementById('agents');
+            agentsEl.innerHTML = Array.from(agents.values())
+                .map(agent => `<div class="agent">${agent.name} - ${agent.status}</div>`)
+                .join('');
+            
+            // Update messages
+            const messagesEl = document.getElementById('messages');
+            messagesEl.innerHTML = messages.join('<br>');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            
+            // Update events
+            const eventsEl = document.getElementById('events');
+            eventsEl.innerHTML = events.slice(-20)
+                .map(e => `${e.type} - ${e.data?.agent || ''} ${e.timestamp}`)
+                .join('<br>');
+            eventsEl.scrollTop = eventsEl.scrollHeight;
+        }
+
+        async function executeSwarm() {
+            if (isExecuting) {
+                log('Already executing!', 'error');
+                return;
+            }
+
+            const task = document.getElementById('task').value;
+            if (!task.trim()) {
+                log('Please enter a task', 'error');
+                return;
+            }
+
+            isExecuting = true;
+            agents.clear();
+            messages = [];
+            events = [];
+            updateUI();
+            
+            log('Starting execution...', 'info');
+
+            try {
+                // Start the execution
+                const response = await fetch('http://localhost:8000/api/v1/streaming/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        task: task,
+                        execution_mode: 'event_driven',
+                        agents: [],
+                        max_handoffs: 20
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to start: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                const sessionId = data.session_id;
+                
+                if (!sessionId) {
+                    throw new Error('No session ID received');
+                }
+
+                log(`Started session: ${sessionId}`, 'success');
+                
+                // Start polling
+                pollForUpdates(sessionId);
+                
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+                isExecuting = false;
+            }
+        }
+
+        async function pollForUpdates(sessionId) {
+            let offset = 0;
+            let retries = 0;
+            const maxRetries = 3;
+
+            while (isExecuting) {
+                try {
+                    const response = await fetch(
+                        `http://localhost:8000/api/v1/streaming/poll/${sessionId}?offset=${offset}&timeout=5`
+                    );
+
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            log('Session expired', 'error');
+                            isExecuting = false;
+                            break;
+                        }
+                        throw new Error(`Poll failed: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    
+                    if (data.chunks && data.chunks.length > 0) {
+                        for (const chunk of data.chunks) {
+                            processChunk(chunk);
+                        }
+                        offset += data.chunks.length;
+                        updateUI();
+                    }
+
+                    if (data.status === 'completed' || data.status === 'failed') {
+                        log(`Execution ${data.status}`, data.status === 'completed' ? 'success' : 'error');
+                        isExecuting = false;
+                        break;
+                    }
+
+                    retries = 0;
+                    
+                } catch (error) {
+                    console.error('Polling error:', error);
+                    retries++;
+                    if (retries >= maxRetries) {
+                        log('Polling failed after max retries', 'error');
+                        isExecuting = false;
+                        break;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+
+        function processChunk(chunk) {
+            console.log('Processing chunk:', chunk);
+            
+            // Add event
+            events.push({
+                type: chunk.type,
+                data: chunk,
+                timestamp: new Date().toLocaleTimeString()
+            });
+            
+            switch (chunk.type) {
+                case 'agent_start':
+                    if (chunk.agent) {
+                        agents.set(chunk.agent, {
+                            name: chunk.agent,
+                            status: 'working'
+                        });
+                    }
+                    break;
+                
+                case 'delta':
+                case 'token':
+                case 'text':
+                    if (chunk.agent && chunk.content) {
+                        const lastMsg = messages[messages.length - 1];
+                        if (lastMsg && lastMsg.startsWith(`[${chunk.agent}]`)) {
+                            messages[messages.length - 1] += chunk.content;
+                        } else {
+                            messages.push(`[${chunk.agent}] ${chunk.content}`);
+                        }
+                    }
+                    break;
+                
+                case 'agent_done':
+                case 'agent_completed':
+                    if (chunk.agent) {
+                        const agent = agents.get(chunk.agent);
+                        if (agent) {
+                            agent.status = 'complete';
+                        }
+                    }
+                    break;
+                
+                case 'handoff':
+                    const from = chunk.from || '?';
+                    const to = chunk.to || '?';
+                    messages.push(`\n🔄 Handoff: ${from} → ${to}\n`);
+                    break;
+                
+                case 'error':
+                    messages.push(`\n❌ Error: ${chunk.message || chunk.error || 'Unknown error'}\n`);
+                    break;
+            }
+        }
+    </script>
+</body>
+</html>

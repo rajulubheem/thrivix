@@ -833,13 +833,19 @@ export const EventDrivenSwarmInterface: React.FC = () => {
                     name: chunk.agent,
                     role: 'Event-driven agent',
                     status: 'working',
-                    progress: 50,
-                    tasks: 0,
+                    contentPreview: '',
+                    currentThought: 'Processing...',
+                    currentTask: 'Analyzing task...',
+                    lastActivity: new Date().toISOString(),
+                    outputCount: 0,
+                    toolsUsed: [],
                     recentActions: [],
                     progressHistory: [],
                     totalTokens: 0,
                     executionTime: 0,
-                    successRate: 95
+                    successRate: 95,
+                    aiReasoning: undefined,
+                    taskComplete: false
                   });
                   return newAgentMap;
                 }

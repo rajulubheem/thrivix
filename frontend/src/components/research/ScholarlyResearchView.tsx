@@ -87,7 +87,7 @@ const ScholarlyResearchView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [bookmarkedSources, setBookmarkedSources] = useState<Set<string>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['abstract', 'findings']));
-  const [viewMode, setViewMode] = useState<'chat' | 'paper'>('paper');
+  const [viewMode, setViewMode] = useState<'chat' | 'paper'>('chat');
   const [showCitations, setShowCitations] = useState(true);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -1130,13 +1130,6 @@ const ScholarlyResearchView: React.FC = () => {
             <History size={16} />
             <span>History ({sessions.length})</span>
           </button>
-          <button 
-            onClick={() => setViewMode(viewMode === 'chat' ? 'paper' : 'chat')}
-            className="view-toggle-btn"
-          >
-            {viewMode === 'chat' ? <FileText size={16} /> : <MessageSquare size={16} />}
-            <span>{viewMode === 'chat' ? 'Paper View' : 'Chat View'}</span>
-          </button>
           <button onClick={handlePrint} className="action-btn">
             <Printer size={16} />
             <span>Print</span>
@@ -1200,170 +1193,143 @@ const ScholarlyResearchView: React.FC = () => {
       )}
 
       <div className="scholarly-content">
-        {/* Main Content Area */}
+        {/* Main Content Area - Chat View Only */}
         <div className="research-main">
-          {viewMode === 'paper' ? (
-            /* Paper View */
-            <div className="paper-view">
-              {messages.filter(m => m.role === 'assistant').map((message, idx) => {
-                const sections = parseScholarlyContent(message.content, message.sources);
-                return (
-                  <article key={idx} className="research-paper">
-                    {/* Paper Header */}
-                    <header className="paper-header">
-                      <div className="paper-meta">
-                        <span className="paper-date">
-                          {new Date(message.timestamp || '').toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'long',
-                            day: 'numeric'
-                          })}
-                        </span>
-                        <span className="paper-mode">{modeConfig[message.mode || 'deep'].name}</span>
-                      </div>
-                    </header>
-
-                    {/* Abstract Section */}
-                    {sections.abstract && (
-                      <section className="paper-section">
-                        <div 
-                          className="section-header"
-                          onClick={() => toggleSection('abstract')}
-                        >
-                          <h2>Abstract</h2>
-                          {expandedSections.has('abstract') ? 
-                            <ChevronUp size={20} /> : <ChevronDown size={20} />
-                          }
-                        </div>
-                        {expandedSections.has('abstract') && (
-                          <div className="section-content abstract">
-                            <div dangerouslySetInnerHTML={{ __html: sections.abstract }} />
-                          </div>
-                        )}
-                      </section>
-                    )}
-
-                    {/* Main Sections */}
-                    {['introduction', 'methodology', 'findings', 'discussion', 'conclusion'].map(section => {
-                      const content = sections[section as keyof typeof sections];
-                      if (!content || typeof content !== 'string') return null;
-                      
-                      return (
-                        <section key={section} className="paper-section">
-                          <div 
-                            className="section-header"
-                            onClick={() => toggleSection(section)}
-                          >
-                            <h2>{section.charAt(0).toUpperCase() + section.slice(1)}</h2>
-                            {expandedSections.has(section) ? 
-                              <ChevronUp size={20} /> : <ChevronDown size={20} />
-                            }
-                          </div>
-                          {expandedSections.has(section) && (
-                            <div 
-                              className="section-content"
-                              dangerouslySetInnerHTML={{ __html: content }}
-                            />
-                          )}
-                        </section>
-                      );
-                    })}
-
-                    {/* References Section */}
-                    {message.sources && message.sources.length > 0 && (
-                      <section className="paper-section references">
-                        <div className="section-header">
-                          <h2>References</h2>
-                        </div>
-                        <div className="references-list">
-                          {message.sources.map((source, idx) => (
-                            <div key={source.id} id={`ref-${idx + 1}`} className="reference-item">
-                              <span className="ref-number">[{idx + 1}]</span>
-                              <div className="ref-content">
-                                <div className="ref-text">
-                                  {formatCitation(source, idx + 1)}
-                                </div>
-                                <div className="ref-actions">
-                                  <button
-                                    onClick={() => toggleBookmark(source.id)}
-                                    className={`bookmark-btn ${bookmarkedSources.has(source.id) ? 'bookmarked' : ''}`}
-                                  >
-                                    {bookmarkedSources.has(source.id) ? 
-                                      <BookmarkCheck size={14} /> : <Bookmark size={14} />
+          <div className="chat-view">
+            {messages.map((message, index) => (
+              <div key={message.id || index} className={`message ${message.role}`}>
+                <div className="message-avatar">
+                  {message.role === 'user' ? <User size={20} /> : <Bot size={20} />}
+                </div>
+                <div className="message-content">
+                  <div className="formatted-content">
+                    <ReactMarkdown 
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: ({ href, children, ...props }) => {
+                          // Check if this is a citation link [1], [2], etc.
+                          const citationMatch = children?.toString().match(/^\[(\d+)\]$/);
+                          if (citationMatch && message.sources) {
+                            const sourceIndex = parseInt(citationMatch[1]) - 1;
+                            const source = message.sources[sourceIndex];
+                            if (source) {
+                              return (
+                                <a
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="citation-link"
+                                  title={`${source.title} - ${source.domain}`}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    // Highlight the corresponding source
+                                    const sourceElement = document.getElementById(`source-${sourceIndex}`);
+                                    if (sourceElement) {
+                                      sourceElement.scrollIntoView({ behavior: 'smooth' });
+                                      sourceElement.classList.add('highlight');
+                                      setTimeout(() => sourceElement.classList.remove('highlight'), 2000);
                                     }
-                                  </button>
-                                  <a href={source.url} target="_blank" rel="noopener noreferrer">
-                                    <ExternalLink size={14} />
-                                  </a>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </section>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
-          ) : (
-            /* Chat View - With message history */
-            <div className="chat-view">
-              {messages.map((message, index) => (
-                <div key={message.id || index} className={`message ${message.role}`}>
-                  <div className="message-avatar">
-                    {message.role === 'user' ? <User size={20} /> : <Bot size={20} />}
+                                    // Also open the link
+                                    window.open(source.url, '_blank');
+                                  }}
+                                >
+                                  <sup style={{ color: 'var(--accent-royal)', fontWeight: 600 }}>
+                                    [{citationMatch[1]}]
+                                  </sup>
+                                </a>
+                              );
+                            }
+                          }
+                          // Regular link
+                          return (
+                            <a href={href} target="_blank" rel="noopener noreferrer" className="external-link" {...props}>
+                              {children}
+                            </a>
+                          );
+                        },
+                        code: ({ node, className, children, ...props }: any) => {
+                          const inline = props.inline;
+                          if (!inline) {
+                            return (
+                              <pre className="code-block">
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              </pre>
+                            );
+                          }
+                          return <code className="inline-code" {...props}>{children}</code>;
+                        },
+                        h1: ({ children }) => <h1 className="content-h1">{children}</h1>,
+                        h2: ({ children }) => <h2 className="content-h2">{children}</h2>,
+                        h3: ({ children }) => <h3 className="content-h3">{children}</h3>,
+                        p: ({ children }) => <p className="content-p">{children}</p>,
+                        ul: ({ children }) => <ul className="content-ul">{children}</ul>,
+                        ol: ({ children }) => <ol className="content-ol">{children}</ol>,
+                        li: ({ children }) => <li className="content-li">{children}</li>,
+                        blockquote: ({ children }) => <blockquote className="content-blockquote">{children}</blockquote>,
+                        strong: ({ children }) => <strong className="content-strong">{children}</strong>,
+                        em: ({ children }) => <em className="content-em">{children}</em>,
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
                   </div>
-                  <div className="message-content">
-                    {message.role === 'assistant' && message.sources ? (
-                      <div className="formatted-content">
-                        <div 
-                          dangerouslySetInnerHTML={{ 
-                            __html: formatMarkdownContent(parseContentWithReferences(message.content, message.sources))
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="formatted-content">
-                        {message.role === 'assistant' ? (
-                          <div dangerouslySetInnerHTML={{ __html: formatMarkdownContent(message.content) }} />
-                        ) : (
-                          <ReactMarkdown 
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ node, ...props }) => (
-                                <a {...props} target="_blank" rel="noopener noreferrer" />
-                              ),
-                            }}
+                  
+                  {/* Show sources for this message */}
+                  {message.sources && message.sources.length > 0 && (
+                    <div className="message-sources">
+                      <h4><Globe size={16} /> Sources ({message.sources.length})</h4>
+                      <div className="message-sources-list">
+                        {message.sources.map((source, idx) => (
+                          <div 
+                            key={source.id || idx} 
+                            id={`source-${idx}`}
+                            className="message-source-item"
                           >
-                            {message.content}
-                          </ReactMarkdown>
-                        )}
-                      </div>
-                    )}
-                    
-                    {/* Show sources for this message */}
-                    {message.sources && message.sources.length > 0 && (
-                      <div className="message-sources">
-                        <h4>Sources ({message.sources.length})</h4>
-                        <div className="message-sources-list">
-                          {message.sources.map((source, idx) => (
-                            <div key={source.id} className="message-source-item">
-                              <span className="source-ref">[{idx + 1}]</span>
-                              <a href={source.url} target="_blank" rel="noopener noreferrer">
+                            <span className="source-ref">[{idx + 1}]</span>
+                            <div className="source-content">
+                              <a 
+                                href={source.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                title={source.title}
+                                className="source-link"
+                              >
                                 {source.title}
                               </a>
+                              <span className="source-domain">({source.domain})</span>
                             </div>
-                          ))}
-                        </div>
+                            <div className="source-actions">
+                              <button
+                                onClick={() => toggleBookmark(source.id)}
+                                className={`bookmark-btn ${bookmarkedSources.has(source.id) ? 'bookmarked' : ''}`}
+                                title={bookmarkedSources.has(source.id) ? 'Remove bookmark' : 'Bookmark this source'}
+                              >
+                                {bookmarkedSources.has(source.id) ? 
+                                  <BookmarkCheck size={14} /> : <Bookmark size={14} />
+                                }
+                              </button>
+                              <a 
+                                href={source.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="external-link-btn"
+                                title="Open in new tab"
+                              >
+                                <ExternalLink size={14} />
+                              </a>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
 
           {/* Thinking Box */}
           {isThinking && (
@@ -1434,7 +1400,7 @@ const ScholarlyResearchView: React.FC = () => {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={`${messages.length > 0 ? 'Continue the conversation...' : `Ask for ${modeConfig[mode].name.toLowerCase()}...`}`}
+            placeholder={`${messages.length > 0 ? 'Continue the conversation...' : 'What would you like to research?'}`}
             className="research-input"
             disabled={isLoading}
           />
