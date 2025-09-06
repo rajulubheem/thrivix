@@ -40,6 +40,7 @@ import ReactMarkdown from "react-markdown";
 import HumanInTheLoopPanel from "./HumanInTheLoopPanel";
 import ActiveAgentsPanel, { DetailedAgentState } from "./ActiveAgentsPanel";
 import AgentMonitor from "./AgentMonitor";
+import { ModernLayout } from "../layout/ModernLayout";
 
 interface SwarmEvent {
   id: string;
@@ -1224,23 +1225,24 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     if (type.includes("started") || type.includes("spawned"))
       return "text-blue-500";
     if (type.includes("human")) return "text-purple-500";
-    return "text-gray-500";
+    return "text-muted-foreground";
   };
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 dark:bg-gray-900">
+    <ModernLayout>
+      <div className="h-full flex flex-col bg-background">
       {/* Enhanced Header with Stats */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+      <div className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
               <Sparkles className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              <h1 className="text-xl font-bold text-foreground">
                 Event-Driven Swarm
               </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-muted-foreground">
                 Intelligent multi-agent execution platform
               </p>
             </div>
@@ -1251,18 +1253,18 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             <div className="flex items-center gap-3 text-sm">
               <div className="flex items-center gap-1">
                 <Users className="h-4 w-4 text-blue-500" />
-                <span className="font-medium">{agents.size}</span>
-                <span className="text-gray-500">agents</span>
+                <span className="font-medium text-foreground">{agents.size}</span>
+                <span className="text-muted-foreground">agents</span>
               </div>
               <div className="flex items-center gap-1">
                 <Activity className="h-4 w-4 text-green-500" />
-                <span className="font-medium">{activeAgentCount}</span>
-                <span className="text-gray-500">active</span>
+                <span className="font-medium text-foreground">{activeAgentCount}</span>
+                <span className="text-muted-foreground">active</span>
               </div>
               <div className="flex items-center gap-1">
                 <BarChart3 className="h-4 w-4 text-purple-500" />
-                <span className="font-medium">{totalEvents}</span>
-                <span className="text-gray-500">events</span>
+                <span className="font-medium text-foreground">{totalEvents}</span>
+                <span className="text-muted-foreground">events</span>
               </div>
             </div>
 
@@ -1288,12 +1290,12 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar - Task Input & Controls */}
-        <div className="w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+        <div className="w-80 bg-card border-r border-border flex flex-col">
           {/* Task Input */}
-          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="p-4 border-b border-border">
             <div className="space-y-3">
               <div>
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                <label className="text-sm font-medium text-foreground">
                   Task Description
                 </label>
                 <Textarea
@@ -1338,7 +1340,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
           </div>
 
           {/* Configuration */}
-          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="p-4 border-b border-border">
             <Button
               onClick={() => setShowConfig(!showConfig)}
               variant="ghost"
@@ -1354,7 +1356,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             {showConfig && (
               <div className="mt-3 space-y-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                  <label className="text-xs font-medium text-muted-foreground">
                     Max Concurrent ({maxConcurrentAgents})
                   </label>
                   <Input
@@ -1369,7 +1371,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                  <label className="text-xs font-medium text-muted-foreground">
                     Max Total Agents ({maxTotalAgents})
                   </label>
                   <Input
@@ -1384,7 +1386,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                  <label className="text-xs font-medium text-muted-foreground">
                     Execution Timeout ({maxExecutionTime}s)
                   </label>
                   <Input
@@ -1417,20 +1419,20 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
           {/* Quick Stats */}
           <div className="p-4 space-y-2">
-            <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">
+            <div className="text-xs font-medium text-muted-foreground mb-2">
               Current Session
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-gray-50 dark:bg-gray-700 p-2 rounded">
+              <div className="bg-muted p-2 rounded">
                 <div className="font-medium text-blue-600 dark:text-blue-400">Active</div>
                 <div className="text-lg font-bold">{activeAgentCount}</div>
               </div>
-              <div className="bg-gray-50 dark:bg-gray-700 p-2 rounded">
+              <div className="bg-muted p-2 rounded">
                 <div className="font-medium text-green-600 dark:text-green-400">Complete</div>
                 <div className="text-lg font-bold">{completedAgentCount}</div>
               </div>
             </div>
-            <div className="bg-gray-50 dark:bg-gray-700 p-2 rounded">
+            <div className="bg-muted p-2 rounded">
               <div className="font-medium text-purple-600 dark:text-purple-400">Total Events</div>
               <div className="text-lg font-bold">{totalEvents}</div>
             </div>
@@ -1439,10 +1441,10 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
         {/* Center - Messages/Output */}
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-2">
+          <div className="bg-card border-b border-border px-4 py-2">
             <div className="flex items-center justify-between">
-              <h2 className="font-medium text-gray-900 dark:text-gray-100">Agent Output</h2>
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+              <h2 className="font-medium text-foreground">Agent Output</h2>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>{messages.length} messages</span>
                 {recentEvents > 0 && (
                   <Badge variant="outline" className="text-xs">
@@ -1462,10 +1464,10 @@ export const EventDrivenSwarmInterface: React.FC = () => {
               {messages.length === 0 && !isExecuting && (
                 <div className="flex flex-col items-center justify-center h-full text-center">
                   <Bot className="h-12 w-12 text-gray-400 mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
+                  <h3 className="text-lg font-medium text-foreground mb-2">
                     Ready for Execution
                   </h3>
-                  <p className="text-gray-500 dark:text-gray-400 max-w-md">
+                  <p className="text-muted-foreground max-w-md">
                     Enter a task description and click Execute to start the swarm. 
                     Agents will collaborate to complete your task.
                   </p>
@@ -1488,10 +1490,10 @@ export const EventDrivenSwarmInterface: React.FC = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-2">
-                          <span className="font-semibold text-gray-900 dark:text-gray-100">
+                          <span className="font-semibold text-foreground">
                             {message.agent}
                           </span>
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-muted-foreground">
                             {message.timestamp.toLocaleTimeString()}
                           </span>
                           {message.streaming && (
@@ -1512,7 +1514,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
                             )}
                           </Button>
                         </div>
-                        <div className="prose prose-sm dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-800 p-3 rounded-lg">
+                        <div className="prose prose-sm dark:prose-invert max-w-none bg-muted p-3 rounded-lg">
                           <ReactMarkdown>{message.content}</ReactMarkdown>
                           {message.streaming && (
                             <span className="inline-block w-1 h-4 bg-blue-500 ml-1 animate-pulse" />
@@ -1524,7 +1526,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
                   {(message.type === "handoff" || message.type === "system") && (
                     <div className="flex justify-center mb-4">
-                      <div className="bg-gray-100 dark:bg-gray-700 px-4 py-2 rounded-full text-sm">
+                      <div className="bg-muted px-4 py-2 rounded-full text-sm">
                         <ReactMarkdown>{message.content}</ReactMarkdown>
                       </div>
                     </div>
@@ -1548,7 +1550,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
         </div>
 
         {/* Right Sidebar - Agent Monitor */}
-        <div className="w-96 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700">
+        <div className="w-96 bg-card border-l border-border">
           <AgentMonitor
             agents={agents}
             events={events}
@@ -1557,6 +1559,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
           />
         </div>
       </div>
-    </div>
+      </div>
+    </ModernLayout>
   );
 };

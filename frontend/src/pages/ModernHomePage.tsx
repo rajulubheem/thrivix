@@ -26,43 +26,31 @@ import { ModernLayout } from '../components/layout/ModernLayout';
 
 const features = [
   {
-    icon: Users,
-    title: 'Event-Driven Agent Swarm',
-    description: 'Truly dynamic AI agents that spawn specialists based on task needs with real-time transparency',
-    link: '/event-swarm',
-    color: 'text-blue-500',
-    badge: 'Advanced'
-  },
-  {
-    icon: Users,
-    title: 'True Dynamic Swarm',
-    description: 'Session-based agent coordination with automatic sub-agent spawning and shared memory',
-    link: '/true-dynamic-swarm',
-    color: 'text-cyan-500',
-    badge: 'NEW'
-  },
-  {
     icon: Brain,
     title: 'Research Intelligence',
-    description: 'Deep analysis with real-time web search and comprehensive data synthesis',
+    description: 'Advanced web search with comprehensive analysis and source citations. Perfect for research tasks and in-depth queries.',
     link: '/conversation',
     color: 'text-purple-500',
-    badge: 'Most Popular'
+    badge: 'Most Popular',
+    gradient: 'from-purple-500/20 to-pink-500/20'
   },
   {
-    icon: MessageSquare,
-    title: 'Knowledge Assistant',
-    description: 'Context-aware dialogue system with persistent memory and learning',
-    link: '/orchestrator',
-    color: 'text-green-500'
+    icon: Activity,
+    title: 'Event-Driven Swarm',
+    description: 'Dynamic AI agents that automatically spawn specialists based on task complexity with real-time collaboration.',
+    link: '/event-swarm',
+    color: 'text-blue-500',
+    badge: 'Advanced',
+    gradient: 'from-blue-500/20 to-cyan-500/20'
   },
   {
-    icon: Zap,
-    title: 'Workflow Automation',
-    description: 'Build custom pipelines with intelligent task routing and execution',
-    link: '/true-swarm',
-    color: 'text-yellow-500',
-    badge: 'Beta'
+    icon: Users,
+    title: 'Pre-Defined Swarm',
+    description: 'Structured multi-agent coordination with specialized roles for complex problem-solving workflows.',
+    link: '/swarm',
+    color: 'text-green-500',
+    badge: 'Stable',
+    gradient: 'from-green-500/20 to-emerald-500/20'
   }
 ];
 
@@ -99,12 +87,12 @@ export const ModernHomePage: React.FC = () => {
                 Run locally or deploy your own instance.
               </p>
               <div className="mt-8 flex gap-4 justify-center">
-                <Button size="lg" onClick={() => navigate('/swarm')}>
-                  Launch Swarm Mode
+                <Button size="lg" onClick={() => navigate('/conversation')}>
+                  Start Research
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
-                <Button size="lg" variant="outline" onClick={() => navigate('/conversation')}>
-                  Start Conversation
+                <Button size="lg" variant="outline" onClick={() => navigate('/event-swarm')}>
+                  Event Swarm
                 </Button>
               </div>
             </div>
@@ -117,9 +105,9 @@ export const ModernHomePage: React.FC = () => {
             <div className="grid grid-cols-4 gap-8">
               {stats.map((stat) => (
                 <div key={stat.label} className="text-center">
-                  <div className="text-2xl font-bold">{stat.value}</div>
+                  <div className="text-2xl font-bold text-foreground">{stat.value}</div>
                   <div className="text-sm text-muted-foreground">{stat.label}</div>
-                  <Badge variant="secondary" className="mt-1">
+                  <Badge variant="secondary" className="mt-1 text-foreground bg-muted">
                     <TrendingUp className="h-3 w-3 mr-1" />
                     {stat.trend}
                   </Badge>
@@ -131,40 +119,43 @@ export const ModernHomePage: React.FC = () => {
 
         {/* Features Grid */}
         <div className="px-8 py-12">
-          <div className="mx-auto max-w-7xl">
-            <h2 className="text-3xl font-bold text-center mb-8">Intelligent Capabilities</h2>
-            <div className="grid grid-cols-2 gap-6">
+          <div className="mx-auto max-w-6xl">
+            <h2 className="text-3xl font-bold text-center mb-12">Choose Your AI Experience</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               {features.map((feature) => {
                 const Icon = feature.icon;
                 return (
                   <HoverCard key={feature.title}>
                     <HoverCardTrigger asChild>
                       <Card 
-                        className="cursor-pointer hover:shadow-lg transition-all hover:scale-[1.02]"
+                        className={cn(
+                          "cursor-pointer hover:shadow-xl transition-all duration-300 hover:scale-[1.05] border-2 hover:border-primary/50 relative overflow-hidden group",
+                          `bg-gradient-to-br ${feature.gradient}`
+                        )}
                         onClick={() => navigate(feature.link)}
                       >
-                        <CardHeader>
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className={cn("p-2 rounded-lg bg-muted", feature.color)}>
-                                <Icon className="h-6 w-6" />
-                              </div>
-                              <div>
-                                <CardTitle className="text-xl">{feature.title}</CardTitle>
-                                {feature.badge && (
-                                  <Badge variant="default" className="ml-2">
-                                    {feature.badge}
-                                  </Badge>
-                                )}
-                              </div>
+                        <div className="absolute inset-0 bg-gradient-to-br from-transparent via-background/5 to-background/20 group-hover:opacity-0 transition-opacity" />
+                        <CardHeader className="relative z-10">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className={cn("p-3 rounded-xl bg-card border shadow-sm")}>
+                              <Icon className={cn("h-8 w-8", feature.color)} />
                             </div>
-                            <ArrowRight className="h-5 w-5 text-muted-foreground" />
+                            {feature.badge && (
+                              <Badge variant="secondary" className="text-foreground bg-muted">
+                                {feature.badge}
+                              </Badge>
+                            )}
                           </div>
+                          <CardTitle className="text-xl mb-2 text-foreground">{feature.title}</CardTitle>
                         </CardHeader>
-                        <CardContent>
-                          <CardDescription className="text-base">
+                        <CardContent className="relative z-10">
+                          <CardDescription className="text-sm leading-relaxed mb-4 text-muted-foreground">
                             {feature.description}
                           </CardDescription>
+                          <div className="flex items-center text-primary font-medium text-sm group-hover:text-primary/80 transition-colors">
+                            Get Started
+                            <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />
+                          </div>
                         </CardContent>
                       </Card>
                     </HoverCardTrigger>
@@ -172,7 +163,7 @@ export const ModernHomePage: React.FC = () => {
                       <div className="space-y-2">
                         <h4 className="text-sm font-semibold">Quick Start</h4>
                         <p className="text-sm text-muted-foreground">
-                          Click to navigate to {feature.title}. Experience the power of AI-driven {feature.title.toLowerCase()}.
+                          Click to launch {feature.title}. Experience the power of AI-driven intelligence.
                         </p>
                       </div>
                     </HoverCardContent>
@@ -208,18 +199,18 @@ export const ModernHomePage: React.FC = () => {
                     <div className="grid grid-cols-3 gap-4 pt-4">
                       <div className="text-center p-4 bg-muted rounded-lg">
                         <Code className="h-8 w-8 mx-auto mb-2 text-blue-500" />
-                        <div className="text-sm font-medium">Backend</div>
-                        <div className="text-lg font-bold">FastAPI</div>
+                        <div className="text-sm font-medium text-foreground">Backend</div>
+                        <div className="text-lg font-bold text-foreground">FastAPI</div>
                       </div>
                       <div className="text-center p-4 bg-muted rounded-lg">
                         <Layers className="h-8 w-8 mx-auto mb-2 text-green-500" />
-                        <div className="text-sm font-medium">Frontend</div>
-                        <div className="text-lg font-bold">React + TS</div>
+                        <div className="text-sm font-medium text-foreground">Frontend</div>
+                        <div className="text-lg font-bold text-foreground">React + TS</div>
                       </div>
                       <div className="text-center p-4 bg-muted rounded-lg">
                         <Globe className="h-8 w-8 mx-auto mb-2 text-purple-500" />
-                        <div className="text-sm font-medium">AI SDK</div>
-                        <div className="text-lg font-bold">Strands AI</div>
+                        <div className="text-sm font-medium text-foreground">AI SDK</div>
+                        <div className="text-lg font-bold text-foreground">Strands AI</div>
                       </div>
                     </div>
                   </TabsContent>
@@ -229,9 +220,9 @@ export const ModernHomePage: React.FC = () => {
                         <div key={agent} className="flex items-center justify-between p-3 bg-muted rounded-lg">
                           <div className="flex items-center gap-3">
                             <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
-                            <span className="font-medium">{agent}</span>
+                            <span className="font-medium text-foreground">{agent}</span>
                           </div>
-                          <Badge variant="outline">Active</Badge>
+                          <Badge variant="outline" className="text-foreground border-muted-foreground">Active</Badge>
                         </div>
                       ))}
                     </div>
@@ -246,11 +237,12 @@ export const ModernHomePage: React.FC = () => {
                       ].map((item, idx) => (
                         <div key={idx} className="flex items-center justify-between p-3 border rounded-lg">
                           <div>
-                            <div className="font-medium">{item.task}</div>
+                            <div className="font-medium text-foreground">{item.task}</div>
                             <div className="text-sm text-muted-foreground">{item.time}</div>
                           </div>
                           <Badge 
                             variant={item.status === 'completed' ? 'default' : item.status === 'in-progress' ? 'secondary' : 'outline'}
+                            className="text-foreground"
                           >
                             {item.status}
                           </Badge>
@@ -273,7 +265,7 @@ export const ModernHomePage: React.FC = () => {
                 <div className="mx-auto w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
                   <Brain className="h-8 w-8 text-blue-500" />
                 </div>
-                <h3 className="text-lg font-semibold mb-2">Web Research</h3>
+                <h3 className="text-lg font-semibold mb-2 text-foreground">Web Research</h3>
                 <p className="text-sm text-muted-foreground">
                   Search the web, analyze results, and get comprehensive answers with source citations.
                 </p>
@@ -282,7 +274,7 @@ export const ModernHomePage: React.FC = () => {
                 <div className="mx-auto w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center mb-4">
                   <Users className="h-8 w-8 text-purple-500" />
                 </div>
-                <h3 className="text-lg font-semibold mb-2">Multi-Agent System</h3>
+                <h3 className="text-lg font-semibold mb-2 text-foreground">Multi-Agent System</h3>
                 <p className="text-sm text-muted-foreground">
                   Run multiple AI agents that work together to solve complex problems.
                 </p>
@@ -291,7 +283,7 @@ export const ModernHomePage: React.FC = () => {
                 <div className="mx-auto w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mb-4">
                   <Shield className="h-8 w-8 text-green-500" />
                 </div>
-                <h3 className="text-lg font-semibold mb-2">Open Source</h3>
+                <h3 className="text-lg font-semibold mb-2 text-foreground">Open Source</h3>
                 <p className="text-sm text-muted-foreground">
                   Run locally on your machine. Full control over your data and deployment.
                 </p>

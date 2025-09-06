@@ -27,7 +27,7 @@ import { cn } from '../lib/utils';
 
 export interface TimelineEvent {
   id: string;
-  type: 'start' | 'thought' | 'action' | 'tool' | 'handoff' | 'complete' | 'error';
+  type: 'start' | 'thought' | 'action' | 'tool' | 'handoff' | 'complete' | 'error' | 'agent';
   agent?: string;
   title: string;
   description?: string;
@@ -66,6 +66,8 @@ const getEventIcon = (event: TimelineEvent) => {
       return CheckCircle2;
     case 'error':
       return XCircle;
+    case 'agent':
+      return Settings;
     default:
       return AlertCircle;
   }
@@ -89,6 +91,8 @@ const getEventColor = (event: TimelineEvent) => {
       return 'text-emerald-500';
     case 'error':
       return 'text-red-500';
+    case 'agent':
+      return 'text-indigo-500';
     default:
       return 'text-gray-500';
   }
@@ -277,6 +281,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
     if (filter === 'tools') return event.type === 'tool';
     if (filter === 'thoughts') return event.type === 'thought';
     if (filter === 'handoffs') return event.type === 'handoff';
+    if (filter === 'agents') return event.type === 'agent';
     return true;
   });
   
@@ -314,6 +319,14 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
         >
           <ArrowRight className="h-3 w-3 mr-1" />
           Handoffs
+        </Button>
+        <Button
+          variant={filter === 'agents' ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => setFilter('agents')}
+        >
+          <Settings className="h-3 w-3 mr-1" />
+          Agents
         </Button>
         <Button
           variant={filter === 'errors' ? 'destructive' : 'outline'}

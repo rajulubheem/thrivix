@@ -6,7 +6,7 @@ import {
   Bot, Brain, Zap, Plus, X, Check, AlertCircle, Loader2,
   Server, Wrench, Play, TestTube,
   Trash2, Edit, RefreshCw, Download,
-  Grid, List, Activity, Search
+  Grid, List, Activity, Search, ArrowRight, ArrowLeft
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -88,11 +88,49 @@ const getRandomColor = () => {
   return colors[Math.floor(Math.random() * colors.length)];
 };
 
+// Navigation helper functions
+const steps = ['orchestrate', 'agents', 'execution'];
+const stepTitles = {
+  'orchestrate': 'Task Setup',
+  'agents': 'Configure Agents', 
+  'execution': 'Review & Execute'
+};
+
+const canProceedToNextStep = (step: string, taskInput: string, agents: Agent[]) => {
+  switch (step) {
+    case 'orchestrate':
+      return taskInput.trim().length > 0;
+    case 'agents':
+      return agents.length > 0;
+    case 'execution':
+      return true;
+    default:
+      return false;
+  }
+};
+
+const navigateToStep = (step: string, setCurrentStep: (step: string) => void) => {
+  setCurrentStep(step);
+  const tabsTrigger = document.querySelector(`[value="${step}"]`) as HTMLButtonElement;
+  if (tabsTrigger) tabsTrigger.click();
+};
+
+const getNextStep = (currentStep: string) => {
+  const currentIndex = steps.indexOf(currentStep);
+  return currentIndex < steps.length - 1 ? steps[currentIndex + 1] : null;
+};
+
+const getPrevStep = (currentStep: string) => {
+  const currentIndex = steps.indexOf(currentStep);
+  return currentIndex > 0 ? steps[currentIndex - 1] : null;
+};
+
 export const UnifiedOrchestratorV2: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState('orchestrate');
 
   // Tool Management State
   const [availableTools, setAvailableTools] = useState<Tool[]>([]);
@@ -302,7 +340,19 @@ export const UnifiedOrchestratorV2: React.FC = () => {
   // Create agent from builder
   const createAgent = () => {
     if (!agentBuilder.name || !agentBuilder.role || agentBuilder.selectedTools.length === 0) {
-      setError('Please fill in name, role, and select at least one tool');
+      
+      let errorMessage = 'Please check the following requirements:\n';
+      if (!agentBuilder.name) errorMessage += '• Agent name is required\n';
+      if (!agentBuilder.role) errorMessage += '• Agent role is required\n';
+      if (agentBuilder.selectedTools.length === 0) {
+        if (availableTools.length === 0) {
+          errorMessage += '• No tools available (click Refresh to load tools)\n';
+        } else {
+          errorMessage += '• At least one tool must be selected\n';
+        }
+      }
+      
+      setError(errorMessage);
       return;
     }
 
@@ -567,7 +617,8 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
 
   return (
     <ModernLayout>
-      <div className="container mx-auto p-6 max-w-7xl">
+      <ScrollArea className="h-full">
+        <div className="container mx-auto p-6 max-w-7xl space-y-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <Brain className="h-8 w-8 text-primary" />
@@ -596,13 +647,78 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
           </Alert>
         )}
 
-        <Tabs defaultValue="orchestrate" className="space-y-4">
+        {/* Step Navigation */}
+        <div className="mb-8">
+          <div className="flex items-center justify-center space-x-8">
+            {steps.map((step, index) => {
+              const isActive = step === currentStep;
+              const isCompleted = steps.indexOf(currentStep) > index;
+              const canAccess = index === 0 || canProceedToNextStep(steps[index - 1], taskInput, agents);
+              
+              return (
+                <div key={step} className="flex items-center">
+                  {index > 0 && (
+                    <div className={cn(
+                      "w-16 h-px mr-8",
+                      isCompleted || (isActive && index > 0) ? "bg-primary" : "bg-border"
+                    )} />
+                  )}
+                  <button
+                    className={cn(
+                      "flex flex-col items-center gap-2 px-4 py-3 rounded-lg transition-all duration-200 min-w-[120px]",
+                      isActive && "bg-primary/5 text-primary",
+                      isCompleted && !isActive && "text-green-600",
+                      !isActive && !isCompleted && canAccess && "text-muted-foreground hover:text-foreground hover:bg-muted/30",
+                      !isActive && !isCompleted && !canAccess && "text-muted cursor-not-allowed opacity-50"
+                    )}
+                    onClick={() => canAccess && navigateToStep(step, setCurrentStep)}
+                    disabled={!canAccess}
+                  >
+                    <div className={cn(
+                      "w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium border-2 transition-all",
+                      isActive && "bg-primary text-primary-foreground border-primary shadow-md scale-110",
+                      isCompleted && !isActive && "bg-green-500 text-white border-green-500",
+                      !isActive && !isCompleted && canAccess && "border-muted-foreground/30 hover:border-primary/50",
+                      !isActive && !isCompleted && !canAccess && "border-muted"
+                    )}>
+                      {isCompleted ? <Check className="h-4 w-4" /> : index + 1}
+                    </div>
+                    <div className="text-center">
+                      <div className="text-sm font-medium">
+                        {stepTitles[step as keyof typeof stepTitles]}
+                      </div>
+                      {isActive && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {currentStep === 'orchestrate' && "Enter task description"}
+                          {currentStep === 'agents' && "Configure AI agents"}
+                          {currentStep === 'execution' && "Review and execute"}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <Tabs value={currentStep} onValueChange={setCurrentStep} className="space-y-4">
           <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="orchestrate">1. Task Setup</TabsTrigger>
-            <TabsTrigger value="agents">2. Configure Agents</TabsTrigger>
-            <TabsTrigger value="execution">3. Review & Execute</TabsTrigger>
-            <TabsTrigger value="tools">Tools & MCP</TabsTrigger>
-            <TabsTrigger value="templates">Templates</TabsTrigger>
+            <TabsTrigger value="orchestrate" className={cn("data-[state=active]:bg-primary data-[state=active]:text-primary-foreground")}>
+              1. Task Setup
+            </TabsTrigger>
+            <TabsTrigger value="agents" disabled={!canProceedToNextStep('orchestrate', taskInput, agents)}>
+              2. Configure Agents
+            </TabsTrigger>
+            <TabsTrigger value="execution" disabled={!canProceedToNextStep('agents', taskInput, agents)}>
+              3. Review & Execute
+            </TabsTrigger>
+            <TabsTrigger value="tools" className="opacity-60">
+              🔧 Tools & MCP
+            </TabsTrigger>
+            <TabsTrigger value="templates" className="opacity-60">
+              📋 Templates
+            </TabsTrigger>
           </TabsList>
 
           {/* Tools & MCP Tab */}
@@ -690,7 +806,8 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                 )}
 
                 {/* Tools Grid/List */}
-                <div className="h-[500px] overflow-y-auto pr-2">
+                <ScrollArea className="h-[400px] pr-2">
+                  <div>
                   {toolView === 'grid' ? (
                     <div className="grid grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2">
                       {filteredTools.map(tool => (
@@ -766,21 +883,30 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                       ))}
                     </div>
                   )}
-                </div>
+                  </div>
+                </ScrollArea>
               </CardContent>
             </Card>
           </TabsContent>
 
           {/* Agent Builder Tab */}
-          <TabsContent value="agents" className="space-y-4 h-[calc(100vh-220px)]">
-            <div className="flex gap-4 h-full">
+          <TabsContent value="agents" className="space-y-4">
+            <div className="flex gap-4 min-h-[600px]">
               {/* Agent Builder Form */}
-              <Card className="flex-1 flex flex-col overflow-hidden">
+              <Card className="flex-1 flex flex-col">
                 <CardHeader className="flex-shrink-0">
                   <CardTitle>Build Agent</CardTitle>
                   <CardDescription>Configure a custom AI agent with specific tools and capabilities</CardDescription>
+                  {availableTools.length === 0 && (
+                    <Alert className="mt-2">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription>
+                        Tools are loading... If they don't appear, click the Refresh button above.
+                      </AlertDescription>
+                    </Alert>
+                  )}
                 </CardHeader>
-                <CardContent className="flex-1 overflow-y-auto space-y-4">
+                <CardContent className="flex-1 space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>Agent Name</Label>
@@ -841,10 +967,16 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                   </div>
 
                   <div>
-                    <Label>Select Tools</Label>
+                    <Label>Select Tools ({availableTools.length} available)</Label>
                     <div className="h-[120px] overflow-y-auto border rounded-lg p-2 mt-2 bg-background">
                       <div className="space-y-1">
-                        {availableTools.slice(0, 30).map(tool => (
+                        {availableTools.length === 0 ? (
+                          <div className="text-center py-4 text-muted-foreground">
+                            <p className="text-sm">Loading tools...</p>
+                            <p className="text-xs">Click Refresh if tools don't load</p>
+                          </div>
+                        ) : (
+                          availableTools.slice(0, 30).map(tool => (
                           <div
                             key={tool.name}
                             className={cn(
@@ -873,22 +1005,28 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                             </div>
                             <Badge variant="secondary" className="text-xs">{tool.category}</Badge>
                           </div>
-                        ))}
+                          ))
+                        )}
                       </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                      {agentBuilder.selectedTools.map(tool => (
-                        <Badge key={tool} variant="secondary" className="text-xs">
-                          {tool}
-                          <X
-                            className="h-2 w-2 ml-1 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleToolSelection(tool);
-                            }}
-                          />
-                        </Badge>
-                      ))}
+                    <div className="mt-2">
+                      <div className="text-xs text-muted-foreground mb-1">
+                        Selected: {agentBuilder.selectedTools.length} tools
+                      </div>
+                      <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                        {agentBuilder.selectedTools.map(tool => (
+                          <Badge key={tool} variant="secondary" className="text-xs">
+                            {tool}
+                            <X
+                              className="h-2 w-2 ml-1 cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleToolSelection(tool);
+                              }}
+                            />
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
@@ -940,31 +1078,64 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                     })}>
                       Clear
                     </Button>
-                    <Button onClick={createAgent}>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Create Agent
+                    <Button 
+                      onClick={createAgent}
+                      disabled={loading || availableTools.length === 0}
+                    >
+                      {loading ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Plus className="h-4 w-4 mr-2" />
+                      )}
+                      {availableTools.length === 0 ? 'Loading Tools...' : 'Create Agent'}
                     </Button>
                   </div>
                 </CardContent>
               </Card>
 
               {/* Created Agents */}
-              <Card className="flex-1 flex flex-col overflow-hidden">
+              <Card className="flex-1 flex flex-col">
                 <CardHeader className="flex-shrink-0">
                   <CardTitle>Created Agents ({agents.length})</CardTitle>
                   <CardDescription>Your custom agent configurations</CardDescription>
                 </CardHeader>
-                <CardContent className="flex-1 overflow-hidden p-0">
-                  <div className="h-full overflow-y-auto p-4">
+                <CardContent className="flex-1 p-0">
+                  <ScrollArea className="h-[400px] p-4">
                     <CompactAgentList
                       agents={agents}
                       availableTools={availableTools}
                       onAgentsUpdate={setAgents}
                       onAddAgent={() => {}}
                     />
-                  </div>
+                  </ScrollArea>
                 </CardContent>
               </Card>
+            </div>
+            
+            {/* Navigation Buttons */}
+            <div className="flex justify-between items-center pt-4">
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => navigateToStep('orchestrate', setCurrentStep)}
+                >
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back: Task Setup
+                </Button>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-sm text-muted-foreground">
+                  {agents.length > 0 ? `${agents.length} agents configured` : 'Add agents to continue'}
+                </div>
+                <Button
+                  onClick={() => navigateToStep('execution', setCurrentStep)}
+                  disabled={!canProceedToNextStep('agents', taskInput, agents)}
+                  className="min-w-[120px]"
+                >
+                  Next: Review & Execute
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </TabsContent>
 
@@ -1021,60 +1192,55 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
           </TabsContent>
 
           {/* Orchestrate Tab */}
-          <TabsContent value="orchestrate" className="space-y-4">
-            {agents.length === 0 && (
-              <Alert className="mb-4 border-blue-500 bg-blue-50 dark:bg-blue-950">
-                <Brain className="h-4 w-4 text-blue-500" />
-                <AlertDescription>
-                  <div className="space-y-2">
-                    <div className="font-semibold text-blue-700 dark:text-blue-300">
-                      🤖 AI Agent Generation Available
+          <TabsContent value="orchestrate" className="space-y-6">
+            {/* Getting Started Guide */}
+            <Alert className="border-blue-500 bg-blue-50 dark:bg-blue-950">
+              <Brain className="h-4 w-4 text-blue-500" />
+              <AlertDescription>
+                <div className="space-y-3">
+                  <div className="font-semibold text-blue-700 dark:text-blue-300">
+                    🚀 How to Use the Unified AI Orchestrator
+                  </div>
+                  <div className="text-sm space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="h-5 w-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">1</div>
+                      <span>Describe your task in detail below</span>
                     </div>
-                    <div className="text-sm">
-                      Just enter your task and click "AI Generate Agents" - the AI will analyze your task and automatically create the perfect team of specialized agents with appropriate tools.
+                    <div className="flex items-center gap-2">
+                      <div className="h-5 w-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">2</div>
+                      <span>Click "AI Generate Agents" to create your team automatically</span>
                     </div>
-                    <div className="text-sm mt-2">
-                      <strong>Or</strong> you can manually configure agents:
+                    <div className="flex items-center gap-2">
+                      <div className="h-5 w-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">3</div>
+                      <span>Review and customize agents in the next step</span>
                     </div>
-                    <div className="flex gap-2 mt-3">
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={createQuickStartAgents}
-                      >
-                        <Zap className="h-4 w-4 mr-2" />
-                        Quick-Start Agents
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => {
-                          const tabsTrigger = document.querySelector('[value="agents"]') as HTMLButtonElement;
-                          if (tabsTrigger) tabsTrigger.click();
-                        }}
-                      >
-                        Build Custom Agent
-                      </Button>
+                    <div className="flex items-center gap-2">
+                      <div className="h-5 w-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">4</div>
+                      <span>Execute your task and watch the agents collaborate!</span>
                     </div>
                   </div>
-                </AlertDescription>
-              </Alert>
-            )}
+                </div>
+              </AlertDescription>
+            </Alert>
             
             <Card>
               <CardHeader>
-                <CardTitle>Configure Task</CardTitle>
-                <CardDescription>Define the task and orchestration parameters</CardDescription>
+                <CardTitle className="text-xl">📝 Step 1: Describe Your Task</CardTitle>
+                <CardDescription>Be specific about what you want to accomplish - the AI will analyze your needs and create the perfect team</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div>
-                  <Label>Task Description</Label>
+                <div className="space-y-2">
+                  <Label className="text-base font-semibold">What do you want to accomplish?</Label>
                   <Textarea
-                    placeholder="Describe the task you want to accomplish..."
+                    placeholder="Example: 'Research the latest AI trends and create a comprehensive report' or 'Analyze my website's performance and suggest improvements' or 'Help me plan a marketing campaign for my new product'..."
                     value={taskInput}
                     onChange={(e) => setTaskInput(e.target.value)}
-                    rows={3}
+                    rows={4}
+                    className="min-h-[100px]"
                   />
+                  <div className="text-sm text-muted-foreground">
+                    💡 <strong>Tip:</strong> Be specific about your goal, data sources, and expected outcome for better results
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-4">
@@ -1113,43 +1279,64 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                   </div>
                 </div>
 
-                <div className="flex justify-between items-center">
-                  <div className="text-sm text-muted-foreground">
-                    {agents.length > 0 
-                      ? `${agents.length} custom agents configured`
-                      : "AI will analyze and create agents automatically"
-                    }
-                  </div>
-                  <div className="flex gap-2">
+                {/* Action Buttons */}
+                <div className="space-y-4">
+                  <div className="flex justify-center">
                     <Button
                       onClick={() => orchestrateTask(true)}
-                      disabled={loading || !taskInput}
-                      variant="default"
-                      title="Let AI analyze the task and create optimal agents automatically"
+                      disabled={loading || !taskInput.trim()}
+                      size="lg"
+                      className="w-full max-w-md bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg"
                     >
                       {loading ? (
                         <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Analyzing...
+                          <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                          🤖 AI is analyzing your task...
                         </>
                       ) : (
                         <>
-                          <Brain className="h-4 w-4 mr-2" />
-                          AI Generate Agents
+                          <Brain className="h-5 w-5 mr-2" />
+                          🚀 AI Generate My Team
                         </>
                       )}
                     </Button>
-                    {agents.length > 0 && (
-                      <Button
-                        onClick={() => orchestrateTask(false)}
-                        disabled={loading || !taskInput}
-                        variant="outline"
-                        title="Use your custom configured agents"
+                  </div>
+                  
+                  <div className="text-center">
+                    <div className="text-sm text-muted-foreground mb-2">
+                      {agents.length > 0 
+                        ? `✅ ${agents.length} agents ready | Or regenerate a new team above`
+                        : taskInput.trim() 
+                        ? "✨ Ready to create your AI team!" 
+                        : "👆 Enter your task description above to get started"
+                      }
+                    </div>
+                    
+                    <div className="flex justify-center gap-2">
+                      {agents.length > 0 && (
+                        <Button
+                          onClick={() => orchestrateTask(false)}
+                          disabled={loading || !taskInput.trim()}
+                          variant="outline"
+                          size="sm"
+                        >
+                          <Zap className="h-4 w-4 mr-2" />
+                          Use Current Team
+                        </Button>
+                      )}
+                      
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => {
+                          setTaskInput("Research the latest AI developments in 2024 and create a comprehensive report with market analysis and future predictions");
+                          createQuickStartAgents();
+                        }}
                       >
                         <Zap className="h-4 w-4 mr-2" />
-                        Use Custom Agents
+                        Try Demo Task
                       </Button>
-                    )}
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -1198,7 +1385,7 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
               </CardHeader>
               <CardContent className="pt-0">
                 {agents.length > 0 ? (
-                  <div className="max-h-[300px] overflow-y-auto pr-2">
+                  <ScrollArea className="max-h-[400px] pr-2">
                     <CompactAgentList
                       agents={agents}
                       availableTools={availableTools}
@@ -1238,7 +1425,7 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                         if (tabsTrigger) tabsTrigger.click();
                       }}
                     />
-                  </div>
+                  </ScrollArea>
                 ) : (
                   <div className="text-center py-4 text-muted-foreground">
                     <Bot className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -1255,6 +1442,58 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                     </Button>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+            
+            {/* Navigation Buttons */}
+            <Card className="border-2 border-dashed border-primary/50 bg-primary/5">
+              <CardContent className="pt-6">
+                <div className="text-center space-y-4">
+                  <div className="text-sm text-muted-foreground">
+                    {!canProceedToNextStep('orchestrate', taskInput, agents) ? (
+                      <>
+                        📝 <strong>Step 1:</strong> Enter your task description above, then generate agents to continue
+                      </>
+                    ) : (
+                      <>
+                        ✅ <strong>Ready for Step 2!</strong> You can now configure your agents or proceed to execution
+                      </>
+                    )}
+                  </div>
+                  
+                  <div className="flex justify-center gap-3">
+                    {canProceedToNextStep('orchestrate', taskInput, agents) ? (
+                      <>
+                        <Button
+                          onClick={() => navigateToStep('agents', setCurrentStep)}
+                          size="lg"
+                          className="bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white"
+                        >
+                          Next: Review & Customize Agents
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                        <Button
+                          onClick={() => navigateToStep('execution', setCurrentStep)}
+                          variant="outline"
+                          size="lg"
+                        >
+                          Skip to Execution
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        disabled
+                        size="lg"
+                        variant="outline"
+                        className="opacity-50"
+                      >
+                        Next: Configure Agents
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -1287,7 +1526,8 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                   </CardHeader>
                   <CardContent>
                     {agents.length > 0 ? (
-                      <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
+                      <ScrollArea className="max-h-[400px] pr-2">
+                        <div className="space-y-2">
                         {agents.map((agent, index) => (
                           <div key={agent.id} className="p-3 border rounded-lg bg-muted/30">
                             <div className="flex items-start justify-between mb-2">
@@ -1317,7 +1557,8 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                             </div>
                           </div>
                         ))}
-                      </div>
+                        </div>
+                      </ScrollArea>
                     ) : (
                       <div className="text-center py-8 text-muted-foreground">
                         <Bot className="h-10 w-10 mx-auto mb-2 opacity-50" />
@@ -1491,9 +1732,39 @@ Use these tools effectively to complete your tasks. Collaborate with other agent
                 )}
               </div>
             </div>
+            
+            {/* Navigation Buttons */}
+            <div className="flex justify-between items-center pt-4">
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => navigateToStep('agents', setCurrentStep)}
+                >
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back: Configure Agents
+                </Button>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-sm text-muted-foreground">
+                  Ready to execute with {agents.length} agents
+                </div>
+                <Button
+                  onClick={() => {
+                    const executeButton = document.querySelector('button[data-execute="true"]') as HTMLButtonElement;
+                    if (executeButton) executeButton.click();
+                  }}
+                  disabled={agents.length === 0 || !taskInput.trim()}
+                  className="min-w-[120px] bg-green-600 hover:bg-green-700"
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  Execute Task
+                </Button>
+              </div>
+            </div>
           </TabsContent>
         </Tabs>
-      </div>
+        </div>
+      </ScrollArea>
     </ModernLayout>
   );
 };

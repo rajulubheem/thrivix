@@ -19,6 +19,7 @@ import {
   Quote, Link2, Hash, ArrowUpRight, History
 } from 'lucide-react';
 import ResearchSourcesFeed from './ResearchSourcesFeed';
+import { ModernLayout } from '../layout/ModernLayout';
 import '../../styles/unified-theme.css';
 import '../../styles/scholarly-research.css';
 
@@ -1095,7 +1096,8 @@ const ScholarlyResearchView: React.FC = () => {
   };
 
   return (
-    <div className="scholarly-research-container">
+    <ModernLayout>
+      <div className="scholarly-research-container">
       {/* Header with View Toggle */}
       <div className="scholarly-header">
         <div className="header-left">
@@ -1419,7 +1421,8 @@ const ScholarlyResearchView: React.FC = () => {
           </div>
         </div>
       </form>
-    </div>
+      </div>
+    </ModernLayout>
   );
 };
 

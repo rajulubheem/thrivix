@@ -554,6 +554,7 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
       return;
     }
     
+    
     if (currentSession?.messages && currentSession.messages.length > 0) {
       const formattedMessages = currentSession.messages.map(msg => ({
         id: msg.message_id,
@@ -571,6 +572,14 @@ export const ModernSwarmChatEnhanced: React.FC = () => {
       // Only set messages if they're different from current messages (to avoid clearing during streaming)
       setMessages(prev => {
         console.log('🔄 Setting messages, prev:', prev.length, 'new:', formattedMessages.length);
+        
+        // CRITICAL FIX: Don't replace messages if we have streaming messages active
+        const hasStreamingMessages = prev.some(msg => msg.status === 'streaming');
+        if (hasStreamingMessages) {
+          console.log('🚫 Keeping streaming messages, skipping session reload');
+          return prev;
+        }
+        
         // Always update messages from session on refresh
         // Check if this is a fresh load (no messages) or a different session
         if (prev.length === 0 || 

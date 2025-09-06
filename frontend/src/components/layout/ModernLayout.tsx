@@ -32,30 +32,25 @@ const navigationItems = [
     description: 'Dashboard overview'
   },
   {
-    title: 'Swarm Mode',
-    href: '/swarm',
-    icon: Users,
-    description: 'Multi-agent collaboration',
+    title: 'Research',
+    href: '/conversation',
+    icon: Brain,
+    description: 'Advanced web research with analysis',
+    badge: 'Popular'
+  },
+  {
+    title: 'Event Swarm',
+    href: '/event-swarm',
+    icon: Activity,
+    description: 'Dynamic AI agents with real-time collaboration',
     badge: 'Advanced'
   },
   {
-    title: 'Conversation',
-    href: '/conversation',
-    icon: MessageSquare,
-    description: 'AI conversation interface'
-  },
-  {
-    title: 'Research',
-    href: '/research',
-    icon: Brain,
-    description: 'Research assistant'
-  },
-  {
-    title: 'True Swarm',
-    href: '/true-swarm',
-    icon: Activity,
-    description: 'Dynamic agent orchestrator',
-    badge: 'New'
+    title: 'Pre-Defined Swarm',
+    href: '/swarm',
+    icon: Users,
+    description: 'Structured multi-agent coordination',
+    badge: 'Stable'
   },
   {
     title: 'Settings',
