@@ -86,8 +86,12 @@ export function CleanSwarmChat() {
       // For continuation, Strands automatically loads conversation history
       // We don't need to send previous_messages - the coordinator persists across requests
       const requestBody = { 
-        task, 
-        session_id: sessionId 
+        task,
+        session_id: sessionId,
+        // Pass explicit empty agents array to satisfy backend iteration
+        agents: [],
+        // Keep handoffs minimal for simple chat
+        max_handoffs: 0
       };
 
       console.log(`📤 Sending to ${endpoint}:`, requestBody);
@@ -150,6 +154,7 @@ export function CleanSwarmChat() {
                     break;
 
                   case 'agent_start':
+                  case 'agent_started':
                     const startAgent = event.agent || 'Unknown';
                     setActiveAgents(prev => new Map(prev).set(startAgent, {
                       agent: startAgent,
@@ -162,6 +167,12 @@ export function CleanSwarmChat() {
                   case 'text_generation':
                     const deltaAgent = event.agent || 'coordinator';
                     const content = event.content || event.data?.chunk || event.data?.text || '';
+                    
+                    // Hide system-level informational text from user chat
+                    if (deltaAgent === 'system') {
+                      // Still consume but do not display/accumulate
+                      break;
+                    }
                     
                     if (content) {
                       // Update agent status to typing
@@ -184,6 +195,12 @@ export function CleanSwarmChat() {
                   case 'agent_done':
                   case 'agent_completed':
                     const doneAgent = event.agent || 'coordinator';
+                    if (doneAgent === 'system') {
+                      // Don't create user-visible messages for system meta
+                      currentAgentContent.delete(doneAgent);
+                      setStreamingContent(new Map(currentAgentContent));
+                      break;
+                    }
                     const finalContent = event.content || event.data?.output || currentAgentContent.get(doneAgent) || '';
                     
                     if (finalContent.trim()) {
@@ -212,9 +229,34 @@ export function CleanSwarmChat() {
                     });
                     break;
 
+                  case 'execution_failed':
                   case 'session_complete':
                   case 'done':
+                    if (event.type === 'execution_failed') {
+                      console.log('❌ Execution failed event received:', event);
+                    }
                     console.log('✅ Session complete');
+                    // Finalize any remaining streaming content as assistant messages
+                    if (currentAgentContent.size > 0) {
+                      const now = Date.now();
+                      const entries = Array.from(currentAgentContent.entries())
+                        .filter(([agentName, content]) => agentName !== 'system' && (content || '').trim().length > 0);
+                      const finalMsgs: Message[] = entries
+                        .map(([agentName, content], idx) => ({
+                          id: `msg_${now}_${idx}_${Math.random().toString(36).substr(2, 6)}`,
+                          role: 'assistant',
+                          content: content,
+                          agent: agentName || 'assistant',
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false
+                        }));
+                      if (finalMsgs.length > 0) {
+                        setMessages(prev => [...prev, ...finalMsgs]);
+                      }
+                    }
+                    // Clear streaming state/maps
+                    currentAgentContent.clear();
+                    setStreamingContent(new Map());
                     setIsLoading(false);
                     setActiveAgents(new Map());
                     break;
@@ -449,8 +491,9 @@ export function CleanSwarmChat() {
             ))}
 
             {/* Streaming Content */}
-            {streamingContent.size > 0 && Array.from(streamingContent.entries()).map(([agent, content]) => (
-              content.trim() && (
+            {streamingContent.size > 0 && Array.from(streamingContent.entries())
+              .filter(([agent, content]) => agent !== 'system' && content.trim().length > 0)
+              .map(([agent, content]) => (
                 <motion.div
                   key={`streaming_${agent}`}
                   initial={{ opacity: 0, y: 20 }}
@@ -475,8 +518,7 @@ export function CleanSwarmChat() {
                     </div>
                   </Card>
                 </motion.div>
-              )
-            ))}
+              ))}
           </AnimatePresence>
 
           {/* Loading Indicator */}

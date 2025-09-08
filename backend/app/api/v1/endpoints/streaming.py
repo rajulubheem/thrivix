@@ -428,6 +428,9 @@ async def start_streaming_sse(
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "*",
+            # Critical: disable proxy/app buffering and compression for real-time SSE
+            "X-Accel-Buffering": "no",
+            "Content-Encoding": "identity",
         }
     )
 
@@ -1653,6 +1656,9 @@ async def continue_streaming_sse(
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "*",
+            # Critical: disable proxy/app buffering and compression for real-time SSE
+            "X-Accel-Buffering": "no",
+            "Content-Encoding": "identity",
         }
     )
 

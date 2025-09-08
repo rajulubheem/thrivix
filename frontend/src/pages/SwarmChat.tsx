@@ -283,7 +283,10 @@ const MemoizedMessage = React.forwardRef<HTMLDivElement, {
   if (msg.type === 'agent' && msg.agent) {
     const profile = getAgentProfile(msg.agent);
     const isComplete = msg.status === 'complete';
-    const displayContent = msg.content || streamingContent || '';
+    // Prefer live streamingContent while not complete; fallback to message content when finalized
+    const displayContent = (!isComplete && typeof streamingContent === 'string')
+      ? streamingContent
+      : (msg.content || '');
     const hasContent = displayContent && displayContent.trim().length > 0;
     const isStreaming = (
         (streamingContent && streamingContent.length > 0) ||
@@ -460,6 +463,7 @@ const SwarmChat: React.FC = () => {
   const [allArtifacts, setAllArtifacts] = useState<Artifact[]>([]);
   const [globalExpanded, setGlobalExpanded] = useState(true);
   const [bookmarkedMessages, setBookmarkedMessages] = useState<Set<string>>(new Set());
+  // Live streaming content per-agent (display immediately, finalize on agent_done)
   const [messageStreamingContent, setMessageStreamingContent] = useState<Map<string, string>>(new Map());
   const [toolApprovalRequests, setToolApprovalRequests] = useState<any[]>([]);
   const [agentIterations, setAgentIterations] = useState<Map<string, AgentIteration>>(new Map());
@@ -551,6 +555,13 @@ const SwarmChat: React.FC = () => {
       
       // Add to batch instead of updating immediately
       messageBatcher.addToBatch(agent, token);
+
+      // Also update immediate streaming map so UI shows text right away
+      setMessageStreamingContent(prev => {
+        const next = new Map(prev);
+        next.set(agent, (prev.get(agent) || '') + token);
+        return next;
+      });
     },
     onAgentStart: (agent) => {
       console.log(`🚀 Agent started: ${agent}`);
@@ -759,6 +770,14 @@ const SwarmChat: React.FC = () => {
         }
         return msg;
       }));
+
+      // Convert streaming to final: clear live streaming content for this agent
+      setMessageStreamingContent(prev => {
+        if (!prev.has(agent)) return prev;
+        const next = new Map(prev);
+        next.delete(agent);
+        return next;
+      });
 
       setAgents(prev => prev.map(a =>
           a.name === agent ? {
@@ -1675,8 +1694,8 @@ const SwarmChat: React.FC = () => {
                       {agents.filter(a => a.status === 'working' || a.status === 'streaming').length} Active
                     </span>
                 )}
-                {streamingMessages.size > 0 && (
-                    <span className="status-badge streaming">🔴 Live ({streamingMessages.size})</span>
+                {messageStreamingContent.size > 0 && (
+                    <span className="status-badge streaming">🔴 Live ({messageStreamingContent.size})</span>
                 )}
               </div>
             </div>
@@ -1792,17 +1811,17 @@ const SwarmChat: React.FC = () => {
 
                       // Handle other message types
                       return (
-                          <MemoizedMessage
-                              key={msg.id}
-                              msg={msg}
-                              onArtifactCreate={handleArtifactCreate}
-                              getAgentProfile={getAgentProfile}
-                              globalExpanded={globalExpanded}
-                              streamingContent={msg.content}
-                              isBookmarked={isBookmarked}
-                              onToggleBookmark={toggleBookmark}
-                              agentIterations={agentIterations}
-                          />
+                      <MemoizedMessage
+                          key={msg.id}
+                          msg={msg}
+                          onArtifactCreate={handleArtifactCreate}
+                          getAgentProfile={getAgentProfile}
+                          globalExpanded={globalExpanded}
+                          streamingContent={msg.agent ? messageStreamingContent.get(msg.agent) : undefined}
+                          isBookmarked={isBookmarked}
+                          onToggleBookmark={toggleBookmark}
+                          agentIterations={agentIterations}
+                      />
                       );
                     })}
 
