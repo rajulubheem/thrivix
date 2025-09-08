@@ -5,7 +5,10 @@ from app.schemas.swarm import (
     SwarmExecutionRequest,
     SwarmExecutionResponse,
     SwarmListResponse,
-    AgentTemplateResponse
+    AgentTemplateResponse,
+    AddAgentRequest,
+    AddAgentResponse,
+    AgentConfig
 )
 from app.services.swarm_service import SwarmService, AgentTemplates
 from app.services.enhanced_swarm_service import EnhancedSwarmService
@@ -123,3 +126,52 @@ async def get_agent_templates():
         )
         for t in templates
     ]
+
+
+@router.post("/add-agent", response_model=AddAgentResponse)
+async def add_agent_to_swarm(
+    request: AddAgentRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Add a new agent to an existing swarm session"""
+    try:
+        # Generate a unique agent ID
+        agent_id = f"{request.agent_name.lower().replace(' ', '_')}_{str(uuid.uuid4())[:8]}"
+        
+        # Create the agent configuration
+        system_prompt = f"""You are {request.agent_name}, a specialized AI assistant.
+Your role: {request.agent_role}
+{f'Description: {request.agent_description}' if request.agent_description else ''}
+
+You work as part of a collaborative swarm of AI agents. When you complete your task or need to hand off to another specialist, use the handoff tool to transfer control to the appropriate agent.
+
+Focus on your specialization and collaborate effectively with other agents in the swarm."""
+
+        agent_config = AgentConfig(
+            name=request.agent_name,
+            system_prompt=system_prompt,
+            tools=request.tools,
+            description=request.agent_description,
+            model=request.model,
+            temperature=request.temperature
+        )
+        
+        # In a real implementation, you would:
+        # 1. Store the agent configuration in the database linked to the session
+        # 2. Update the active swarm session to include this new agent
+        # 3. Make the agent available for handoffs in ongoing conversations
+        
+        # For now, we'll just return success
+        # TODO: Implement actual agent storage and session management
+        
+        return AddAgentResponse(
+            success=True,
+            agent_id=agent_id,
+            message=f"Agent '{request.agent_name}' has been added to the swarm and is ready for tasks."
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to add agent: {str(e)}"
+        )

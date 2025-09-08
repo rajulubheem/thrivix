@@ -3,7 +3,7 @@ Production-ready streaming endpoint with polling-based approach
 Supports Redis for distributed session storage
 """
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import json
 import asyncio
 import uuid
@@ -87,10 +87,20 @@ class InMemorySessionStorage(SessionStorage):
 
                 session["chunks"].append(chunk)
                 session["last_accessed"] = datetime.utcnow()
+                
+                # DEBUG: Log what was stored
+                chunk_type = chunk.get("type", "unknown")
+                chunk_agent = chunk.get("agent", "N/A")
+                chunk_content_len = len(chunk.get("content", "")) if "content" in chunk else 0
+                total_chunks = len(session["chunks"])
+                logger.info(f"📦 Stored chunk #{total_chunks} for {session_id[:8]} - type: {chunk_type}, agent: {chunk_agent}, content: {chunk_content_len} chars")
 
                 # Update metrics safely
                 if "metrics" in session:
                     session["metrics"]["chunk_count"] = len(session["chunks"])
+            else:
+                logger.warning(f"❌ Session {session_id[:8]} not found when appending chunk type={chunk.get('type', 'unknown')}")
+                logger.warning(f"❌ Available sessions: {list(self.sessions.keys())[:5]}")
         except Exception as e:
             logger.error(f"Error appending chunk to session {session_id}: {e}")
 
@@ -100,10 +110,12 @@ class InMemorySessionStorage(SessionStorage):
             session = self.sessions.get(session_id)
             if not session:
                 logger.warning(f"Session {session_id[:8]} not found in get_chunks")
+                logger.warning(f"Available sessions: {list(self.sessions.keys())[:5]}")  # Show first 5 session IDs
                 return []
 
             if "chunks" not in session:
                 logger.info(f"No chunks in session {session_id[:8]}")
+                logger.info(f"Session keys: {list(session.keys())}")  # Debug what keys exist
                 return []
 
             chunks = session.get("chunks", [])
@@ -239,9 +251,19 @@ class RedisSessionStorage(SessionStorage):
         await self.redis.rpush(chunks_key, json.dumps(chunk))
         await self.redis.expire(chunks_key, 300)  # Reset TTL
 
-        # Update session last accessed
+        # Update session last accessed AND chunk count
         session_key = f"stream_session:{session_id}"
         await self.redis.expire(session_key, 300)
+        
+        # Update chunk count in session metrics
+        try:
+            session_data = await self.get(session_id)
+            if session_data and "metrics" in session_data:
+                chunk_count = await self.redis.llen(chunks_key)
+                session_data["metrics"]["chunk_count"] = chunk_count
+                await self.set(session_id, session_data)
+        except Exception as e:
+            logger.warning(f"Failed to update chunk count for session {session_id}: {e}")
 
     async def get_chunks(self, session_id: str, offset: int = 0, limit: int = 100) -> List[Dict]:
         """Get chunks with pagination"""
@@ -275,6 +297,141 @@ storage = get_session_storage()
 logger.info(f"STORAGE DEBUG: Using {storage.__class__.__name__}")
 
 
+@router.post("/streaming/start/sse")
+async def start_streaming_sse(
+    request: SwarmExecutionRequest
+):
+    """
+    Start a new streaming session using native Strands streaming with Server-Sent Events
+    """
+    # Use session_id from request if provided, otherwise generate new one
+    session_id = request.session_id if request.session_id else str(uuid.uuid4())
+    
+    logger.info(f"🆕 SSE START: session_id={session_id}, task={request.task[:50] if request.task else ''}...")
+    
+    if not request.task:
+        raise HTTPException(status_code=400, detail="task is required")
+    
+    async def event_generator():
+        try:
+            # Get Strands session service for proper persistence
+            strands_service = get_strands_session_service()
+            
+            # Initialize context for new session
+            context = {
+                "previous_messages": [],
+                "virtual_filesystem": {},
+                "accumulated_context": {},
+                "task_history": [{
+                    "task": request.task,
+                    "timestamp": datetime.utcnow().isoformat()
+                }]
+            }
+            
+            # Save initial context
+            strands_service.save_context(session_id, context)
+            
+            # Create event queue for async communication
+            event_queue = asyncio.Queue()
+            
+            # Streaming callback
+            async def streaming_callback(**kwargs):
+                event_type = kwargs.get("type", "unknown")
+                agent = kwargs.get("agent")
+                data = kwargs.get("data", {})
+                
+                event = {
+                    "type": event_type,
+                    "agent": agent,
+                    "data": data,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                await event_queue.put(event)
+            
+            # Use enhanced service
+            service = EnhancedSwarmService()
+            
+            logger.info(f"🚀 Starting native Strands streaming for new session {session_id}")
+            
+            # Send start event with session ID
+            yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+            
+            # Start swarm execution
+            async def run_swarm():
+                try:
+                    # CRITICAL FIX: Set execution_id to session_id for proper session management
+                    request.execution_id = session_id
+                    logger.info(f"🔗 SSE: Set request.execution_id to {session_id} for session synchronization")
+                    
+                    result = await service.execute_swarm_async(
+                        request=request,
+                        user_id="stream_user",
+                        callback_handler=streaming_callback,
+                        conversation_history=[]  # New session, no history
+                    )
+                    # CRITICAL FIX: Extract actual message content from result
+                    result_content = ""
+                    if result:
+                        if hasattr(result, 'result'):
+                            result_content = result.result  # Get the actual message content
+                        elif hasattr(result, 'message'):
+                            result_content = result.message
+                        else:
+                            result_content = str(result)
+                    
+                    # Send completion with actual content
+                    await event_queue.put({
+                        'type': 'session_complete',
+                        'result': result_content,
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                except Exception as e:
+                    logger.error(f"Swarm execution error: {e}")
+                    await event_queue.put({
+                        'type': 'error',
+                        'error': str(e),
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                finally:
+                    await event_queue.put(None)  # End signal
+            
+            # Start execution
+            swarm_task = asyncio.create_task(run_swarm())
+            
+            # Stream events
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                    if event is None:
+                        break
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+                    if swarm_task.done():
+                        break
+            
+        except Exception as e:
+            logger.error(f"SSE streaming error: {e}")
+            error_event = {
+                "type": "error",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
 @router.post("/streaming/start")
 async def start_streaming(
     request: SwarmExecutionRequest,
@@ -285,8 +442,8 @@ async def start_streaming(
     Returns session ID for polling
     """
 
-    # Generate secure session ID
-    session_id = str(uuid.uuid4())
+    # Use provided session_id if available, otherwise generate new one
+    session_id = request.session_id if request.session_id else str(uuid.uuid4())
     
     logger.info(f"🆕 START REQUEST: new session_id={session_id}, task={request.task[:50] if request.task else ''}..., agents={len(request.agents) if request.agents else 0}")
     
@@ -342,21 +499,26 @@ async def start_streaming(
                     "timestamp": datetime.utcnow().isoformat()
                 }
 
-                # Update metrics
+                # Update metrics and initialize accumulator
                 session = await storage.get(session_id)
-                if session and "metrics" in session:
-                    session["metrics"]["agent_count"] += 1
+                if session:
+                    if "metrics" in session:
+                        session["metrics"]["agent_count"] += 1
+                    # Initialize accumulator for this agent
+                    accumulated = session.get("accumulated", {})
+                    accumulated[agent] = ""
+                    session["accumulated"] = accumulated
                     await storage.set(session_id, session)
 
             elif event_type == "text_generation" and agent:
                 chunk = data.get("chunk", "") or data.get("text", "")
                 sequence = data.get("sequence")
                 
-                if chunk and sequence:
+                if chunk and sequence is not None:
                     # CRITICAL FIX: Buffer chunks to ensure proper ordering
                     if agent not in agent_chunk_buffers:
                         agent_chunk_buffers[agent] = {}
-                        agent_expected_sequence[agent] = 1
+                        agent_expected_sequence[agent] = 0  # Start from 0, not 1
                     
                     # Store chunk in buffer with sequence number
                     chunk_event = {
@@ -377,6 +539,17 @@ async def start_streaming(
                     while expected_seq in agent_chunk_buffers[agent]:
                         ordered_event = agent_chunk_buffers[agent].pop(expected_seq)
                         await storage.append_chunk(session_id, ordered_event)
+                        
+                        # Also accumulate the text
+                        session = await storage.get(session_id)
+                        if session:
+                            accumulated = session.get("accumulated", {})
+                            if agent not in accumulated:
+                                accumulated[agent] = ""
+                            accumulated[agent] += ordered_event.get("content", "")
+                            session["accumulated"] = accumulated
+                            await storage.set(session_id, session)
+                        
                         expected_seq += 1
                     
                     agent_expected_sequence[agent] = expected_seq
@@ -392,6 +565,17 @@ async def start_streaming(
                     }
                     if data.get("is_tool_result"):
                         event["is_tool_result"] = True
+                    
+                    # Also accumulate text for the agent
+                    session = await storage.get(session_id)
+                    if session:
+                        accumulated = session.get("accumulated", {})
+                        if agent not in accumulated:
+                            accumulated[agent] = ""
+                        accumulated[agent] += chunk
+                        session["accumulated"] = accumulated
+                        await storage.set(session_id, session)
+                    
                     await storage.append_chunk(session_id, event)
                     return
 
@@ -407,11 +591,17 @@ async def start_streaming(
                     if agent in agent_expected_sequence:
                         del agent_expected_sequence[agent]
 
-                session = await storage.get(session_id)
-                accumulated_text = ""
-
-                if session and "accumulated" in session:
-                    accumulated_text = session["accumulated"].get(agent, "")
+                # CRITICAL FIX: First try to get output from the event data
+                # The coordinator sends the complete output in data.output
+                accumulated_text = data.get("output", "")
+                
+                # If no output in event, fall back to accumulated text from session
+                if not accumulated_text:
+                    session = await storage.get(session_id)
+                    if session and "accumulated" in session:
+                        accumulated_text = session["accumulated"].get(agent, "")
+                
+                logger.info(f"✅ Agent {agent} completed with {len(accumulated_text)} chars")
 
                 event = {
                     "type": "agent_done",
@@ -420,6 +610,59 @@ async def start_streaming(
                     "tokens": data.get("tokens", 0),
                     "timestamp": datetime.utcnow().isoformat()
                 }
+                
+                # CRITICAL FIX: Append agent_done event to storage immediately
+                # First verify session exists
+                session_check = await storage.get(session_id)
+                if session_check:
+                    await storage.append_chunk(session_id, event)
+                    logger.info(f"📤 Appended agent_done event to storage for {agent} with {len(accumulated_text)} chars")
+                    
+                    # Verify it was actually stored
+                    updated_session = await storage.get(session_id)
+                    if updated_session and "chunks" in updated_session:
+                        logger.info(f"✅ Verified: Session now has {len(updated_session['chunks'])} total chunks")
+                else:
+                    logger.error(f"❌ CRITICAL: Session {session_id} not found when trying to append agent_done event!")
+                
+                # CRITICAL: Save agent message to database for persistence
+                if accumulated_text and len(accumulated_text.strip()) > 0:
+                    try:
+                        from app.services.chat_service import ChatService
+                        from app.core.database import get_async_session
+                        from app.schemas.chat import ChatMessageCreate, ChatSessionCreate
+                        
+                        async with get_async_session() as db:
+                            chat_service = ChatService(db)
+                            user_id = "default_user"  # TODO: Get actual user_id from session
+                            
+                            # First ensure session exists in database
+                            existing_session = await chat_service.get_session(session_id, user_id)
+                            if not existing_session:
+                                # Create session if it doesn't exist
+                                session_data = ChatSessionCreate(
+                                    session_id=session_id,
+                                    title=f"Streaming Session {session_id[:8]}",
+                                    description="Auto-created streaming session"
+                                )
+                                await chat_service.create_session(user_id, session_data)
+                                logger.info(f"📋 Created database session for {session_id}")
+                            
+                            message_data = ChatMessageCreate(
+                                role="assistant",
+                                content=accumulated_text,
+                                agent_name=agent,
+                                message_type="text"
+                            )
+                            
+                            await chat_service.add_message(
+                                session_id, 
+                                user_id,
+                                message_data
+                            )
+                            logger.info(f"💾 Saved {agent} message to database ({len(accumulated_text)} chars)")
+                    except Exception as e:
+                        logger.error(f"Failed to save {agent} message to database: {e}")
 
                 # Update metrics
                 if session:
@@ -765,7 +1008,9 @@ async def start_streaming(
                 
                 # CRITICAL: Set session_id on request for human-loop compatibility
                 request.session_id = session_id
-                logger.info(f"🔗 Set session_id on request: {session_id}")
+                # CRITICAL FIX: Set execution_id to session_id for proper session management
+                request.execution_id = session_id
+                logger.info(f"🔗 Set request.session_id and execution_id to {session_id} for session synchronization")
                 
                 result = await service.execute_swarm_async(
                     request=request,
@@ -804,6 +1049,9 @@ async def start_streaming(
                 else:
                     # Fallback to sequential if DAG building failed
                     logger.warning("DAG building failed, falling back to sequential")
+                    # CRITICAL FIX: Set execution_id to session_id for proper session management
+                    request.execution_id = session_id
+                    logger.info(f"🔗 Set request.execution_id to {session_id} for DAG fallback")
                     result = await service.execute_swarm_async(
                         request=request,
                         user_id="stream_user",
@@ -817,19 +1065,20 @@ async def start_streaming(
                 
                 session = await storage.get(session_id)
                 
-                # Only use existing agents if this is a continuation (session has accumulated context)
-                if session and "accumulated" in session and len(session["accumulated"]) > 0:
-                    # This is a continuation - preserve existing agents
-                    if "agents" in session:
-                        existing_agents = session["agents"]
-                        logger.info(f"📋 Continuation detected - found {len(existing_agents)} existing agents in session")
-                    
-                    # Extract conversation history from accumulated context
+                # ALWAYS start with fresh agents - let the service create appropriate ones for each task
+                existing_agents = None
+                conversation_history = []
+                
+                # Extract conversation history if available (for context, not agent reuse)
+                if session and "accumulated" in session:
                     conversation_history = session["accumulated"]
-                    logger.info(f"📖 Using {len(conversation_history)} conversation history items")
-                else:
-                    # Fresh session - no existing agents
-                    logger.info(f"🆕 Fresh session - starting with no existing agents")
+                    logger.info(f"📖 Using {len(conversation_history)} conversation history items for context")
+                
+                logger.info(f"🆕 Starting with fresh agents - service will create appropriate ones")
+                
+                # CRITICAL FIX: Set execution_id to session_id for proper session management
+                request.execution_id = session_id
+                logger.info(f"🔗 Set request.execution_id to {session_id} for session synchronization")
                 
                 result = await service.execute_swarm_async(
                     request=request,
@@ -858,15 +1107,108 @@ async def start_streaming(
                 session["metrics"]["end_time"] = datetime.utcnow().isoformat()
                 await storage.set(session_id, session)
                 
-                # CRITICAL: Save accumulated context to Strands for future continuation
-                if session.get("accumulated"):
-                    logger.info(f"💾 Saving accumulated context for session {session_id}")
-                    context_to_save = {
-                        "accumulated_context": session["accumulated"],
-                        "virtual_filesystem": session.get("virtual_filesystem", {}),
-                        "task_history": session.get("task_history", [])
-                    }
-                    strands_service.save_context(session_id, context_to_save)
+                # CRITICAL: Save messages and context to Strands for future continuation
+                logger.info(f"💾 Saving messages and context for session {session_id}")
+                
+                # Build complete message history
+                all_messages = []
+                
+                # Add the user's task message
+                all_messages.append({
+                    "role": "user",
+                    "content": request.task
+                })
+                
+                # Get the assistant's response - check multiple sources
+                assistant_content = ""
+                
+                # First check result object
+                if result:
+                    if hasattr(result, 'result'):
+                        assistant_content = str(result.result)
+                    elif hasattr(result, 'output'):
+                        assistant_content = str(result.output)
+                    elif hasattr(result, 'content'):
+                        assistant_content = str(result.content)
+                    else:
+                        assistant_content = str(result)
+                
+                # If no result, check accumulated content
+                if not assistant_content and session.get("accumulated"):
+                    accumulated = session["accumulated"]
+                    
+                    # Check coordinator first
+                    if "coordinator" in accumulated:
+                        assistant_content = accumulated["coordinator"]
+                    else:
+                        # Check for any agent responses
+                        for agent_name, content in accumulated.items():
+                            if content and isinstance(content, str) and len(content.strip()) > 0:
+                                assistant_content = content
+                                break
+                
+                # If still no content, check the last chunk for final response
+                if not assistant_content:
+                    try:
+                        chunks = await storage.get_chunks(session_id, offset=0, limit=1000)
+                        for chunk in reversed(chunks):  # Check from most recent
+                            if chunk.get("type") == "text_generation" and chunk.get("content"):
+                                if not assistant_content:
+                                    assistant_content = ""
+                                assistant_content += chunk["content"]
+                        
+                        # Clean up if we built from chunks
+                        if assistant_content:
+                            assistant_content = assistant_content.strip()
+                    except Exception as e:
+                        logger.warning(f"Could not extract content from chunks: {e}")
+                
+                logger.info(f"💬 Assistant content length: {len(assistant_content) if assistant_content else 0}")
+                
+                if assistant_content:
+                    all_messages.append({
+                        "role": "assistant",
+                        "content": assistant_content
+                    })
+                
+                # Save messages to database
+                try:
+                    from app.core.database import AsyncSessionLocal
+                    from app.services.chat_service import ChatService
+                    from app.schemas.chat import ChatMessageCreate, ChatSessionCreate
+                    
+                    async with AsyncSessionLocal() as db:
+                        chat_service = ChatService(db)
+                        
+                        # First ensure the session exists in the database
+                        existing_session = await chat_service.get_session(session_id, "default_user")
+                        if not existing_session:
+                            # Create the session if it doesn't exist
+                            session_data = ChatSessionCreate(
+                                session_id=session_id,
+                                title=request.task[:50] if request.task else "New Chat",
+                                max_handoffs=request.max_handoffs or 20,
+                                max_iterations=request.max_iterations or 20
+                            )
+                            await chat_service.create_session("default_user", session_data)
+                            logger.info(f"Created chat session {session_id} in database")
+                        
+                        # REMOVED: Message saving - frontend handles this to avoid duplicates
+                        # Frontend saves messages through the chat API when:
+                        # 1. User sends a message (saveMessageToSession)
+                        # 2. Assistant message is finalized (finalizeStreamingMessage)
+                        logger.info(f"📝 Skipping backend message save - frontend handles persistence")
+                except Exception as e:
+                    logger.error(f"Failed to save messages to database: {e}")
+                
+                context_to_save = {
+                    "messages": all_messages,  # CRITICAL: Save messages for context
+                    "accumulated_context": session.get("accumulated", {}),
+                    "virtual_filesystem": session.get("virtual_filesystem", {}),
+                    "task_history": session.get("task_history", [])
+                }
+                strands_service.save_context(session_id, context_to_save)
+                logger.info(f"✅ Saved {len(all_messages)} messages to Strands session")
 
                 # Send completion event
                 await storage.append_chunk(session_id, {
@@ -976,7 +1318,7 @@ async def poll_stream(
     try:
         # CRITICAL DEBUG: Log entry point
         logger.info(f"ENTRY: poll_stream called with session_id={session_id[:8]}, offset={offset}, limit={limit}")
-
+        
         # Validate session exists
         session = await storage.get(session_id)
         if not session:
@@ -1152,14 +1494,179 @@ async def health_check():
     })
 
 
+@router.post("/streaming/continue/sse")
+async def continue_streaming_sse(
+    request: Dict[str, Any]
+):
+    """
+    Continue streaming session using native Strands streaming with Server-Sent Events
+    This replaces the polling-based approach with proper streaming
+    """
+    session_id = request.get("session_id")
+    task = request.get("task", "")
+    previous_messages = request.get("previous_messages", [])
+    agents = request.get("agents", [])
+    max_handoffs = request.get("max_handoffs", 20)
+    execution_mode = request.get("execution_mode", "auto")
+    
+    logger.info(f"🔄 SSE CONTINUE: session_id={session_id}, task={task[:50]}...")
+    
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    
+    if not task:
+        raise HTTPException(status_code=400, detail="task is required")
+    
+    async def event_generator():
+        try:
+            # Get Strands session service for proper persistence
+            strands_service = get_strands_session_service()
+            
+            # Load context from Strands persistent storage
+            saved_context = strands_service.get_context(session_id)
+            virtual_filesystem = strands_service.get_virtual_filesystem(session_id)
+            
+            logger.info(f"📖 Loaded saved_context keys: {list(saved_context.keys())}")
+            logger.info(f"📖 Messages in saved_context: {len(saved_context.get('messages', []))}")
+            
+            # Build context for swarm execution
+            # CRITICAL FIX: Always use saved messages for continuation, not request messages
+            # This ensures conversation history is preserved across continuations
+            previous_messages = saved_context.get("messages", [])
+            context = {
+                "previous_messages": previous_messages,  # Always use saved messages
+                "messages": previous_messages,  # CRITICAL: Also save as "messages" for consistency
+                "virtual_filesystem": virtual_filesystem,
+                "accumulated_context": saved_context.get("accumulated_context", {}),
+                "task_history": saved_context.get("task_history", [])
+            }
+            
+            # Add current task to history
+            context["task_history"].append({
+                "task": task,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            
+            # Save updated context with proper message key
+            strands_service.save_context(session_id, context)
+            
+            # Create swarm request
+            swarm_request = SwarmExecutionRequest(
+                task=task,
+                agents=agents,  # For continuation, always generate fresh agents
+                max_handoffs=max_handoffs,
+                execution_id=session_id,
+                context=context,
+                execution_mode=execution_mode
+            )
+            
+            # Use enhanced service with native Strands streaming
+            service = EnhancedSwarmService()
+            
+            # Create event queue for async communication between callback and generator
+            event_queue = asyncio.Queue()
+            
+            # Streaming callback that puts events in queue
+            async def streaming_callback(**kwargs):
+                event_type = kwargs.get("type", "unknown")
+                agent = kwargs.get("agent")
+                data = kwargs.get("data", {})
+                
+                # Create SSE event
+                event = {
+                    "type": event_type,
+                    "agent": agent,
+                    "data": data,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                # Put event in queue for generator to yield
+                await event_queue.put(event)
+                
+            # Execute swarm and stream events
+            logger.info(f"🚀 Starting native Strands streaming for session {session_id}")
+            
+            # Send start event
+            yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+            
+            # Start swarm execution in background
+            async def run_swarm():
+                try:
+                    conversation_history = context.get("previous_messages", [])
+                    logger.info(f"📚 Passing {len(conversation_history)} messages to swarm executor")
+                    
+                    result = await service.execute_swarm_async(
+                        request=swarm_request,
+                        user_id="stream_user",
+                        callback_handler=streaming_callback,
+                        conversation_history=conversation_history
+                    )
+                    # Send completion event
+                    await event_queue.put({
+                        'type': 'session_complete', 
+                        'result': str(result) if result else None, 
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                except Exception as e:
+                    logger.error(f"Swarm execution error: {e}")
+                    await event_queue.put({
+                        'type': 'error', 
+                        'error': str(e), 
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                finally:
+                    # Signal end of stream
+                    await event_queue.put(None)
+            
+            # Start swarm execution
+            swarm_task = asyncio.create_task(run_swarm())
+            
+            # Yield events from queue
+            while True:
+                try:
+                    # Wait for event with timeout
+                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                    if event is None:  # End of stream signal
+                        break
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive
+                    yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+                    # Check if swarm is still running
+                    if swarm_task.done():
+                        break
+            
+        except Exception as e:
+            logger.error(f"SSE streaming error: {e}")
+            error_event = {
+                "type": "error",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
 @router.post("/streaming/continue")
 async def continue_streaming(
     request: Dict[str, Any],
     background_tasks: BackgroundTasks
 ):
     """
-    Continue an existing streaming session with context preservation using Strands SDK
+    Continue an existing streaming session using proper Strands session management
     """
+    print("🚨🚨🚨 STREAMING CONTINUE ENDPOINT CALLED!")
+    logger.info("🚨🚨🚨 STREAMING CONTINUE ENDPOINT CALLED!")
     session_id = request.get("session_id")
     task = request.get("task", "")
     previous_messages = request.get("previous_messages", [])
@@ -1172,62 +1679,55 @@ async def continue_streaming(
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
     
-    # Get Strands session service
+    # Get Strands session service - this handles proper persistence
     strands_service = get_strands_session_service()
     
-    # Get existing session and virtual filesystem from Strands
-    session = await storage.get(session_id)
-    virtual_filesystem = strands_service.get_virtual_filesystem(session_id)
+    # Load messages from database if not provided
+    # NOTE: Disabled database loading for now - using Strands persistence
+    # if not previous_messages:
+    #     try:
+    #         from app.services.chat_service import get_chat_service
+    #         chat_service = get_chat_service()
+    #         db_messages = await chat_service.get_session_messages(session_id)
+    #         previous_messages = [
+    #             {"role": msg.role, "content": msg.content}
+    #             for msg in db_messages
+    #         ]
+    #         logger.info(f"📚 Loaded {len(previous_messages)} messages from database")
+    #     except Exception as e:
+    #         logger.error(f"Failed to load messages from database: {e}")
+    #         previous_messages = []
+    
+    # Check if session exists in Strands persistent storage
+    existing_agents = strands_service.get_agents(session_id)
     saved_context = strands_service.get_context(session_id)
+    virtual_filesystem = strands_service.get_virtual_filesystem(session_id)
     
-    # Perform session context analysis for intelligent decisions
-    session_analysis = strands_service.analyze_session_context(session_id)
-    logger.info(f"📊 Session Analysis Results:")
-    logger.info(f"  - Total messages: {session_analysis.get('total_messages', 0)}")
-    logger.info(f"  - Agents used: {session_analysis.get('agents_used', 0)}")
-    logger.info(f"  - Task domains: {session_analysis.get('task_domains', set())}")
-    logger.info(f"  - Continuation suitable: {session_analysis.get('continuation_suitable', False)}")
+    logger.info(f"📊 Strands Session Analysis:")
+    logger.info(f"  - Persistent agents: {len(existing_agents)}")
+    logger.info(f"  - Saved messages: {len(saved_context.get('messages', []))}")
+    logger.info(f"  - Virtual files: {len(virtual_filesystem)}")
     
-    if not session:
-        # If session doesn't exist in memory, check if we have it persisted
-        logger.info(f"Session {session_id} not in memory, checking persisted sessions")
-        if session_id in strands_service.list_sessions():
-            logger.info(f"Found persisted session {session_id}, restoring context")
-        else:
-            # Session not found anywhere, but keep the same session_id to maintain continuity
-            logger.info(f"Session {session_id} not found, creating new session with same ID")
+    # For continuation, we should ALWAYS create fresh agents, not reuse old ones
+    # This ensures dynamic agent selection based on the new task
     
-    # STRANDS PATTERN: Use AI Orchestrator for intelligent agent selection
-    # The orchestrator analyzes tasks and creates optimal agent configurations
+    # Check if we have persisted session data
+    session_exists = session_id in strands_service.list_sessions()
+    if session_exists:
+        logger.info(f"Found persisted session {session_id}, will use existing context")
+    else:
+        logger.info(f"Session {session_id} not found in persistent storage, will create new session")
     
     logger.info("🤖 AGENT SELECTION: Using AI Orchestrator for intelligent decisions")
     logger.info(f"📝 Task: {task[:100]}...")
     logger.info(f"💬 Context: {len(previous_messages)} previous messages")
     
-    # Simple check: is this a continuation of the same conversation?
-    is_continuation = False
+    # For continuation, always generate fresh agents (don't reuse old ones)
+    # This ensures dynamic agent selection based on the new task
     if agents and len(agents) > 0:
-        # Frontend provided agents - respect that choice
         logger.info(f"📥 Using {len(agents)} agents provided by frontend")
-    elif previous_messages and task:
-        # Check for continuation keywords  
-        continuation_keywords = ["continue", "more", "also", "extend", "add to", "update", "modify"]
-        is_continuation = any(keyword in task.lower() for keyword in continuation_keywords)
-        
-        if is_continuation and session_analysis.get('agents_used', 0) > 0:
-            # Try to reuse existing agents for continuation
-            existing_agents = strands_service.get_agents(session_id)
-            if existing_agents:
-                logger.info(f"✅ Continuation detected - reusing {len(existing_agents)} existing agents")
-                agents = existing_agents
-            else:
-                logger.info("🆕 No existing agents found - will create new ones")
-                agents = []
-        else:
-            logger.info("🆕 New task or context switch - will create fresh agents")
-            agents = []
     else:
-        logger.info("🆕 No context - will create new agents")
+        logger.info("🆕 Generating fresh agents for new task")
         agents = []
     
     
@@ -1264,18 +1764,27 @@ async def continue_streaming(
         agents = converted_agents
         logger.info(f"✅ Converted {len(agents)} agents to proper format")
     
-    # Merge context from different sources, prioritizing saved context
-    # Load messages from saved context if not provided
-    if not previous_messages and saved_context.get("messages"):
-        logger.info(f"📚 Loading {len(saved_context['messages'])} messages from saved context")
-        previous_messages = saved_context["messages"]
+    # CRITICAL FIX: Combine all message sources for continuation
+    # This ensures conversation history is preserved across continuations
+    saved_messages = saved_context.get("messages", [])
+    all_messages = previous_messages + saved_messages
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_messages = []
+    for msg in all_messages:
+        msg_key = f"{msg.get('role', '')}:{msg.get('content', '')}"
+        if msg_key not in seen:
+            seen.add(msg_key)
+            unique_messages.append(msg)
+    
+    logger.info(f"📚 Combined {len(unique_messages)} unique messages from all sources")
     
     context = {
-        "previous_messages": previous_messages,
-        "messages": previous_messages,  # Also store as "messages" for compatibility
-        "virtual_filesystem": virtual_filesystem or saved_context.get("virtual_filesystem", {}) or (session.get("virtual_filesystem", {}) if session else {}),
-        "accumulated_context": saved_context.get("accumulated_context", {}) or (session.get("accumulated", {}) if session else {}),
-        "task_history": saved_context.get("task_history", []) or (session.get("task_history", []) if session else [])
+        "previous_messages": unique_messages,  # Use combined messages
+        "messages": unique_messages,  # Also store as "messages" for compatibility
+        "virtual_filesystem": virtual_filesystem or saved_context.get("virtual_filesystem", {}),
+        "accumulated_context": saved_context.get("accumulated_context", {}),
+        "task_history": saved_context.get("task_history", [])
     }
     
     # Log what we loaded
@@ -1291,27 +1800,37 @@ async def continue_streaming(
         "timestamp": datetime.utcnow().isoformat()
     })
     
-    # Save context to Strands session
+    # CRITICAL FIX: Save context BEFORE starting execution to avoid race condition
+    # This ensures context is persisted before any async operations begin
     strands_service.save_context(session_id, context)
+    logger.info(f"💾 Context saved for session {session_id} BEFORE execution starts")
     
-    # Initialize session with preserved context
+    # Initialize session for streaming (Strands handles persistence automatically)
+    # CRITICAL: Always start with empty chunks for new execution
+    # The previous chunks are already delivered to frontend, we don't need to preserve them
+    existing_chunks = []
+    existing_chunk_count = 0
+    logger.info(f"📊 Starting fresh chunk collection for task: {task[:50]}...")
+    
+    # Update session while preserving chunks
     await storage.set(session_id, {
         "status": "initializing",
         "agents": agents,
         "task": task,
         "context": context,
         "virtual_filesystem": context["virtual_filesystem"],
-        "accumulated": context["accumulated_context"],
+        "accumulated": {},  # Fresh start for new task
         "task_history": context["task_history"],
-        "chunks": [],
+        "chunks": existing_chunks,  # PRESERVE existing chunks
         "metrics": {
             "start_time": datetime.utcnow().isoformat(),
-            "chunk_count": 0,
+            "chunk_count": existing_chunk_count,  # PRESERVE chunk count
             "agent_count": 0,
             "tool_calls": 0,
             "handoffs": 0
         }
     })
+    logger.info(f"✅ Session {session_id} initialized for continuation")
     
     # Create request with context
     swarm_request = SwarmExecutionRequest(
@@ -1332,7 +1851,8 @@ async def continue_streaming(
         session_id,
         swarm_request,
         service,
-        context
+        context,
+        storage  # Pass the storage instance
     )
     
     return JSONResponse({
@@ -1347,10 +1867,14 @@ async def execute_swarm_with_context(
     session_id: str,
     request: SwarmExecutionRequest,
     service: EnhancedSwarmService,
-    context: Dict[str, Any]
+    context: Dict[str, Any],
+    storage_instance: SessionStorage = None
 ):
     """Execute swarm with preserved context"""
     try:
+        # Use provided storage or get default
+        storage = storage_instance or get_session_storage()
+        
         # Get Strands service once outside the callback to capture in closure
         strands_service = get_strands_session_service()
         
@@ -1371,16 +1895,115 @@ async def execute_swarm_with_context(
             if data:
                 event["data"] = data
                 
-            # Special handling for content/delta events
-            if event_type == "token" and "content" in data:
-                event["type"] = "delta"
-                event["content"] = data["content"]
+            # Handle agent_started event
+            if event_type == "agent_started" and agent:
+                event["type"] = "agent_start"
+                # Initialize accumulator for this agent
+                session = await storage.get(session_id)
+                if session:
+                    accumulated = session.get("accumulated", {})
+                    accumulated[agent] = ""
+                    session["accumulated"] = accumulated
+                    await storage.set(session_id, session)
                 
-            # Save to storage
-            await storage.append_chunk(session_id, event)
+            # Special handling for content/delta events
+            if event_type == "token":
+                # Handle token events from coordinator
+                content = kwargs.get("content", "") or data.get("content", "")
+                if content:
+                    logger.info(f"🔄 Processing token event for {agent}: {content[:20]}...")
+                    event["type"] = "delta"
+                    event["content"] = content
+                    if agent:
+                        event["agent"] = agent
+                    # Accumulate tokens for the agent
+                    session = await storage.get(session_id)
+                    if session:
+                        accumulated = session.get("accumulated", {})
+                        if agent not in accumulated:
+                            accumulated[agent] = ""
+                        accumulated[agent] += content
+                        session["accumulated"] = accumulated
+                        await storage.set(session_id, session)
+                        logger.info(f"✅ Token accumulated, total: {len(accumulated[agent])} chars")
+            elif event_type == "text_generation":
+                # Handle text generation events from Strands
+                chunk = data.get("chunk", "") or data.get("text", "")
+                if chunk:
+                    logger.info(f"🔄 Processing text_generation event for {agent}: {chunk[:50]}...")
+                    event["type"] = "delta"
+                    event["content"] = chunk
+                    if agent:
+                        event["agent"] = agent
+                    # Also accumulate text for the agent
+                    session = await storage.get(session_id)
+                    if session:
+                        accumulated = session.get("accumulated", {})
+                        if agent not in accumulated:
+                            accumulated[agent] = ""
+                        accumulated[agent] += chunk
+                        session["accumulated"] = accumulated
+                        await storage.set(session_id, session)
+                        logger.info(f"✅ Accumulated {len(accumulated[agent])} chars for {agent}")
+                
+            # Handle direct agent_done event from coordinator
+            if event_type == "agent_done":
+                content = kwargs.get("content", "")
+                if content and agent:
+                    done_event = {
+                        "type": "agent_done",
+                        "agent": agent,
+                        "content": content,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    await storage.append_chunk(session_id, done_event)
+                    logger.info(f"✅ Stored direct agent_done event for {agent} with {len(content)} chars")
+                return  # Don't process further
+            
+            # Save to storage (but not for certain event types)
+            # CRITICAL: Don't save individual text_generation/token events as chunks
+            # They should only accumulate and be saved as agent_done
+            if event_type not in ["agents_generated", "agent_completed", "text_generation", "token"]:
+                await storage.append_chunk(session_id, event)
+            
+            # Special handling for agent_completed event
+            if event_type == "agent_completed" and agent:
+                logger.info(f"🎯 Processing agent_completed for {agent}, data keys: {data.keys() if data else 'None'}")
+                session = await storage.get(session_id)
+                accumulated_text = ""
+                
+                # CRITICAL FIX: Check for content in the data field first (from coordinator)
+                if data and "output" in data:
+                    accumulated_text = data["output"]
+                    logger.info(f"📝 Using output from agent_completed event: {len(accumulated_text)} chars")
+                elif session and "accumulated" in session:
+                    accumulated_text = session["accumulated"].get(agent, "")
+                    logger.info(f"📝 Using accumulated text: {len(accumulated_text)} chars")
+                
+                # CRITICAL: Only create event if we have actual content
+                if accumulated_text and accumulated_text.strip():
+                    # Create completion event with FULL accumulated text
+                    completion_event = {
+                        "type": "agent_done",
+                        "agent": agent,
+                        "content": accumulated_text,  # Full message, not truncated
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    await storage.append_chunk(session_id, completion_event)
+                    logger.info(f"✅ Appended agent_done event for {agent} with COMPLETE message: {len(accumulated_text)} chars")
+                    
+                    # Clear accumulator after sending complete message
+                    if session:
+                        session["accumulated"][agent] = ""
+                        await storage.set(session_id, session)
+                
+                # Update metrics
+                if session:
+                    session["metrics"]["agent_count"] = session.get("metrics", {}).get("agent_count", 0) + 1
+                    await storage.set(session_id, session)
             
             # Special handling for agents_generated event
-            if event_type == "agents_generated":
+            elif event_type == "agents_generated":
                 # CRITICAL: Update session with generated agents for continuation
                 if data and data.get("agents"):
                     session = await storage.get(session_id)
@@ -1410,19 +2033,14 @@ async def execute_swarm_with_context(
                     strands_svc.save_virtual_filesystem(session_id, virtual_fs)
         
         # Build conversation history from context
+        # CRITICAL: Pass ALL messages for proper context preservation
         conversation_history = []
         
-        # Add previous messages from context
         if context.get("previous_messages"):
-            logger.info(f"📝 Adding {len(context['previous_messages'])} previous messages to conversation history")
-            
-            # Add the actual messages for full context
-            for msg in context["previous_messages"]:
-                if msg.get("role") and msg.get("content"):
-                    conversation_history.append({
-                        "role": msg["role"],
-                        "content": msg["content"]
-                    })
+            logger.info(f"📝 Found {len(context['previous_messages'])} previous messages")
+            # Pass ALL messages to maintain full context
+            conversation_history = context["previous_messages"]
+            logger.info(f"📝 Using full conversation history with {len(conversation_history)} messages")
         else:
             logger.info("📝 No previous messages in context")
         
@@ -1499,20 +2117,30 @@ async def execute_swarm_with_context(
                 )
         else:
             logger.info(f"➡️ Using sequential execution in continue")
-            await storage.append_chunk(session_id, {
-                "type": "execution_mode",
-                "mode": "sequential",
-                "reason": "Sequential mode selected or optimal for task",
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            # Pass context to the service with conversation history
-            logger.info(f"🎯 Passing {len(conversation_history)} conversation history items to agents")
-            result = await service.execute_swarm_async(
-                request=request,
-                user_id="stream_user",
-                callback_handler=streaming_callback,
-                conversation_history=conversation_history
-            )
+            try:
+                await storage.append_chunk(session_id, {
+                    "type": "execution_mode",
+                    "mode": "sequential",
+                    "reason": "Sequential mode selected or optimal for task",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+                # Pass context to the service with conversation history
+                logger.info(f"🎯 Passing {len(conversation_history)} conversation history items to agents")
+                logger.info(f"📋 Request details: task={request.task}, agents={len(request.agents)}")
+                logger.info(f"📋 Conversation history: {conversation_history}")
+                
+                result = await service.execute_swarm_async(
+                    request=request,
+                    user_id="stream_user",
+                    callback_handler=streaming_callback,
+                    use_orchestrator=True,
+                    conversation_history=conversation_history,
+                    existing_agents=context.get("existing_agents", [])
+                )
+                logger.info(f"✅ Sequential execution completed with result: {result}")
+            except Exception as seq_error:
+                logger.error(f"❌ Sequential execution failed: {seq_error}", exc_info=True)
+                raise
         
         # Save final result
         session = await storage.get(session_id)
@@ -1548,9 +2176,20 @@ async def execute_swarm_with_context(
             
             # Add the result as assistant message if available
             if result:
+                # CRITICAL FIX: Extract actual content from result
+                result_content = ""
+                if hasattr(result, 'result'):
+                    result_content = result.result
+                elif hasattr(result, 'message'):
+                    result_content = result.message
+                elif hasattr(result, 'content'):
+                    result_content = result.content
+                else:
+                    result_content = str(result)
+                
                 all_messages.append({
                     "role": "assistant", 
-                    "content": str(result)
+                    "content": result_content
                 })
             
             context_to_save = {
@@ -1564,15 +2203,48 @@ async def execute_swarm_with_context(
             strands_svc.save_context(session_id, context_to_save)
             logger.info(f"✅ Saved {len(all_messages)} messages to persistent context")
             
-        # Send completion event
+            # Save messages to database for UI visibility
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.services.chat_service import ChatService
+                from app.schemas.chat import ChatMessageCreate, ChatSessionCreate
+                
+                async with AsyncSessionLocal() as db:
+                    chat_service = ChatService(db)
+                    
+                    # First ensure the session exists in the database
+                    existing_session = await chat_service.get_session(session_id, "default_user")
+                    if not existing_session:
+                        # Create the session if it doesn't exist
+                        session_data = ChatSessionCreate(
+                            session_id=session_id,
+                            title=request.task[:50] if request.task else "Continued Chat",
+                            max_handoffs=request.max_handoffs or 20,
+                            max_iterations=request.max_iterations or 20
+                        )
+                        await chat_service.create_session("default_user", session_data)
+                        logger.info(f"Created chat session {session_id} in database for continuation")
+                    
+                    # REMOVED: Message saving - frontend handles this to avoid duplicates
+                    # Frontend saves messages through the chat API when:
+                    # 1. User sends a message (saveMessageToSession)
+                    # 2. Assistant message is finalized (finalizeStreamingMessage)
+                    logger.info(f"📝 Skipping backend message save for continuation - frontend handles persistence")
+            except Exception as e:
+                logger.error(f"Failed to save messages to database: {e}")
+            
+        # Send completion event  
+        final_session = await storage.get(session_id)
         await storage.append_chunk(session_id, {
             "type": "done",
             "timestamp": datetime.utcnow().isoformat(),
-            "metrics": session.get("metrics") if session else None
+            "metrics": final_session.get("metrics") if final_session else None
         })
         
     except Exception as e:
-        logger.error(f"Swarm execution failed: {e}")
+        logger.error(f"Swarm execution failed: {e}", exc_info=True)
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         await storage.append_chunk(session_id, {
             "type": "error",
             "error": str(e),

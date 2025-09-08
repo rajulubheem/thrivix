@@ -59,6 +59,7 @@ class ChatMessageResponse(BaseModel):
 
 
 class ChatSessionCreate(BaseModel):
+    session_id: Optional[str] = None  # Allow specifying session_id
     title: Optional[str] = None
     description: Optional[str] = None
     agents_config: Optional[Dict[str, Any]] = None

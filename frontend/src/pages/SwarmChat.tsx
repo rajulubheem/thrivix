@@ -20,7 +20,6 @@ import AgentIterationDisplay from '../components/AgentIterationDisplay';
 import { Artifact, createArtifact } from '../types/artifacts';
 import ConnectedThemeSwitch from '../components/ConnectedThemeSwitch';
 import PageLayout from '../components/layout/PageLayout';
-import './SwarmChat.css';
 
 // [Keep all your existing interfaces as they are]
 interface Message {

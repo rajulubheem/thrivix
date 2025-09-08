@@ -165,6 +165,18 @@ export const useStreamingPolling = (options: StreamingOptions = {}) => {
       // Process chunks
       const hasNewChunks = data.chunks && data.chunks.length > 0;
       console.log('📊 Processing chunks:', hasNewChunks ? data.chunks.length : 'none');
+      
+      // DEBUG: Log the actual chunks to see what we're getting
+      if (hasNewChunks) {
+        console.log('🔍 Chunk details:', data.chunks.map((c: any) => ({ 
+          type: c.type, 
+          agent: c.agent, 
+          hasContent: !!c.content,
+          contentLength: c.content?.length || 0,
+          hasData: !!c.data,
+          fullChunk: c  // Log the entire chunk for debugging
+        })));
+      }
 
       for (const chunk of data.chunks || []) {
         switch (chunk.type) {
@@ -238,12 +250,19 @@ export const useStreamingPolling = (options: StreamingOptions = {}) => {
 
           case 'agent_done':
           case 'agent_completed':
+            console.log('🎯 Processing agent_done/agent_completed chunk:', chunk);
             if (chunk.agent) {
               // Handle both formats - agent_done uses chunk.content, agent_completed uses chunk.data.output
               const output = chunk.content || chunk.data?.output || '';
               const tokens = chunk.tokens || chunk.data?.tokens || 0;
-              console.log(`✅ Agent ${chunk.agent} completed with output:`, output);
-              options.onAgentComplete?.(chunk.agent, output, tokens);
+              console.log(`✅ Agent ${chunk.agent} completed with output (${output.length} chars):`, output);
+              if (output) {
+                options.onAgentComplete?.(chunk.agent, output, tokens);
+              } else {
+                console.warn('⚠️ Agent completed but no output found in chunk:', chunk);
+              }
+            } else {
+              console.warn('⚠️ Agent done chunk without agent field:', chunk);
             }
             break;
 
@@ -352,6 +371,14 @@ export const useStreamingPolling = (options: StreamingOptions = {}) => {
             }
             break;
 
+          case 'continuation_separator':
+            // Handle continuation separator - treat it as a system message
+            if (chunk.content) {
+              console.log('🔄 Continuation separator:', chunk.content);
+              // This will be displayed as a system message in the chat
+            }
+            break;
+
           case 'done':
             setIsStreaming(false);
             options.onComplete?.(chunk.metrics);
@@ -428,7 +455,20 @@ export const useStreamingPolling = (options: StreamingOptions = {}) => {
     setError(null);
     setMetrics(null);
     abortRef.current = false;
-    offsetRef.current = 0;
+    
+    // CRITICAL FIX: Reset offset for continue endpoint
+    // When we call /continue, we're creating a new streaming context even if using the same session_id
+    // The backend will append new chunks starting from where it left off
+    // So we should NOT reset if it's the exact same streaming session still running
+    if (!existingSessionId || existingSessionId !== sessionRef.current) {
+      // This is either a new session or a different session - reset offset
+      offsetRef.current = 0;
+      console.log('🆕 New or different session - resetting offset to 0');
+    } else {
+      // This is a continuation of the SAME streaming session already in progress
+      console.log(`🔄 Continuing same streaming session ${existingSessionId} - keeping offset at ${offsetRef.current}`);
+    }
+    
     retryCountRef.current = 0;
     pollIntervalRef.current = config.minPollInterval;
     lastActivityRef.current = Date.now();
@@ -450,34 +490,38 @@ export const useStreamingPolling = (options: StreamingOptions = {}) => {
         return agent;
       });
 
-      // Use existing session if provided, otherwise check if we should reuse the current one
-      // Only reuse sessionRef.current if it's explicitly passed as existingSessionId
-      const sessionToUse = existingSessionId || (existingSessionId === sessionRef.current ? sessionRef.current : null);
+      // CRITICAL FIX: Determine endpoint based on whether we're continuing
+      // existingSessionId is the chat session ID
+      // sessionRef.current is the streaming session ID 
+      // For continuation: we should have an existingSessionId AND have received chunks (offsetRef > 0)
+      const isContinuation = existingSessionId && offsetRef.current > 0;
       
       console.log('🔄 Starting stream with:', {
         existingSessionId,
         currentSessionRef: sessionRef.current,
-        sessionToUse,
-        willContinue: !!sessionToUse,
+        isContinuation,
+        offsetRef: offsetRef.current,
         task: task.substring(0, 50) + '...'
       });
       
-      // If we have an existing session, continue it instead of starting fresh
-      const endpoint = sessionToUse 
+      // Choose endpoint based on whether we're continuing
+      const endpoint = isContinuation
         ? 'http://localhost:8000/api/v1/streaming/continue'
         : 'http://localhost:8000/api/v1/streaming/start';
       
-      console.log(`📡 Using endpoint: ${endpoint} for session: ${sessionToUse || 'NEW'}`)
+      console.log(`📡 Using endpoint: ${endpoint} for session: ${existingSessionId || 'NEW'}`)
       
-      const requestBody = sessionToUse
+      // Always pass the session_id in the request
+      const requestBody = isContinuation
         ? {
-            session_id: sessionToUse,
+            session_id: existingSessionId,
             task,
             previous_messages: previousMessages || [],
             agents: formattedAgents,
             max_handoffs: maxHandoffs
           }
         : {
+            session_id: existingSessionId,  // CRITICAL: Pass session_id even for start endpoint
             task,
             agents: formattedAgents,
             max_handoffs: maxHandoffs

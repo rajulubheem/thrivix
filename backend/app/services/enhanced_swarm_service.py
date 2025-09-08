@@ -80,26 +80,13 @@ class StrandsSwarmAgent:
         if tool_names:
             tool_guide = ToolDiscoveryService.format_tool_usage_guide(name, tool_names)
         
-        # Build comprehensive prompt with conversation history
-        conversation_context = ""
+        # Don't include conversation history in system prompt - will pass as messages parameter
         if self.conversation_history and len(self.conversation_history) > 0:
-            logger.info(f"🤖 Agent {name} received {len(self.conversation_history)} conversation history items")
-            conversation_context = "\n\n=== PREVIOUS CONVERSATION CONTEXT ===\n"
-            # Include last 10 messages for context
-            for msg in self.conversation_history[-10:]:
-                role = msg.get('role', 'unknown')
-                content = msg.get('content', '')
-                if content:
-                    # Truncate very long messages
-                    if len(content) > 500:
-                        content = content[:500] + "..."
-                    conversation_context += f"{role.upper()}: {content}\n"
-            conversation_context += "=== END OF CONVERSATION CONTEXT ===\n\n"
-            conversation_context += "Please continue the conversation based on the context above.\n"
+            logger.info(f"🤖 Agent {name} will receive {len(self.conversation_history)} conversation history items as messages")
         else:
             logger.info(f"🤖 Agent {name} has NO conversation history")
         
-        enhanced_prompt = f"""{conversation_context}{system_prompt}
+        enhanced_prompt = f"""{system_prompt}
 
 YOU HAVE ACCESS TO THE FOLLOWING TOOLS:
 {', '.join(tool_names) if tool_names else 'No tools available'}
@@ -135,12 +122,41 @@ If a tool fails, check:
             }
         )
 
-        # Create Strands agent
-        self.agent = Agent(
-            model=self.model,
-            tools=self.tools,
-            system_prompt=enhanced_prompt
-        )
+        # CRITICAL FIX: Use centralized Strands session service for PROPER persistence
+        from app.services.strands_session_service import get_strands_session_service
+        
+        if session_id:
+            # Use the centralized session service for proper session management
+            strands_service = get_strands_session_service()
+            
+            # CRITICAL: Get or create agent - this ensures we reuse existing agents
+            # and share session managers properly according to Strands docs
+            self.agent = strands_service.get_or_create_agent(
+                session_id=session_id,
+                agent_name=name,
+                system_prompt=enhanced_prompt,
+                tools=self.tools,
+                model_config={
+                    "model_id": model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                },
+                force_new=False  # Reuse existing agent if available
+            )
+            
+            logger.info(f"🗄️ Agent {name} using SHARED session management for {session_id}")
+            
+            # The shared session manager and conversation manager will automatically
+            # provide access to ALL previous messages in the session
+            if self.conversation_history:
+                logger.info(f"📚 Agent {name} has access to shared conversation history")
+        else:
+            logger.warning(f"⚠️ Agent {name} created without session management (no session_id)")
+            self.agent = Agent(
+                model=self.model,
+                tools=self.tools,
+                system_prompt=enhanced_prompt
+            )
         
         # Log agent creation details
         logger.info(f"✅ Agent {name} created with {len(self.tools)} tools")
@@ -366,24 +382,43 @@ If a tool fails, check:
                 "tokens": 0
             }
 
-    def _build_context(self, task: str, previous_work: List[str] = None) -> str:
-        """Build context message for agent"""
-        # If we have conversation history, indicate this is a continuation
-        if self.conversation_history and len(self.conversation_history) > 0:
-            context = f"This is a continuation of an ongoing conversation. Current request: {task}\n\n"
-        else:
-            context = f"Task: {task}\n\n"
+    def _build_context(self, task: str, previous_work: List[str] = None):
+        """Build context for agent - returns messages list if we have conversation history"""
         
+        # Build current task message
+        current_message = f"Task: {task}\n\n"
         if previous_work:
-            context += "Previous Work from Other Agents:\n" + "=" * 50 + "\n\n"
+            current_message += "Previous Work from Other Agents:\n" + "=" * 50 + "\n\n"
             for i, work in enumerate(previous_work):
                 if work:  # Only add non-empty work
                     if len(work) > 2000:
                         work = work[:1000] + "\n...[truncated]...\n" + work[-1000:]
-                    context += f"Agent {i+1} Output:\n{work}\n\n"
-            context += "=" * 50 + "\n\nContinue the work based on what has been done."
-
-        return context
+                    current_message += f"Agent {i+1} Output:\n{work}\n\n"
+            current_message += "=" * 50 + "\n\nContinue the work based on what has been done."
+        
+        # If we have conversation history, return as proper message list
+        if self.conversation_history and len(self.conversation_history) > 0:
+            messages = []
+            
+            # Add all previous messages as proper Message format
+            for msg in self.conversation_history:
+                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                    messages.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+            
+            # Add current task as new user message
+            messages.append({
+                "role": "user",
+                "content": current_message
+            })
+            
+            logger.info(f"📚 Built context with {len(messages)} messages including history for {self.name}")
+            return messages
+        else:
+            # No conversation history - return simple string
+            return current_message
 
     def _extract_tool_calls(self, text: str) -> List[Dict[str, Any]]:
         """Extract tool calls from response text"""
@@ -904,11 +939,15 @@ class EnhancedSwarmService:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         existing_agents: Optional[List[Dict[str, Any]]] = None
     ) -> SwarmExecutionResponse:
-        """Execute swarm with VISIBLE tool calls and proper streaming with conversation history"""
+        """Execute swarm with PROPER Strands session management and shared context"""
 
         await self._ensure_initialized()
 
+        # CRITICAL: Use consistent session_id for ALL agents in this execution
+        # This ensures they share the same session manager and conversation history
         execution_id = request.execution_id or str(uuid.uuid4())
+        
+        logger.info(f"🚀 Starting swarm with shared session: {execution_id}")
 
         self.active_executions[execution_id] = {
             "status": "running",
@@ -921,16 +960,39 @@ class EnhancedSwarmService:
         logger.info(f"🚀 Starting Strands swarm execution {execution_id}")
 
         try:
-            # Intelligent agent management for continuations
-            if use_orchestrator and (not request.agents or len(request.agents) == 0):
-                logger.info(f"📋 Orchestrating task: {request.task}")
+            # CRITICAL: Check if we're continuing an existing session with a coordinator
+            # According to Strands docs, we should reuse the same agent for session continuity
+            from app.services.strands_session_service import get_strands_session_service
+            strands_service = get_strands_session_service()
+            
+            # Check if coordinator already exists for this session
+            existing_coordinator = None
+            if execution_id in strands_service.active_agents:
+                if "coordinator" in strands_service.active_agents[execution_id]:
+                    existing_coordinator = strands_service.active_agents[execution_id]["coordinator"]
+                    logger.info(f"♻️ Found existing coordinator for session {execution_id}")
+            
+            # If we have an existing coordinator, we're in a continuation - skip agent generation
+            is_continuation = existing_coordinator is not None
+            
+            if is_continuation and callback_handler:
+                # Notify that we're continuing with existing coordinator
+                continuation_msg = f"\n♻️ **Continuing session with existing coordinator**\n"
+                continuation_msg += f"Session maintains full conversation history via Strands persistence.\n"
+                await callback_handler(
+                    type="text_generation",
+                    agent="system",
+                    data={"chunk": continuation_msg, "text": continuation_msg}
+                )
+            
+            # Only generate agents if this is a NEW session (no existing coordinator)
+            if use_orchestrator and not is_continuation and (not request.agents or len(request.agents) == 0):
+                logger.info(f"📋 Orchestrating task for NEW session: {request.task}")
                 
-                # Check if this is a continuation with existing agents
-                # A continuation has both conversation history AND existing agents
-                is_continuation = bool(conversation_history and len(conversation_history) > 0)
+                # This is a new session, we need to generate agents
                 has_existing_agents = bool(existing_agents and len(existing_agents) > 0)
                 
-                if is_continuation and has_existing_agents:
+                if False:  # This block was for continuations, but we handle them differently now
                     logger.info(f"🔄 Continuation detected with {len(existing_agents)} existing agents")
                     
                     # Analyze task complexity to determine if we need more agents
@@ -1059,176 +1121,140 @@ class EnhancedSwarmService:
                             "agent_count": len(request.agents)
                         }
                     )
-
-            # Create STRANDS agents with proper tools
-            swarm_agents = []
-            for agent_config in request.agents:
-                # Create tools for this agent
-                strands_tools = []
-
-                if hasattr(agent_config, 'tools') and agent_config.tools:
-                    logger.info(f"📋 Processing tools for {agent_config.name}: {agent_config.tools}")
-                    
-                    # Track which tools we've added to avoid duplicates
-                    added_tools = set()
-                    
-                    # Priority: Use our custom implementations for core tools
-                    for tool_name in agent_config.tools:
-                        if tool_name in added_tools:
-                            continue
-                            
-                        if tool_name == "tavily_search":
-                            if os.getenv("TAVILY_API_KEY"):
-                                tool = create_tavily_tool(agent_config.name, callback_handler)
-                                strands_tools.append(tool)
-                                added_tools.add(tool_name)
-                                logger.info(f"✅ Added tavily_search to {agent_config.name}")
-                            else:
-                                logger.warning(f"⚠️ TAVILY_API_KEY not set, skipping tavily_search for {agent_config.name}")
-                        elif tool_name in ["file_write", "file_read"]:
-                            # Create both file tools at once
-                            if "file_write" not in added_tools and "file_read" not in added_tools:
-                                file_write, file_read = create_file_tools(agent_config.name, callback_handler)
-                                if tool_name == "file_write" or "file_write" in agent_config.tools:
-                                    strands_tools.append(file_write)
-                                    added_tools.add("file_write")
-                                    logger.info(f"✅ Added file_write to {agent_config.name}")
-                                if tool_name == "file_read" or "file_read" in agent_config.tools:
-                                    strands_tools.append(file_read)
-                                    added_tools.add("file_read")
-                                    logger.info(f"✅ Added file_read to {agent_config.name}")
-                        elif tool_name == "python_repl":
-                            tool = create_python_repl_tool(agent_config.name, callback_handler)
-                            strands_tools.append(tool)
-                            added_tools.add(tool_name)
-                            logger.info(f"✅ Added python_repl to {agent_config.name}")
-                        else:
-                            # Try dynamic wrapper for other tools
-                            try:
-                                from app.services.dynamic_tool_wrapper import DynamicToolWrapper
-                                tool_wrapper = DynamicToolWrapper(callback_handler=callback_handler)
-                                wrapped_tool = tool_wrapper.wrap_strands_tool(tool_name, agent_config.name)
-                                if wrapped_tool:
-                                    strands_tools.append(wrapped_tool)
-                                    added_tools.add(tool_name)
-                                    logger.info(f"✅ Added {tool_name} via dynamic wrapper to {agent_config.name}")
-                                else:
-                                    logger.warning(f"⚠️ Tool {tool_name} not found for {agent_config.name}")
-                            except Exception as e:
-                                logger.warning(f"Could not add tool {tool_name}: {e}")
-
-                # Warn if no tools were added
-                if not strands_tools and agent_config.tools:
-                    logger.warning(f"⚠️ No tools could be added for {agent_config.name} despite requesting: {agent_config.tools}")
-                    
-                    # Send warning to UI
-                    if callback_handler:
-                        warning_msg = f"⚠️ **Warning:** Agent {agent_config.name} requested tools but none could be loaded\n"
-                        warning_msg += f"Requested: {', '.join(agent_config.tools)}\n"
-                        await callback_handler(
-                            type="text_generation",
-                            agent="system",
-                            data={
-                                "chunk": warning_msg,
-                                "text": warning_msg
-                            }
-                        )
+            
+            # Now execute with coordinator regardless of whether we just generated agents
+            if use_orchestrator:
+                # CRITICAL: Use Coordinator Pattern - Single persistent agent per session
+                from app.services.coordinator_service import get_coordinator_service
+                from app.services.strands_session_service import get_strands_session_service
                 
-                logger.info(f"🤖 Creating Strands agent: {agent_config.name} with {len(strands_tools)} tools")
+                coordinator_service = get_coordinator_service()
+                strands_service = get_strands_session_service()
+                
+                # Pre-create the shared session manager for this execution
+                shared_session_manager = strands_service.get_or_create_session(execution_id)
+                logger.info(f"📦 Created shared session manager for execution {execution_id}")
+            
+                # Collect ALL tools from all agent configs
+                all_tools = []
+                added_tools = set()
+                
+                for agent_config in request.agents:
+                    if hasattr(agent_config, 'tools') and agent_config.tools:
+                        for tool_name in agent_config.tools:
+                            if tool_name in added_tools:
+                                continue
+                            
+                            if tool_name == "tavily_search":
+                                if os.getenv("TAVILY_API_KEY"):
+                                    tool = create_tavily_tool("coordinator", callback_handler)
+                                    all_tools.append(tool)
+                                    added_tools.add(tool_name)
+                                    logger.info(f"✅ Added tavily_search to coordinator")
+                                else:
+                                    logger.warning(f"⚠️ TAVILY_API_KEY not set, skipping tavily_search")
+                            elif tool_name in ["file_write", "file_read"]:
+                                if "file_write" not in added_tools and "file_read" not in added_tools:
+                                    file_write, file_read = create_file_tools("coordinator", callback_handler)
+                                    if "file_write" in agent_config.tools or tool_name == "file_write":
+                                        all_tools.append(file_write)
+                                        added_tools.add("file_write")
+                                        logger.info(f"✅ Added file_write to coordinator")
+                                    if "file_read" in agent_config.tools or tool_name == "file_read":
+                                        all_tools.append(file_read)
+                                        added_tools.add("file_read")
+                                        logger.info(f"✅ Added file_read to coordinator")
+                            elif tool_name == "python_repl":
+                                tool = create_python_repl_tool("coordinator", callback_handler)
+                                all_tools.append(tool)
+                                added_tools.add(tool_name)
+                                logger.info(f"✅ Added python_repl to coordinator")
+                            else:
+                                try:
+                                    from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+                                    tool_wrapper = DynamicToolWrapper(callback_handler=callback_handler)
+                                    wrapped_tool = tool_wrapper.wrap_strands_tool(tool_name, "coordinator")
+                                    if wrapped_tool:
+                                        all_tools.append(wrapped_tool)
+                                        added_tools.add(tool_name)
+                                        logger.info(f"✅ Added {tool_name} to coordinator")
+                                    else:
+                                        logger.warning(f"⚠️ Tool {tool_name} not found")
+                                except Exception as e:
+                                    logger.warning(f"Could not add tool {tool_name}: {e}")
 
-                agent = StrandsSwarmAgent(
-                    name=agent_config.name,
-                    system_prompt=agent_config.system_prompt or "",
-                    tools=strands_tools,
-                    model=getattr(agent_config, 'model', 'gpt-4o-mini'),
-                    temperature=getattr(agent_config, 'temperature', 0.7),
-                    max_tokens=getattr(agent_config, 'max_tokens', 4000),
-                    session_id=execution_id,
-                    callback_handler=callback_handler,
-                    conversation_history=conversation_history
-                )
-                swarm_agents.append(agent)
-
-            # Send start event
-            if callback_handler:
-                await callback_handler(
-                    type="execution_started",
-                    data={
-                        "task": request.task,
-                        "agents": [a.name for a in swarm_agents]
-                    }
-                )
-
-            # Execute agents sequentially
-            all_outputs = []
-            all_artifacts = []
-            total_tokens = 0
-            agent_sequence = []
-
-            for i, agent in enumerate(swarm_agents):
-                agent_sequence.append(agent.name)
-
-                logger.info(f"=== Executing Strands Agent {i+1}/{len(swarm_agents)}: {agent.name} ===")
-
-                # Send handoff event if not first agent
-                if i > 0 and callback_handler:
+                # COORDINATOR PATTERN: Use single persistent coordinator instead of multiple agents
+                logger.info(f"🎯 Using Coordinator Pattern with {len(all_tools)} tools")
+                logger.info(f"📊 Session has {len(conversation_history or [])} historical messages")
+                
+                # Convert agent configs to dicts for coordinator
+                agent_configs_list = []
+                for agent_config in request.agents:
+                    if hasattr(agent_config, 'dict'):
+                        agent_configs_list.append(agent_config.dict())
+                    elif hasattr(agent_config, '__dict__'):
+                        agent_configs_list.append(agent_config.__dict__)
+                    else:
+                        agent_configs_list.append(dict(agent_config))
+                
+                # Send start event
+                if callback_handler:
                     await callback_handler(
-                        type="handoff",
+                        type="execution_started",
                         data={
-                            "from_agent": swarm_agents[i-1].name,
-                            "to_agent": agent.name,
-                            "reason": "Sequential workflow progression"
+                            "task": request.task,
+                            "agents": ["coordinator"]
+                        }
+                    )
+                
+                # Execute coordinator with all capabilities
+                coordinator_result = await coordinator_service.execute_coordinator(
+                    session_id=execution_id,
+                    task=request.task,
+                    agent_configs=agent_configs_list,
+                    tools=all_tools,
+                    callback_handler=callback_handler,
+                    conversation_history=conversation_history  # CRITICAL: Pass conversation history
+                )
+                
+                logger.info(f"✅ Coordinator completed execution")
+                
+                # Extract the actual content from coordinator result
+                if coordinator_result.get("success"):
+                    final_response = coordinator_result.get("content", "")
+                else:
+                    final_response = coordinator_result.get("content", "Error occurred")
+                
+                # Handle artifacts if any
+                all_artifacts = []
+                if final_response:
+                    # Extract artifacts from response if needed
+                    artifacts = await self._extract_artifacts_from_text(final_response)
+                    all_artifacts.extend(artifacts)
+
+                logger.info(f"🎉 Coordinator execution completed with {len(all_artifacts)} artifacts")
+
+                # Send completion event
+                if callback_handler:
+                    await callback_handler(
+                        type="execution_completed",
+                        data={
+                            "result": {
+                                "final_response": final_response,
+                                "artifacts": all_artifacts
+                            }
                         }
                     )
 
-                # Execute Strands agent
-                previous_work = [output["output"] for output in all_outputs]
-                result = await agent.execute(
-                    task=request.task,
-                    previous_work=previous_work,
-                    max_iterations=3
+                return SwarmExecutionResponse(
+                    execution_id=execution_id,
+                    status=ExecutionStatus.COMPLETED,
+                    result=final_response,
+                    handoffs=0,  # Single coordinator, no handoffs
+                    tokens_used=0,  # TODO: Track tokens from coordinator
+                    agent_sequence=["coordinator"],
+                    artifacts=all_artifacts
                 )
-
-                logger.info(f"✅ Strands agent {agent.name} completed with {result.get('tokens', 0)} tokens")
-
-                if result["response"]:
-                    all_outputs.append({
-                        "agent": agent.name,
-                        "output": result["response"]
-                    })
-
-                all_artifacts.extend(result.get("artifacts", []))
-                total_tokens += result.get("tokens", 0)
-
-                # Small delay between agents
-                await asyncio.sleep(0.1)
-
-            # Compile final response
-            final_response = self._compile_final_response(all_outputs, all_artifacts)
-
-            logger.info(f"🎉 Strands swarm completed: {total_tokens} tokens, {len(all_artifacts)} artifacts")
-
-            # Send completion event
-            if callback_handler:
-                await callback_handler(
-                    type="execution_completed",
-                    data={
-                        "result": {
-                            "final_response": final_response,
-                            "artifacts": all_artifacts
-                        }
-                    }
-                )
-
-            return SwarmExecutionResponse(
-                execution_id=execution_id,
-                status=ExecutionStatus.COMPLETED,
-                result=final_response,
-                handoffs=len(swarm_agents) - 1,
-                tokens_used=total_tokens,
-                agent_sequence=agent_sequence,
-                artifacts=all_artifacts
-            )
 
         except Exception as e:
             logger.error(f"Swarm execution failed: {e}", exc_info=True)
@@ -1248,6 +1274,46 @@ class EnhancedSwarmService:
             if execution_id in self.active_executions:
                 del self.active_executions[execution_id]
 
+    async def _extract_artifacts_from_text(self, text: str) -> List[Dict[str, Any]]:
+        """Extract code artifacts from text"""
+        artifacts = []
+        if not text:
+            return artifacts
+
+        # Find code blocks
+        code_blocks = re.findall(r'```(?:(\w+))?\n(.*?)```', text, re.DOTALL)
+
+        for lang, code in code_blocks:
+            if not code.strip():
+                continue
+
+            # Check for filename
+            filename_match = re.search(r'#\s*filename:\s*(.+)', code)
+            if filename_match:
+                filename = filename_match.group(1).strip()
+                code = re.sub(r'#\s*filename:.*\n', '', code)
+            else:
+                # Generate filename based on language
+                ext = lang if lang else 'txt'
+                filename = f"output_{len(artifacts) + 1}.{ext}"
+
+            # Store in virtual filesystem
+            GLOBAL_VIRTUAL_FILES[filename] = code.strip()
+            logger.info(f"💾 Stored file: {filename}")
+
+            artifacts.append({
+                "type": "code",
+                "name": filename,
+                "content": code.strip(),
+                "metadata": {
+                    "language": lang or "text",
+                    "agent": "coordinator",
+                    "created_at": datetime.utcnow().isoformat()
+                }
+            })
+
+        return artifacts
+    
     def _compile_final_response(self, outputs: List[Dict], artifacts: List[Dict]) -> str:
         """Compile final response with details"""
         response = "# Task Completed Successfully\n\n"

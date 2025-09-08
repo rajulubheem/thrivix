@@ -1,7 +1,5 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-
 export interface ChatSession {
   id: number;
   session_id: string;
@@ -56,6 +54,7 @@ export interface ChatSessionWithMessages extends ChatSession {
 }
 
 export interface CreateSessionRequest {
+  session_id?: string;
   title?: string;
   description?: string;
   agents_config?: any;
@@ -123,7 +122,7 @@ export interface SearchResponse<T> {
 }
 
 class ChatApiService {
-  private baseUrl = `${API_BASE_URL}/api/v1/chat`;
+  private baseUrl = '/api/v1/chat';
 
   // Session Management
   async createSession(data: CreateSessionRequest): Promise<ChatSession> {
@@ -162,6 +161,13 @@ class ChatApiService {
       messagesLength: response.data?.messages?.length || 0,
       firstMessage: response.data?.messages?.[0]?.content?.substring(0, 50)
     });
+    console.log('📦 Full response data:', response.data);
+    
+    // If messages is empty but message_count > 0, there's a problem
+    if (response.data?.message_count > 0 && (!response.data?.messages || response.data.messages.length === 0)) {
+      console.error('❌ Message count mismatch! Count:', response.data.message_count, 'but messages array is empty');
+    }
+    
     return response.data;
   }
 
@@ -233,6 +239,23 @@ class ChatApiService {
   async getChatStats(): Promise<any> {
     const response = await axios.get(`${this.baseUrl}/stats`);
     return response.data;
+  }
+
+  // Get all sessions - wrapper for listSessions with messages
+  async getSessions(): Promise<ChatSessionWithMessages[]> {
+    const sessions = await this.listSessions(50, 0, false);
+    const sessionsWithMessages: ChatSessionWithMessages[] = [];
+    
+    for (const session of sessions) {
+      try {
+        const fullSession = await this.getSessionWithMessages(session.session_id);
+        sessionsWithMessages.push(fullSession);
+      } catch (error) {
+        console.error(`Failed to load session ${session.session_id}:`, error);
+      }
+    }
+    
+    return sessionsWithMessages;
   }
 }
 

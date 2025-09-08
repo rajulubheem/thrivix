@@ -12,7 +12,7 @@ import UnifiedOrchestratorV3 from './pages/UnifiedOrchestratorV3';
 import ConversationResearch from './components/research/ConversationResearch';
 import ConversationResearchRadix from './components/research/ConversationResearchRadix';
 import ScholarlyResearchView from './components/research/ScholarlyResearchView';
-import SwarmChat from './pages/SwarmChat';
+import CleanSwarmChat from './pages/CleanSwarmChat';
 import TrueSwarmChat from './pages/TrueSwarmChat';
 import TrueSwarmRadix from './pages/TrueSwarmRadix';
 import ToolSettingsV2 from './pages/ToolSettingsV2';
@@ -31,9 +31,9 @@ function App() {
             {/* Main landing page - using new Modern UI */}
             <Route path="/" element={<ModernHomePage />} />
 
-            {/* Swarm Chat - Using enhanced version with session persistence and artifacts */}
-            <Route path="/swarm" element={<ModernSwarmChatEnhanced />} />
-            <Route path="/swarm/:sessionId" element={<ModernSwarmChatEnhanced />} />
+            {/* Swarm Chat - Using new clean SSE implementation */}
+            <Route path="/swarm" element={<CleanSwarmChat />} />
+            <Route path="/swarm/:sessionId" element={<CleanSwarmChat />} />
             
             {/* Unified Orchestrator - Single powerful orchestrator with MCP and custom agents */}
             <Route path="/orchestrator" element={<UnifiedOrchestratorV2 />} />

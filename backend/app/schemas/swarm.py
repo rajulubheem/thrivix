@@ -28,6 +28,22 @@ class AgentConfig(BaseModel):
         protected_namespaces = ()
 
 
+class AddAgentRequest(BaseModel):
+    session_id: Optional[str] = None
+    agent_name: str = Field(..., min_length=1, max_length=100)
+    agent_role: str = Field(..., min_length=1, max_length=200)
+    agent_description: Optional[str] = Field(None, max_length=500)
+    tools: List[str] = []
+    model: Optional[str] = "gpt-4o-mini"
+    temperature: Optional[float] = 0.7
+
+
+class AddAgentResponse(BaseModel):
+    success: bool
+    agent_id: str
+    message: str
+
+
 class SwarmExecutionRequest(BaseModel):
     task: str
     agents: Optional[List[AgentConfig]] = None

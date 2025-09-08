@@ -5,6 +5,7 @@ import React, {
   useCallback,
   memo,
   useMemo,
+  Fragment,
 } from "react";
 import {
   Bot,
@@ -78,47 +79,138 @@ const MessageContent = memo(
     copiedId: string | null;
     copyToClipboard: (text: string, id: string) => void;
   }) => {
+    const [showThinking, setShowThinking] = useState(false);
+    
     if (message.role === "assistant") {
+      // Split message into planning and response sections
+      const planningMarker = '📋 **Planning Task Execution**';
+      const responseMarker = '## Response:';
+      
+      let planningContent = '';
+      let responseContent = message.content;
+      
+      if (message.content.includes(planningMarker)) {
+        const parts = message.content.split(responseMarker);
+        if (parts.length > 1) {
+          planningContent = parts[0];
+          responseContent = responseMarker + parts.slice(1).join(responseMarker);
+        } else {
+          // If no response marker, check for other patterns
+          const lines = message.content.split('\n');
+          const planningEndIndex = lines.findIndex(line => 
+            line.trim() === '' && 
+            lines[lines.indexOf(line) + 1] && 
+            !lines[lines.indexOf(line) + 1].startsWith(' ') &&
+            !lines[lines.indexOf(line) + 1].startsWith('-') &&
+            !lines[lines.indexOf(line) + 1].startsWith('*')
+          );
+          
+          if (planningEndIndex > 0) {
+            planningContent = lines.slice(0, planningEndIndex).join('\n');
+            responseContent = lines.slice(planningEndIndex + 1).join('\n');
+          }
+        }
+      }
+      
       return (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown
-            components={{
-              code({ className, children, ...props }: any) {
-                const match = /language-(\w+)/.exec(className || "");
-                const inline = !className;
-                return !inline && match ? (
-                  <div className="relative group">
-                    <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() =>
-                          copyToClipboard(String(children), message.id)
-                        }
-                      >
-                        {copiedId === message.id ? (
-                          <Check className="h-4 w-4" />
-                        ) : (
-                          <Copy className="h-4 w-4" />
-                        )}
-                      </Button>
+        <div className="space-y-3">
+          {planningContent && (
+            <div className="border border-muted rounded-lg p-3 bg-muted/20">
+              <button
+                onClick={() => setShowThinking(!showThinking)}
+                className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors w-full text-left"
+              >
+                <ChevronDown 
+                  className={cn(
+                    "h-4 w-4 transition-transform",
+                    showThinking && "rotate-180"
+                  )}
+                />
+                <Sparkles className="h-4 w-4" />
+                AI Thinking Process (Click to {showThinking ? 'hide' : 'show'})
+              </button>
+              
+              {showThinking && (
+                <div className="mt-3 prose prose-sm dark:prose-invert max-w-none opacity-80">
+                  <ReactMarkdown>
+                    {planningContent}
+                  </ReactMarkdown>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Main response content */}
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <ReactMarkdown
+              components={{
+                code({ className, children, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || "");
+                  const inline = !className;
+                  return !inline && match ? (
+                    <div className="relative group">
+                      <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            copyToClipboard(String(children), message.id)
+                          }
+                        >
+                          {copiedId === message.id ? (
+                            <Check className="h-4 w-4" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+                      <pre className="bg-muted p-3 rounded-lg overflow-x-auto">
+                        <code className="text-sm">
+                          {String(children).replace(/\n$/, "")}
+                        </code>
+                      </pre>
                     </div>
-                    <pre className="bg-muted p-3 rounded-lg overflow-x-auto">
-                      <code className="text-sm">
-                        {String(children).replace(/\n$/, "")}
-                      </code>
-                    </pre>
-                  </div>
-                ) : (
-                  <code className={className} {...props}>
+                  ) : (
+                    <code className={className} {...props}>
+                      {children}
+                    </code>
+                  );
+                },
+                h2: ({ children }: any) => (
+                  <h2 className="text-lg font-semibold mt-4 mb-2 text-primary">
                     {children}
-                  </code>
-                );
-              },
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+                  </h2>
+                ),
+                h3: ({ children }: any) => (
+                  <h3 className="text-base font-medium mt-3 mb-2">
+                    {children}
+                  </h3>
+                ),
+                ul: ({ children }: any) => (
+                  <ul className="list-disc list-inside space-y-1 my-2">
+                    {children}
+                  </ul>
+                ),
+                li: ({ children }: any) => (
+                  <li className="text-sm leading-relaxed">
+                    {children}
+                  </li>
+                ),
+                p: ({ children }: any) => (
+                  <p className="text-sm leading-relaxed mb-2">
+                    {children}
+                  </p>
+                ),
+                strong: ({ children }: any) => (
+                  <strong className="font-semibold text-primary">
+                    {children}
+                  </strong>
+                ),
+              }}
+            >
+              {responseContent}
+            </ReactMarkdown>
+          </div>
         </div>
       );
     }

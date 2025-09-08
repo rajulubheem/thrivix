@@ -80,7 +80,12 @@ async def get_session_with_messages(
     user_id: str = Depends(get_current_user_id)
 ):
     """Get session with its messages"""
-    session = await chat_service.get_session_with_messages(session_id, user_id, limit, offset)
+    session = await chat_service.get_session_with_messages(
+        session_id, 
+        user_id, 
+        message_limit=limit,  # Fix parameter name
+        message_offset=offset  # Fix parameter name
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

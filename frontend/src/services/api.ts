@@ -5,9 +5,8 @@ class ApiService {
   private client: AxiosInstance;
 
   constructor() {
-    const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
     this.client = axios.create({
-      baseURL: `${baseUrl}/api/v1`,
+      baseURL: '/api/v1',
       headers: {
         'Content-Type': 'application/json',
       },
@@ -87,15 +86,13 @@ class ApiService {
 
   // Create polling URL for streaming (not using SSE anymore)
   getPollingUrl(sessionId: string): string {
-    const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-    return `${baseUrl}/api/v1/streaming/poll/${sessionId}`;
+    return `/api/v1/streaming/poll/${sessionId}`;
   }
   
   // Deprecated - keeping for compatibility
   createEventSource(executionId: string): EventSource {
-    const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
     // Note: SSE is deprecated, using polling instead
-    const url = `${baseUrl}/api/v1/sse/stream/${executionId}`;
+    const url = `/api/v1/sse/stream/${executionId}`;
     console.log('Warning: SSE is deprecated, use polling instead');
     return new EventSource(url);
   }
