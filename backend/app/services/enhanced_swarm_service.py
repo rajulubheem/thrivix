@@ -36,6 +36,7 @@ from app.schemas.swarm import (
 )
 from app.services.ai_orchestrator import AIOrchestrator
 from app.services.approval_manager import approval_manager
+from app.services.shared_state_service import SharedStateService
 
 logger = structlog.get_logger()
 
@@ -980,6 +981,89 @@ class EnhancedSwarmService:
         logger.info(f"🚀 Starting Strands swarm execution {execution_id}")
 
         try:
+            # If explicit agents are provided, execute them directly (sequentially) for /swarm SSE
+            if request.agents and len(request.agents) > 0:
+                agent_sequence: List[str] = []
+                all_artifacts: List[Artifact] = []
+                combined_output_parts: List[str] = []
+
+                if callback_handler:
+                    await callback_handler(
+                        type="execution_started",
+                        data={
+                            "task": request.task,
+                            "agents": [a.name for a in request.agents]
+                        }
+                    )
+
+                # Execute each provided agent sequentially with streaming
+                previous_outputs: List[str] = []
+                for agent_cfg in request.agents:
+                    try:
+                        # Resolve tool names to Strands callables if provided
+                        resolved_tools: List[Any] = []
+                        try:
+                            from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+                            tool_wrapper = DynamicToolWrapper(callback_handler=callback_handler)
+                            for tname in (getattr(agent_cfg, 'tools', []) or []):
+                                wrapped = tool_wrapper.wrap_strands_tool(tname, agent_cfg.name)
+                                if wrapped:
+                                    resolved_tools.append(wrapped)
+                        except Exception as tool_err:
+                            logger.warning(f"Tool resolution failed for {agent_cfg.name}: {tool_err}")
+
+                        swarm_agent = StrandsSwarmAgent(
+                            name=agent_cfg.name,
+                            system_prompt=agent_cfg.system_prompt,
+                            tools=resolved_tools,
+                            model=getattr(agent_cfg, 'model', 'gpt-4o-mini') or 'gpt-4o-mini',
+                            temperature=getattr(agent_cfg, 'temperature', 0.7) or 0.7,
+                            max_tokens=getattr(agent_cfg, 'max_tokens', 4000) or 4000,
+                            session_id=execution_id,
+                            callback_handler=callback_handler,
+                            conversation_history=conversation_history or []
+                        )
+                        result = await swarm_agent.execute(task=request.task, previous_work=previous_outputs or None)
+                        output = result.get("response", "")
+
+                        # Track
+                        agent_sequence.append(agent_cfg.name)
+                        if output:
+                            combined_output_parts.append(f"### {agent_cfg.name}\n\n{output}\n")
+                            previous_outputs.append(output)
+                            # Save to shared state for visibility
+                            try:
+                                SharedStateService().set_agent_output(execution_id, agent_cfg.name, output)
+                            except Exception:
+                                pass
+
+                        if callback_handler:
+                            await callback_handler(
+                                type="agent_completed",
+                                agent=agent_cfg.name,
+                                data={"output": output}
+                            )
+                    except Exception as agent_err:
+                        logger.error(f"Agent {agent_cfg.name} failed: {agent_err}")
+
+                final_response = "\n".join(combined_output_parts) or "Execution completed."
+
+                if callback_handler:
+                    await callback_handler(
+                        type="execution_completed",
+                        data={"result": final_response}
+                    )
+
+                return SwarmExecutionResponse(
+                    execution_id=execution_id,
+                    status=ExecutionStatus.COMPLETED,
+                    result=final_response,
+                    handoffs=0,
+                    tokens_used=0,
+                    agent_sequence=agent_sequence,
+                    artifacts=all_artifacts
+                )
+
             # CRITICAL: Check if we're continuing an existing session with a coordinator
             # According to Strands docs, we should reuse the same agent for session continuity
             from app.services.strands_session_service import get_strands_session_service

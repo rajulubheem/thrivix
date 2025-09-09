@@ -364,9 +364,9 @@ async def start_streaming_sse(
                 
                 await event_queue.put(event)
             
-            # Use event-driven swarm to enable true multi-agent with shared state
-            from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
-            service = EventDrivenStrandsSwarm()
+            # Use EnhancedSwarmService for stable /swarm SSE
+            from app.services.enhanced_swarm_service import EnhancedSwarmService
+            service = EnhancedSwarmService()
             # Expose globally for stop endpoint and map session->execution
             import app.api.v1.endpoints.streaming as streaming_module
             streaming_module._global_swarm_service = service
@@ -387,11 +387,6 @@ async def start_streaming_sse(
                     payload.execution_id = session_id
                     logger.info(f"🔗 SSE: Set request.execution_id to {session_id} for session synchronization")
                     
-                    # Force event-driven execution mode
-                    try:
-                        payload.execution_mode = "event_driven"
-                    except Exception:
-                        pass
                     result = await service.execute_swarm_async(
                         request=payload,
                         user_id="stream_user",
@@ -1842,9 +1837,9 @@ async def continue_streaming_sse(
                 execution_mode=execution_mode
             )
             
-            # Use event-driven swarm for true multi-agent behavior
-            from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
-            service = EventDrivenStrandsSwarm()
+            # Use EnhancedSwarmService for stable /swarm SSE continuation
+            from app.services.enhanced_swarm_service import EnhancedSwarmService
+            service = EnhancedSwarmService()
             # Expose globally for stop endpoint and map session->execution
             import app.api.v1.endpoints.streaming as streaming_module
             streaming_module._global_swarm_service = service
@@ -1885,8 +1880,6 @@ async def continue_streaming_sse(
                     conversation_history = context.get("previous_messages", [])
                     logger.info(f"📚 Passing {len(conversation_history)} messages to swarm executor")
                     
-                    # Ensure event-driven execution
-                    swarm_request.execution_mode = "event_driven"
                     result = await service.execute_swarm_async(
                         request=swarm_request,
                         user_id="stream_user",

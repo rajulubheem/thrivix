@@ -220,7 +220,15 @@ class PythonReplTool:
                 "error": str(e),
                 "code": code
             }
-    
+
+# Export a default instance for dynamic loading
+python_repl = PythonReplTool()
+
+__all__ = [
+    "PythonReplTool",
+    "PYTHON_REPL_SPEC",
+    "python_repl",
+]
     def _safe_import(self, name, *args, **kwargs):
         """Safe import function that only allows certain modules"""
         # Whitelist of safe modules

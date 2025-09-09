@@ -30,7 +30,10 @@ class DynamicToolWrapper:
         @tool
         async def wrapped_tool(**kwargs):
             """Dynamically wrapped tool with visibility"""
-            
+            # Work on local copies to avoid rebinding closure vars
+            current_tool_name = tool_name
+            current_tool_func = tool_func
+
             # Extract actual parameters (handle nested kwargs)
             actual_params = kwargs
             if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], (str, dict)):
@@ -47,23 +50,23 @@ class DynamicToolWrapper:
             from app.services.tool_discovery import ToolValidator
             
             # Check if agent is using wrong tool
-            if tool_name == "file_read" and "content" in actual_params:
+            if current_tool_name == "file_read" and "content" in actual_params:
                 # Agent wants to write but called file_read
                 logger.warning(f"Agent {agent_name} called file_read with content - redirecting to file_write")
-                tool_name = "file_write"
+                current_tool_name = "file_write"
                 # Try to get file_write function instead
                 if hasattr(self, 'wrapped_tools'):
                     write_key = f"{agent_name}_file_write"
                     if write_key in self.wrapped_tools:
-                        tool_func = self.wrapped_tools[write_key]
+                        current_tool_func = self.wrapped_tools[write_key]
             
             # Validate parameters
-            is_valid, validation_msg = ToolValidator.validate_tool_call(tool_name, actual_params)
+            is_valid, validation_msg = ToolValidator.validate_tool_call(current_tool_name, actual_params)
             if not is_valid:
                 logger.warning(f"Invalid tool call: {validation_msg}")
                 if self.callback_handler:
                     error_msg = f"⚠️ **Tool Validation Error**\n"
-                    error_msg += f"Tool: `{tool_name}`\n"
+                    error_msg += f"Tool: `{current_tool_name}`\n"
                     error_msg += f"Issue: {validation_msg}\n"
                     await self.callback_handler(
                         type="text_generation",
@@ -77,10 +80,10 @@ class DynamicToolWrapper:
             
             # Send tool called notification with clean display
             if self.callback_handler:
-                tool_msg = f"\n🔧 **Tool Called:** `{tool_name}`\n"
+                tool_msg = f"\n🔧 **Tool Called:** `{current_tool_name}`\n"
                 
                 # Get clean purpose description
-                doc = tool_func.__doc__ or f"Execute {tool_name}"
+                doc = current_tool_func.__doc__ or f"Execute {current_tool_name}"
                 first_line = doc.split('\n')[0].strip()
                 tool_msg += f"**Purpose:** {first_line}\n"
                 
@@ -111,10 +114,19 @@ class DynamicToolWrapper:
             
             try:
                 # Execute the original tool with correct parameters
-                if asyncio.iscoroutinefunction(tool_func):
-                    result = await tool_func(**actual_params)
+                if asyncio.iscoroutinefunction(current_tool_func):
+                    # Direct coroutine function
+                    result = await current_tool_func(**actual_params)
+                elif hasattr(current_tool_func, '__call__'):
+                    # Callable instance – inspect its __call__
+                    call_attr = current_tool_func.__call__
+                    if asyncio.iscoroutinefunction(call_attr):
+                        result = await call_attr(**actual_params)
+                    else:
+                        result = await asyncio.to_thread(call_attr, **actual_params)
                 else:
-                    result = await asyncio.to_thread(tool_func, **actual_params)
+                    # Fallback to thread offload
+                    result = await asyncio.to_thread(current_tool_func, **actual_params)
                 
                 # Send success notification
                 if self.callback_handler:

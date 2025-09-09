@@ -31,7 +31,7 @@ function App() {
             {/* Main landing page - using new Modern UI */}
             <Route path="/" element={<ModernHomePage />} />
 
-            {/* Swarm Chat - Using new clean SSE implementation */}
+            {/* Swarm Chat - Clean UI (SSE version) */}
             <Route path="/swarm" element={<CleanSwarmChat />} />
             <Route path="/swarm/:sessionId" element={<CleanSwarmChat />} />
             

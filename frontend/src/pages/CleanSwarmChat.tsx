@@ -66,6 +66,18 @@ export function CleanSwarmChat() {
   const [sessionHistory, setSessionHistory] = useState<SessionData[]>([]);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  // Orchestrator → Swarm handoff state
+  const [orchAgents, setOrchAgents] = useState<any[]>([]);
+  const [orchAutoStart, setOrchAutoStart] = useState<boolean>(false);
+  const [orchTask, setOrchTask] = useState<string>('');
+  const [showOrchEditor, setShowOrchEditor] = useState<boolean>(false);
+
+  const persistOrchAgents = useCallback((agents: any[]) => {
+    try {
+      setOrchAgents(agents);
+      sessionStorage.setItem('orchestratorAgents', JSON.stringify(agents));
+    } catch {}
+  }, []);
   // Execution mode + config
   const [executionMode, setExecutionMode] = useState<'event_driven'|'turn_based'|'hybrid'>('event_driven');
   const [showModeConfig, setShowModeConfig] = useState(false);
@@ -177,7 +189,7 @@ export function CleanSwarmChat() {
     localStorage.setItem('swarm_session_history', JSON.stringify(trimmedHistory));
   }, [sessionId, messages]);
 
-  // Initialize session on mount
+  // Initialize session on mount (and pull orchestrator handoff data)
   useEffect(() => {
     loadSessionHistory();
     
@@ -226,6 +238,23 @@ export function CleanSwarmChat() {
       localStorage.setItem('swarm_current_session_id', newSessionId);
     }
     
+    // Pull orchestrator handoff from sessionStorage
+    try {
+      const auto = sessionStorage.getItem('orchestratorAutoStart') === 'true';
+      const agentsStr = sessionStorage.getItem('orchestratorAgents');
+      const taskStr = sessionStorage.getItem('orchestratorTask') || '';
+      if (agentsStr) {
+        const parsed = JSON.parse(agentsStr);
+        if (Array.isArray(parsed)) {
+          setOrchAgents(parsed);
+        }
+      }
+      if (auto && taskStr) {
+        setOrchAutoStart(true);
+        setOrchTask(taskStr);
+      }
+    } catch {}
+
     const onBeforeUnload = () => {
       if (sessionId) {
         try { fetch(`${API_BASE_URL}/api/v1/streaming/stop/${sessionId}`, { method: 'POST', keepalive: true }); } catch {}
@@ -243,6 +272,22 @@ export function CleanSwarmChat() {
       }
     };
   }, []); // Empty dependency array - only run once on mount
+
+  // If orchestrator requested auto-start, kick off once sessionId is ready
+  useEffect(() => {
+    if (orchAutoStart && sessionId) {
+      const userMessage: Message = {
+        id: `user_${Date.now()}`,
+        role: 'user',
+        content: orchTask,
+        timestamp: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, userMessage]);
+      setOrchAutoStart(false);
+      sessionStorage.removeItem('orchestratorAutoStart');
+      startSSEStream(orchTask, true);
+    }
+  }, [orchAutoStart, sessionId]);
 
   // Save session when messages change
   useEffect(() => {
@@ -281,13 +326,22 @@ export function CleanSwarmChat() {
         ? '/api/v1/streaming/start/sse' 
         : '/api/v1/streaming/continue/sse';
 
-      // For continuation, Strands automatically loads conversation history
-      // We don't need to send previous_messages - the coordinator persists across requests
-      const requestBody = { 
+      // Attach orchestrator-generated agents if present
+      const mappedAgents = (orchAgents || []).map((a: any) => ({
+        name: a?.name || a?.role || 'custom_agent',
+        system_prompt: a?.system_prompt || a?.description || a?.role || 'You are a helpful agent.',
+        tools: Array.isArray(a?.tools) ? a.tools : [],
+        description: a?.description || a?.role || '',
+        model: a?.model || 'gpt-4o-mini',
+        temperature: typeof a?.temperature === 'number' ? a.temperature : 0.7,
+        max_tokens: typeof a?.max_tokens === 'number' ? a.max_tokens : 4000,
+      }));
+
+      // For continuation, Strands loads conversation automatically
+      const requestBody = {
         task,
         session_id: sessionId,
-        // Explicit agents optional; keep empty for now
-        agents: [],
+        agents: mappedAgents,
         max_handoffs: 0,
         execution_mode: executionMode,
         context: {
@@ -1210,6 +1264,10 @@ export function CleanSwarmChat() {
 
             {/* Right Controls */}
             <div className="flex items-center gap-2">
+              {/* Orchestrator quick action */}
+              <Button size="sm" variant="ghost" onClick={() => (window.location.href = '/orchestrator')} title="Open Orchestrator">
+                Orchestrator
+              </Button>
               {isLoading && (
                 <Button
                   variant="outline"
@@ -1667,7 +1725,81 @@ export function CleanSwarmChat() {
               </Button>
             </div>
           </div>
+
+          {/* Orchestrator agents preview bar */}
+          {orchAgents && orchAgents.length > 0 && (
+            <div className="mt-2 px-3 py-2 rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                <Users className="h-4 w-4 text-blue-600" />
+                <span className="text-blue-700 dark:text-blue-200">{orchAgents.length} custom agents ready</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => setShowOrchEditor((v) => !v)}>
+                  {showOrchEditor ? 'Hide' : 'Preview / Edit'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { persistOrchAgents([]); sessionStorage.removeItem('orchestratorTask'); }}>
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Orchestrator agents editor panel */}
+        {showOrchEditor && (
+          <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+            <div className="text-sm font-semibold mb-2">Custom Agents</div>
+            <div className="space-y-3">
+              {orchAgents.map((agent: any, idx: number) => (
+                <div key={idx} className="p-3 rounded border border-gray-200 dark:border-gray-700">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Input
+                      value={agent.name || ''}
+                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], name: e.target.value }; persistOrchAgents(next); }}
+                      placeholder="Agent name"
+                      className="h-8"
+                    />
+                    <Input
+                      value={agent.model || 'gpt-4o-mini'}
+                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], model: e.target.value }; persistOrchAgents(next); }}
+                      placeholder="Model"
+                      className="h-8 w-40"
+                    />
+                    <Input
+                      type="number"
+                      step="0.1"
+                      value={typeof agent.temperature === 'number' ? agent.temperature : 0.7}
+                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], temperature: parseFloat(e.target.value) }; persistOrchAgents(next); }}
+                      placeholder="Temp"
+                      className="h-8 w-24"
+                    />
+                    <Button size="sm" variant="ghost" className="text-red-600" onClick={() => { const next=orchAgents.filter((_,i)=>i!==idx); persistOrchAgents(next); }}>Remove</Button>
+                  </div>
+                  <div className="mb-2">
+                    <Input
+                      value={(agent.tools && agent.tools.join(', ')) || ''}
+                      onChange={(e) => { const list=e.target.value.split(',').map(s=>s.trim()).filter(Boolean); const next=[...orchAgents]; next[idx] = { ...next[idx], tools: list }; persistOrchAgents(next); }}
+                      placeholder="Tools (comma-separated)"
+                      className="h-8"
+                    />
+                  </div>
+                  <div>
+                    <textarea
+                      value={agent.system_prompt || ''}
+                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], system_prompt: e.target.value }; persistOrchAgents(next); }}
+                      placeholder="System prompt"
+                      className="w-full h-24 p-2 text-sm rounded border border-gray-200 dark:border-gray-700 bg-transparent"
+                    />
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => { const next=[...orchAgents, { name: `custom_agent_${orchAgents.length+1}`, system_prompt: 'You are a helpful agent.', tools: [], model: 'gpt-4o-mini', temperature: 0.7, max_tokens: 4000 }]; persistOrchAgents(next); }}>Add Agent</Button>
+                <span className="text-xs text-gray-500">Edits are saved automatically</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Agent Detail Modal */}
