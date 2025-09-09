@@ -54,6 +54,23 @@ class HumanLoopAgent(EventAwareAgent):
         self.callback_handler = None  # Will be set by ControlledSwarmService
         self._chunk_sequence = 0  # Sequence counter for ordered streaming
         
+    def _is_stopped(self) -> bool:
+        """Cooperative stop check using streaming module service registry."""
+        try:
+            import app.api.v1.endpoints.streaming as streaming_module
+            exec_id = self.execution_id
+            svc = None
+            if hasattr(streaming_module, '_services_by_session'):
+                svc = streaming_module._services_by_session.get(exec_id)
+            if not svc and hasattr(streaming_module, '_global_swarm_service'):
+                svc = streaming_module._global_swarm_service
+            if svc and hasattr(svc, 'active_executions'):
+                status = svc.active_executions.get(exec_id, {}).get('status')
+                return status == 'stopped'
+        except Exception:
+            pass
+        return False
+
     def _initialize_memory(self) -> AgentMemory:
         """Initialize or load agent memory"""
         if self.memory_store:
@@ -77,6 +94,9 @@ class HumanLoopAgent(EventAwareAgent):
     async def _process_task(self, event: SwarmEvent) -> str:
         """Enhanced task processing with memory and human interaction"""
         logger.info(f"🤖 HumanLoopAgent {self.name} processing task: {event.data.get('task', 'Unknown')}")
+        if self._is_stopped():
+            logger.info(f"🛑 HumanLoopAgent {self.name} stop requested; skipping processing")
+            return "Stopped by user"
         
         # Update memory with new task
         task_data = {
@@ -93,6 +113,9 @@ class HumanLoopAgent(EventAwareAgent):
         
         # Check if we need human approval before proceeding
         logger.info(f"🔍 HumanLoopAgent {self.name} checking if human approval needed...")
+        if self._is_stopped():
+            logger.info(f"🛑 HumanLoopAgent {self.name} stop requested before approval check")
+            return "Stopped by user"
         if await self._should_ask_human_approval(event):
             logger.info(f"✋ HumanLoopAgent {self.name} requesting human approval...")
             approval = await self._request_human_approval(event)
@@ -105,6 +128,9 @@ class HumanLoopAgent(EventAwareAgent):
             logger.info(f"➡️ HumanLoopAgent {self.name} proceeding without human approval")
         
         # Proceed with task processing using our own implementation
+        if self._is_stopped():
+            logger.info(f"🛑 HumanLoopAgent {self.name} stop requested before task execution")
+            return "Stopped by user"
         result = await self._process_task_with_context(event, context)
         
         # Send completion signal (result already streamed in real-time via callback)
@@ -313,11 +339,22 @@ Type 'approve' to proceed, 'deny' to cancel, or 'modify: <instructions>' to prov
                 source=self.name
             )
             
-            # Wait for human response
-            response_event = await event_bus.wait_for_event(
-                f"human.approval.response.{request_id}",
-                timeout=300  # 5 minutes
-            )
+            # Wait for human response with cooperative stop polling
+            response_event = None
+            total_wait = 0.0
+            interval = 0.25
+            max_wait = 300.0
+            while total_wait < max_wait:
+                if self._is_stopped():
+                    logger.info(f"🛑 HumanLoopAgent {self.name} stop requested during approval wait")
+                    return False
+                response_event = await event_bus.wait_for_event(
+                    f"human.approval.response.{request_id}",
+                    timeout=interval
+                )
+                if response_event:
+                    break
+                total_wait += interval
             
             if response_event:
                 response = response_event.data.get("response", "").lower()
@@ -600,6 +637,8 @@ Memory Summary:
                 return f"{self.role} processed: {self.current_task}"
             
             # Create model
+            if self._is_stopped():
+                return "Stopped by user"
             model = OpenAIModel(
                 client_args={"api_key": api_key},
                 model_id="gpt-4o-mini",
@@ -763,6 +802,8 @@ IMPORTANT: Work specifically on the original user request about "{original_query
                 # Create streaming callback that captures tokens in real-time
                 def capture_streaming_callback(**kwargs):
                     """Capture streaming from Strands and relay to our callback"""
+                    if self._is_stopped():
+                        return
                     if "data" in kwargs and self.callback_handler:
                         chunk_data = kwargs["data"]
                         
@@ -798,6 +839,8 @@ IMPORTANT: Work specifically on the original user request about "{original_query
                 logger.debug(f"Created Strands agent with callback handler")
                 
                 # Execute agent
+                if self._is_stopped():
+                    return "Stopped by user"
                 if hasattr(strands_agent, 'run'):
                     try:
                         result = await strands_agent.run(task_message)

@@ -11,6 +11,8 @@ import structlog
 import os
 
 from app.services.strands_swarm_service import StrandsSwarmService
+from app.services.coordinator_memory import CoordinatorMemory
+from app.services.strands_session_service import get_strands_session_service
 from app.services.event_bus import event_bus, SwarmEvent
 from app.services.event_aware_agent import EventAwareAgent, AgentCapabilities
 from app.services.dynamic_agent_factory import DynamicAgentFactory
@@ -171,6 +173,9 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             self.event_analyzer = None
             
         self.active_executions = {}  # Track active executions
+        self.agent_cancellations = {}  # execution_id -> set(agent_names)
+        self.agent_timeouts = {}  # execution_id -> default seconds
+        self.agent_timeout_overrides = {}  # execution_id -> { agent: seconds }
         self._setup_event_handlers()
     
     def stop_execution(self, execution_id: str):
@@ -180,6 +185,22 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             logger.info(f"🛑 Marked execution {execution_id} for stopping")
             return True
         return False
+
+    def stop_agent(self, execution_id: str, agent_name: str):
+        """Cancel a single agent within an execution"""
+        if execution_id not in self.agent_cancellations:
+            self.agent_cancellations[execution_id] = set()
+        self.agent_cancellations[execution_id].add(agent_name)
+        logger.info(f"🛑 Requested stop for agent {agent_name} in execution {execution_id}")
+        return True
+
+    def set_agent_timeout(self, execution_id: str, agent_name: str, seconds: int):
+        """Override timeout for a specific agent in an execution"""
+        if execution_id not in self.agent_timeout_overrides:
+            self.agent_timeout_overrides[execution_id] = {}
+        self.agent_timeout_overrides[execution_id][agent_name] = max(5, int(seconds))
+        logger.info(f"⏱️ Set timeout for {agent_name} in {execution_id} to {seconds}s")
+        return True
     
     def _setup_event_handlers(self):
         """Set up core event handlers"""
@@ -200,7 +221,29 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
         existing_agents: Optional[List[Dict[str, Any]]] = None
     ) -> SwarmExecutionResponse:
         """Execute swarm with event-driven coordination"""
+        # Ensure execution_id is available for all paths
+        execution_id = getattr(request, 'execution_id', None) or str(uuid.uuid4())
+
         
+        # TURN-BASED: detect policy or pattern
+        try:
+            mode = getattr(request, 'execution_mode', '') or (getattr(request, 'context', {}) or {}).get('swarm_config', {}).get('mode')
+        except Exception:
+            mode = ''
+        detect = self._parse_counting_task(request.task or '')
+        if mode == 'turn_based' or detect is not None:
+            start, end, chunk = detect or (1, 100, 10)
+            return await self._execute_turn_based_counting(
+                request=request,
+                user_id=user_id,
+                callback_handler=callback_handler,
+                execution_id=execution_id,
+                session_id=getattr(request, 'execution_id', None) or execution_id,
+                start=start,
+                end=end,
+                chunk=chunk
+            )
+
         if not STRANDS_AVAILABLE:
             return SwarmExecutionResponse(
                 execution_id=str(uuid.uuid4()),
@@ -208,7 +251,7 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
                 error="Strands library not installed"
             )
         
-        execution_id = request.execution_id or str(uuid.uuid4())
+        # execution_id already established above
         
         # Note: Streaming is now handled directly by EventAwareAgent using stream_async
         # No bridge needed as agents will directly call streaming callbacks
@@ -219,6 +262,12 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             "user_id": user_id,
             "spawned_agents": []
         }
+        # Apply per-agent timeout from request if provided
+        try:
+            cfg = getattr(request, 'context', {}).get('swarm_config', {}) if getattr(request, 'context', None) else {}
+            self.agent_timeouts[execution_id] = int(cfg.get('max_agent_runtime', 90))
+        except Exception:
+            self.agent_timeouts[execution_id] = 90
         
         # Clear event history for new execution
         self.event_bus.clear_history()
@@ -886,53 +935,61 @@ EVENT-DRIVEN COORDINATION:
                     model=model
                 )
                 
-                # Execute with streaming callback
-                async def stream_handler(chunk):
-                    if callback_handler and chunk:
-                        await callback_handler(
-                            type="text_generation",
-                            agent=agent.name,
-                            data={"chunk": chunk, "execution_id": execution_id}
-                        )
-                
-                # Execute the agent using the correct API
+                # Execute with TRUE streaming via async iterator
                 try:
-                    if hasattr(strands_agent, 'run'):
-                        try:
-                            # Try async first
-                            result = await strands_agent.run(full_task)
-                        except TypeError:
-                            # If not awaitable, call synchronously
-                            result = strands_agent.run(full_task)
-                    elif hasattr(strands_agent, '__call__'):
-                        try:
-                            result = await strands_agent(full_task)
-                        except TypeError:
-                            result = strands_agent(full_task)
-                    elif hasattr(strands_agent, 'invoke'):
-                        try:
-                            result = await strands_agent.invoke(full_task)
-                        except TypeError:
-                            result = strands_agent.invoke(full_task)
-                    else:
-                        logger.warning(f"Unknown Strands agent API for {agent.name}")
-                        result = f"Processed task: {full_task}"
-                    
-                    # Extract actual result from AgentResult object if needed
-                    if hasattr(result, 'content'):
-                        result_output = result.content
-                    elif hasattr(result, 'output'):
-                        result_output = result.output
-                    elif hasattr(result, 'text'):
-                        result_output = result.text
-                    elif hasattr(result, 'result'):
-                        result_output = result.result
-                    else:
-                        result_output = str(result)
-                    
+                    result_output = ""
+                    sequence = 0
+                    start_time = time.time()
+                    async for evt in strands_agent.stream_async(full_task):
+                        # Check cancellation or timeout
+                        if execution_id in self.agent_cancellations and agent.name in self.agent_cancellations[execution_id]:
+                            logger.info(f"🛑 Agent {agent.name} cancelled in execution {execution_id}")
+                            break
+                        # Determine effective timeout
+                        eff_to = self.agent_timeouts.get(execution_id, 90)
+                        if execution_id in self.agent_timeout_overrides:
+                            eff_to = self.agent_timeout_overrides[execution_id].get(agent.name, eff_to)
+                        if time.time() - start_time > eff_to:
+                            logger.info(f"⏱️ Agent {agent.name} timed out in execution {execution_id}")
+                            break
+                        if "data" in evt:
+                            chunk = evt["data"]
+                            result_output += chunk
+                            if callback_handler and chunk:
+                                await callback_handler(
+                                    type="text_generation",
+                                    agent=agent.name,
+                                    data={
+                                        "chunk": chunk,
+                                        "execution_id": execution_id,
+                                        "sequence": sequence
+                                    }
+                                )
+                                sequence += 1
+                        elif "current_tool_use" in evt:
+                            tool_info = evt["current_tool_use"]
+                            tool_name = tool_info.get("name", "")
+                            if callback_handler and tool_name:
+                                await callback_handler(
+                                    type="tool_call",
+                                    agent=agent.name,
+                                    data={
+                                        "tool": tool_name,
+                                        "parameters": tool_info.get("input", {})
+                                    }
+                                )
+                        elif "result" in evt:
+                            res = evt["result"]
+                            if hasattr(res, 'content') and res.content:
+                                result_output = res.content
                 except Exception as api_error:
-                    logger.error(f"Strands API call failed for {agent.name}: {api_error}")
-                    result_output = f"Completed analysis by {agent.name}: {task}"
+                    logger.error(f"Strands stream_async failed for {agent.name}: {api_error}")
+                    # Fall back to simple run if streaming fails
+                    try:
+                        result = await strands_agent.run(full_task)
+                        result_output = getattr(result, 'content', str(result))
+                    except Exception:
+                        result_output = f"Completed analysis by {agent.name}: {task}"
             
             # Stream the final result
             if callback_handler:
@@ -974,3 +1031,161 @@ EVENT-DRIVEN COORDINATION:
                 "artifacts": [],
                 "tokens": 0
             }
+
+    # ---- Turn-based helpers ----
+    def _parse_counting_task(self, task: str):
+        import re
+        m = re.search(r"count\s+(\d+)\s*(?:to|-)\s*(\d+)", task.lower())
+        if not m:
+            return None
+        start = int(m.group(1))
+        end = int(m.group(2))
+        chunk = 10
+        m2 = re.search(r"each\s+(?:agent|worker)\s+(?:counts?|do|handle)\s+(\d+)", task.lower())
+        if m2:
+            try:
+                chunk = int(m2.group(1))
+            except Exception:
+                pass
+        return (start, end, chunk)
+
+    async def _execute_turn_based_counting(self, request: SwarmExecutionRequest, user_id: str,
+                                           callback_handler: Optional[Callable], execution_id: str,
+                                           session_id: str, start: int, end: int, chunk: int) -> SwarmExecutionResponse:
+        try:
+            # Register execution so stop_execution() can cooperate
+            self.active_executions[execution_id] = {
+                "status": "running",
+                "start_time": datetime.utcnow(),
+                "user_id": user_id,
+                "spawned_agents": []
+            }
+            # Prepare steps
+            ranges = []
+            for i in range(start, end + 1, chunk):
+                ranges.append((i, min(end, i + chunk - 1)))
+            # Gather agents list
+            agent_names: List[str] = []
+            if request.agents:
+                for a in request.agents:
+                    name = getattr(a, 'name', None) or (a.get('name') if isinstance(a, dict) else None)
+                    if name:
+                        agent_names.append(name)
+            if not agent_names:
+                agent_names = [f"agent_{i+1:02d}" for i in range(len(ranges))]
+
+            # Ensure coordinator and agents exist under this Strands session
+            strands = get_strands_session_service()
+            for name in set(agent_names + ["coordinator"]):
+                strands.get_or_create_agent(session_id=session_id, agent_name=name,
+                                            system_prompt=f"{name} in turn-based counting.", tools=[],
+                                            model_config={"model_id": "gpt-4o-mini", "temperature": 0.0, "max_tokens": 16},
+                                            force_new=False)
+
+            # Seed plan
+            steps = [{
+                "id": f"step_{idx}",
+                "title": f"Count {rng[0]}..{rng[1]}",
+                "agent": agent_names[idx % len(agent_names)],
+                "input": {"range": rng}
+            } for idx, rng in enumerate(ranges)]
+            cmem = CoordinatorMemory(session_id)
+            cmem.seed_plan(steps)
+
+            if callback_handler:
+                await callback_handler(type="session_start", agent=None, data={"execution_id": execution_id})
+
+            # Execute using REAL Strands agents with strict instructions
+            for idx, rng in enumerate(ranges):
+                # Cooperative stop check
+                if self.active_executions.get(execution_id, {}).get("status") == "stopped":
+                    logger.info(f"🛑 Turn-based execution {execution_id} stopped before step {idx}")
+                    return SwarmExecutionResponse(
+                        execution_id=execution_id,
+                        status=ExecutionStatus.STOPPED,
+                        result=f"Stopped at step {idx}",
+                        agent_sequence=agent_names,
+                    )
+                agent_name = agent_names[idx % len(agent_names)]
+
+                # Announce agent start
+                if callback_handler:
+                    await callback_handler(type="agent_started", agent=agent_name, data={"step": idx})
+
+                # Build strict instruction: single-line, numbers only
+                instruction = (
+                    f"You are part of a coordinated team. Output EXACTLY the numbers from {rng[0]} to {rng[1]} "
+                    f"inclusive, separated by single spaces, on a single line, with NO extra words, labels, or punctuation."
+                )
+
+                # Get the Strands Agent instance (shared session managers)
+                strands = get_strands_session_service()
+                s_agent = strands.get_or_create_agent(
+                    session_id=session_id,
+                    agent_name=agent_name,
+                    system_prompt=f"{agent_name}: follow strictly: numbers only, single line.",
+                    tools=[],
+                    model_config={"model_id": "gpt-4o-mini", "temperature": 0.0, "max_tokens": 64},
+                    force_new=False
+                )
+
+                accumulated = ""
+                final_output = ""
+                try:
+                    # Stream tokens from the agent
+                    async for evt in s_agent.stream_async(instruction):
+                        # Cooperative stop during streaming
+                        if self.active_executions.get(execution_id, {}).get("status") == "stopped":
+                            logger.info(f"🛑 Turn-based execution {execution_id} stopped during agent {agent_name} stream")
+                            break
+                        if "data" in evt:
+                            chunk = evt["data"]
+                            accumulated += chunk
+                            if callback_handler and chunk:
+                                await callback_handler(type="text_generation", agent=agent_name, data={"chunk": chunk})
+                        elif "result" in evt:
+                            res = evt["result"]
+                            if hasattr(res, 'content') and res.content:
+                                final_output = res.content
+                except Exception as e:
+                    # Fallback to a simple run
+                    try:
+                        res = await s_agent.run(instruction)
+                        final_output = getattr(res, 'content', str(res))
+                    except Exception:
+                        pass
+
+                output = (final_output or accumulated).strip()
+                # Normalization: keep only numbers and single spaces
+                try:
+                    import re
+                    nums = re.findall(r"\d+", output)
+                    if nums:
+                        output = " ".join(nums)
+                except Exception:
+                    pass
+
+                if callback_handler:
+                    await callback_handler(type="agent_completed", agent=agent_name, data={"output": output})
+
+                state = cmem.advance(output=output, agent=agent_name, step_id=f"step_{idx}")
+                next_agent = state.get("baton", {}).get("current_agent")
+                if next_agent and callback_handler:
+                    await callback_handler(type="handoff", agent=agent_name, data={"from": agent_name, "to": next_agent, "reason": "turn_based_next"})
+
+            if callback_handler:
+                await callback_handler(type="task.complete", agent="coordinator", data={"steps": len(ranges)})
+
+            return SwarmExecutionResponse(
+                execution_id=execution_id,
+                status=ExecutionStatus.COMPLETED,
+                result="Turn-based counting completed",
+                agent_sequence=agent_names,
+            )
+        except Exception as e:
+            logger.error(f"Turn-based counting failed: {e}")
+            return SwarmExecutionResponse(
+                execution_id=execution_id,
+                status=ExecutionStatus.FAILED,
+                error=str(e)
+            )

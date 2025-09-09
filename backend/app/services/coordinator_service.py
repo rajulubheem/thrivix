@@ -105,7 +105,8 @@ Remember: You are the ONLY agent in this session. You see everything and remembe
         agent_configs: List[Dict[str, Any]] = None,
         tools: List = None,
         callback_handler: Optional[Callable] = None,
-        conversation_history: List[Dict[str, str]] = None
+        conversation_history: List[Dict[str, str]] = None,
+        stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
         """
         Execute the coordinator agent with the given task.
@@ -189,6 +190,18 @@ Remember: You are the ONLY agent in this session. You see everything and remembe
             chunk_count = 0
             
             async for event in agent_stream:
+                # Cooperative stop: if stop requested, close stream and exit
+                try:
+                    if stop_check and stop_check():
+                        logger.info(f"🛑 Stop requested for session {session_id}; closing coordinator stream")
+                        try:
+                            await agent_stream.aclose()
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    # If stop_check raises, be safe and break
+                    break
                 # Log event structure for debugging
                 logger.debug(f"📡 Stream event keys: {event.keys() if isinstance(event, dict) else 'not a dict'}")
                 

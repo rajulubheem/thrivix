@@ -16,11 +16,16 @@ from app.schemas.swarm import SwarmExecutionRequest
 from app.services.enhanced_swarm_service import EnhancedSwarmService
 from app.services.realtime_swarm_service import RealtimeSwarmService
 from app.services.strands_session_service import get_strands_session_service
+from app.services.shared_state_service import SharedStateService
 # from app.services.swarm_dag_adapter import swarm_dag_adapter, ExecutionMode  # Disabled DAG
 from app.core.config import settings
 from .streaming_optimizer import optimizer
 
 router = APIRouter()
+# Track live SSE sessions for hard cancellation
+_live_sse_sessions: Dict[str, Dict[str, Any]] = {}
+# Track service instances per session for precise stop routing
+_services_by_session: Dict[str, Any] = {}
 logger = structlog.get_logger()
 
 # Session storage interface
@@ -299,17 +304,18 @@ logger.info(f"STORAGE DEBUG: Using {storage.__class__.__name__}")
 
 @router.post("/streaming/start/sse")
 async def start_streaming_sse(
-    request: SwarmExecutionRequest
+    payload: SwarmExecutionRequest,
+    request: Request
 ):
     """
     Start a new streaming session using native Strands streaming with Server-Sent Events
     """
     # Use session_id from request if provided, otherwise generate new one
-    session_id = request.session_id if request.session_id else str(uuid.uuid4())
+    session_id = payload.session_id if payload.session_id else str(uuid.uuid4())
     
-    logger.info(f"🆕 SSE START: session_id={session_id}, task={request.task[:50] if request.task else ''}...")
+    logger.info(f"🆕 SSE START: session_id={session_id}, task={payload.task[:50] if payload.task else ''}...")
     
-    if not request.task:
+    if not payload.task:
         raise HTTPException(status_code=400, detail="task is required")
     
     async def event_generator():
@@ -323,13 +329,22 @@ async def start_streaming_sse(
                 "virtual_filesystem": {},
                 "accumulated_context": {},
                 "task_history": [{
-                    "task": request.task,
+                    "task": payload.task,
                     "timestamp": datetime.utcnow().isoformat()
                 }]
             }
             
             # Save initial context
             strands_service.save_context(session_id, context)
+
+            # Initialize shared state and append first task
+            try:
+                shared_service = SharedStateService()
+                shared_service.ensure_initialized(session_id)
+                if payload.task:
+                    shared_service.append_task_history(session_id, payload.task)
+            except Exception as e:
+                logger.warning(f"Shared state init failed: {e}")
             
             # Create event queue for async communication
             event_queue = asyncio.Queue()
@@ -349,8 +364,16 @@ async def start_streaming_sse(
                 
                 await event_queue.put(event)
             
-            # Use enhanced service
-            service = EnhancedSwarmService()
+            # Use event-driven swarm to enable true multi-agent with shared state
+            from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
+            service = EventDrivenStrandsSwarm()
+            # Expose globally for stop endpoint and map session->execution
+            import app.api.v1.endpoints.streaming as streaming_module
+            streaming_module._global_swarm_service = service
+            streaming_module._services_by_session[session_id] = service
+            if not hasattr(streaming_module, '_session_execution_map'):
+                streaming_module._session_execution_map = {}
+            streaming_module._session_execution_map[session_id] = payload.execution_id or session_id
             
             logger.info(f"🚀 Starting native Strands streaming for new session {session_id}")
             
@@ -361,14 +384,19 @@ async def start_streaming_sse(
             async def run_swarm():
                 try:
                     # CRITICAL FIX: Set execution_id to session_id for proper session management
-                    request.execution_id = session_id
+                    payload.execution_id = session_id
                     logger.info(f"🔗 SSE: Set request.execution_id to {session_id} for session synchronization")
                     
+                    # Force event-driven execution mode
+                    try:
+                        payload.execution_mode = "event_driven"
+                    except Exception:
+                        pass
                     result = await service.execute_swarm_async(
-                        request=request,
+                        request=payload,
                         user_id="stream_user",
                         callback_handler=streaming_callback,
-                        conversation_history=[]  # New session, no history
+                        conversation_history=[]
                     )
                     # CRITICAL FIX: Extract actual message content from result
                     result_content = ""
@@ -398,18 +426,48 @@ async def start_streaming_sse(
             
             # Start execution
             swarm_task = asyncio.create_task(run_swarm())
+            # Register live SSE session for stop/cancel support
+            import app.api.v1.endpoints.streaming as streaming_module
+            streaming_module._live_sse_sessions[session_id] = {
+                "task": swarm_task,
+                "queue": event_queue
+            }
             
             # Stream events
             while True:
                 try:
+                    # Stop if client disconnected
+                    if await request.is_disconnected():
+                        try:
+                            await service.stop_execution(session_id)
+                        except Exception:
+                            pass
+                        break
                     event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
                     if event is None:
                         break
+                    # Update shared state on agent_completed
+                    try:
+                        if event.get('type') == 'agent_completed' and event.get('agent'):
+                            output = ''
+                            data = event.get('data') or {}
+                            if isinstance(data, dict):
+                                output = data.get('output') or ''
+                            if output:
+                                SharedStateService().set_agent_output(session_id, event['agent'], output)
+                    except Exception as e:
+                        logger.warning(f"Shared state update failed on agent_completed: {e}")
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
                     if swarm_task.done():
                         break
+                except asyncio.CancelledError:
+                    try:
+                        await service.stop_execution(session_id)
+                    except Exception:
+                        pass
+                    break
             
         except Exception as e:
             logger.error(f"SSE streaming error: {e}")
@@ -419,6 +477,11 @@ async def start_streaming_sse(
                 "timestamp": datetime.utcnow().isoformat()
             }
             yield f"data: {json.dumps(error_event)}\n\n"
+        finally:
+            # Cleanup live session registry
+            import app.api.v1.endpoints.streaming as streaming_module
+            if session_id in streaming_module._live_sse_sessions:
+                streaming_module._live_sse_sessions.pop(session_id, None)
     
     return StreamingResponse(
         event_generator(),
@@ -1083,6 +1146,13 @@ async def start_streaming(
                 request.execution_id = session_id
                 logger.info(f"🔗 Set request.execution_id to {session_id} for session synchronization")
                 
+                # Expose service globally so stop endpoint can address it
+                import app.api.v1.endpoints.streaming as streaming_module
+                streaming_module._global_swarm_service = service
+                if not hasattr(streaming_module, '_session_execution_map'):
+                    streaming_module._session_execution_map = {}
+                streaming_module._session_execution_map[session_id] = request.execution_id or session_id
+
                 result = await service.execute_swarm_async(
                     request=request,
                     user_id="stream_user",
@@ -1249,53 +1319,182 @@ async def start_streaming(
 
 @router.post("/streaming/stop/{session_id}")
 async def stop_execution(session_id: str):
-    """Stop a running swarm execution"""
+    """Stop a running swarm execution (idempotent and resilient)."""
     try:
-        # Get the storage instance
-        storage = get_stream_storage()
-        
-        # Update session status to stopped
-        session = await storage.get(session_id)
-        if session:
-            session["status"] = "stopped"
-            await storage.set(session_id, session)
-            
-            # Stop the event-driven swarm execution - use global instance
-            try:
-                from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
-                import app.api.v1.endpoints.streaming as streaming_module
-                
-                # Get the execution_id mapped to this session_id
-                execution_id = session_id  # Default fallback
-                if hasattr(streaming_module, '_session_execution_map'):
-                    execution_id = streaming_module._session_execution_map.get(session_id, session_id)
-                
-                # Try to find existing instance and stop with correct execution_id
-                if hasattr(streaming_module, '_global_swarm_service'):
-                    stopped = await streaming_module._global_swarm_service.stop_execution(execution_id)
-                    logger.info(f"🛑 Stop request processed for execution {execution_id} (session {session_id}) - success: {stopped}")
-                else:
-                    # No active service found
-                    stopped = False
-                    logger.warning(f"🛑 No active service found for execution {execution_id}")
-                    
-            except Exception as stop_error:
-                logger.error(f"Error stopping swarm execution: {stop_error}")
-            
-            # Add stop chunk
-            await storage.append_chunk(session_id, {
-                "type": "execution_stopped",
-                "message": "Execution stopped by user",
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            
-            logger.info(f"🛑 Execution stopped for session {session_id}")
-            return {"status": "stopped", "session_id": session_id}
-        else:
-            raise HTTPException(status_code=404, detail="Session not found")
-            
+        import app.api.v1.endpoints.streaming as streaming_module
+
+        # Best-effort: mark session as stopped if present in storage
+        stopped_any = False
+        try:
+            session = await storage.get(session_id)
+            if session:
+                session["status"] = "stopped"
+                await storage.set(session_id, session)
+                stopped_any = True
+        except Exception as e:
+            logger.debug(f"Stop: could not update storage for {session_id}: {e}")
+
+        # Determine execution_id mapping (falls back to session_id)
+        execution_id = session_id
+        if hasattr(streaming_module, '_session_execution_map'):
+            execution_id = streaming_module._session_execution_map.get(session_id, session_id)
+
+        # Signal the active service if available (prefer per-session service)
+        try:
+            svc = None
+            if hasattr(streaming_module, '_services_by_session'):
+                svc = streaming_module._services_by_session.get(session_id)
+            if not svc and hasattr(streaming_module, '_global_swarm_service') and streaming_module._global_swarm_service:
+                svc = streaming_module._global_swarm_service
+            if svc:
+                stopped = svc.stop_execution(execution_id)
+                try:
+                    import inspect
+                    if inspect.isawaitable(stopped):
+                        stopped = await stopped
+                except Exception:
+                    pass
+                stopped_any = stopped_any or bool(stopped)
+                logger.info(f"🛑 Stop propagated to service for execution {execution_id} (session {session_id}) - success: {stopped}")
+            else:
+                logger.info(f"🛑 No global service instance found for execution {execution_id}")
+        except Exception as svc_err:
+            logger.error(f"Stop: error stopping service for {execution_id}: {svc_err}")
+
+        # Cancel any live SSE stream
+        try:
+            live = getattr(streaming_module, '_live_sse_sessions', {}).get(session_id)
+            if live and live.get("task"):
+                try:
+                    live["task"].cancel()
+                    stopped_any = True
+                except Exception:
+                    pass
+            if live and live.get("queue"):
+                try:
+                    await live["queue"].put(None)
+                except Exception:
+                    pass
+        except Exception as live_err:
+            logger.debug(f"Stop: live SSE cleanup issue for {session_id}: {live_err}")
+
+        # Append stop chunk if session exists
+        try:
+            session = await storage.get(session_id)
+            if session:
+                await storage.append_chunk(session_id, {
+                    "type": "execution_stopped",
+                    "message": "Execution stopped by user",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+        except Exception:
+            pass
+
+        logger.info(f"🛑 Stop completed for session {session_id}; any_effect={stopped_any}")
+        return {"status": "stopped", "session_id": session_id, "any_effect": stopped_any}
+
     except Exception as e:
         logger.error(f"Error stopping execution: {e}")
+        # Return 200 with graceful message to avoid UI errors, but include detail
+        return JSONResponse({"status": "stopped", "session_id": session_id, "error": str(e)}, status_code=200)
+
+
+@router.post("/streaming/emergency-stop/{session_id}")
+async def emergency_stop(session_id: str):
+    """Emergency stop: fast, idempotent, cancels SSE + flags execution.
+
+    This endpoint returns 202 immediately after scheduling stop operations,
+    without waiting for storage or service confirmations.
+    """
+    try:
+        import app.api.v1.endpoints.streaming as streaming_module
+        # Fire-and-forget: mark storage (best-effort) and cancel SSE
+        async def _do_stop():
+            try:
+                sess = await storage.get(session_id)
+                if sess:
+                    sess["status"] = "stopped"
+                    await storage.set(session_id, sess)
+            except Exception:
+                pass
+            # Map session->execution
+            execution_id = session_id
+            if hasattr(streaming_module, '_session_execution_map'):
+                execution_id = streaming_module._session_execution_map.get(session_id, session_id)
+            # Signal any known services
+            try:
+                if hasattr(streaming_module, '_global_swarm_service') and streaming_module._global_swarm_service:
+                    svc = streaming_module._global_swarm_service
+                    res = svc.stop_execution(execution_id)
+                    try:
+                        import inspect
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # Cancel live SSE session if present
+            try:
+                live = getattr(streaming_module, '_live_sse_sessions', {}).get(session_id)
+                if live and live.get("task"):
+                    try:
+                        live["task"].cancel()
+                    except Exception:
+                        pass
+                if live and live.get("queue"):
+                    try:
+                        await live["queue"].put(None)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Schedule and return
+        asyncio.create_task(_do_stop())
+        return JSONResponse({"status": "stop_requested", "session_id": session_id}, status_code=202)
+    except Exception as e:
+        # Still return 202 to keep UI responsive
+        return JSONResponse({"status": "stop_requested", "session_id": session_id, "error": str(e)}, status_code=202)
+
+
+@router.post("/streaming/stop-agent/{session_id}/{agent_name}")
+async def stop_agent(session_id: str, agent_name: str):
+    """Stop a single agent within an active execution"""
+    try:
+        import app.api.v1.endpoints.streaming as streaming_module
+        from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
+        execution_id = session_id
+        if hasattr(streaming_module, '_session_execution_map'):
+            execution_id = streaming_module._session_execution_map.get(session_id, session_id)
+        if hasattr(streaming_module, '_global_swarm_service'):
+            svc = streaming_module._global_swarm_service
+            ok = hasattr(svc, 'stop_agent') and svc.stop_agent(execution_id, agent_name)
+            if ok:
+                return {"status": "agent_stop_requested", "agent": agent_name}
+        raise HTTPException(status_code=404, detail="No active service")
+    except Exception as e:
+        logger.error(f"Error stopping agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/streaming/timeout-agent/{session_id}/{agent_name}")
+async def set_agent_timeout(session_id: str, agent_name: str, request: Dict[str, Any]):
+    """Set/override per-agent timeout (seconds) for an active execution"""
+    try:
+        seconds = int(request.get('seconds', 60))
+        import app.api.v1.endpoints.streaming as streaming_module
+        execution_id = session_id
+        if hasattr(streaming_module, '_session_execution_map'):
+            execution_id = streaming_module._session_execution_map.get(session_id, session_id)
+        if hasattr(streaming_module, '_global_swarm_service'):
+            svc = streaming_module._global_swarm_service
+            if hasattr(svc, 'set_agent_timeout'):
+                ok = svc.set_agent_timeout(execution_id, agent_name, seconds)
+                if ok:
+                    return {"status": "timeout_set", "agent": agent_name, "seconds": seconds}
+        raise HTTPException(status_code=404, detail="No active service")
+    except Exception as e:
+        logger.error(f"Error setting agent timeout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/streaming/poll/{session_id}")
@@ -1497,20 +1696,91 @@ async def health_check():
     })
 
 
+@router.get("/sessions/{session_id}/shared-state")
+async def get_shared_state(session_id: str):
+    """Expose current shared state snapshot for a session."""
+    try:
+        strands = get_strands_session_service()
+        shared = SharedStateService()
+        data = shared.get_all(session_id)
+
+        # Provide agent list (names) for visibility
+        agents = strands.get_all_agents(session_id)
+        agent_names = list(agents.keys()) if agents else []
+        # Include any agents present in agent_outputs to improve visibility
+        try:
+            outputs = data.get("shared_context", {}).get("agent_outputs", {})
+            for k in outputs.keys():
+                if k not in agent_names:
+                    agent_names.append(k)
+        except Exception:
+            pass
+
+        return JSONResponse({
+            "session_id": session_id,
+            "shared_context": data.get("shared_context", {}),
+            "agent_outputs": data.get("shared_context", {}).get("agent_outputs", {}),
+            "task_history": data.get("shared_context", {}).get("task_history", []),
+            "current_goal": data.get("shared_context", {}).get("current_goal", ""),
+            "namespaces": data.get("namespaces", {}),
+            "agents": agent_names,
+        })
+    except Exception as e:
+        logger.error(f"Failed to get shared state: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sessions/{session_id}/shared-state")
+async def update_shared_state(session_id: str, request: Dict[str, Any]):
+    """Update shared state: set current_goal, append task, or set a namespace key."""
+    try:
+        shared = SharedStateService()
+        updated = {}
+
+        if isinstance(request, dict):
+            if "current_goal" in request:
+                shared.set_current_goal(session_id, str(request.get("current_goal") or ""))
+                updated["current_goal"] = request.get("current_goal")
+            if "append_task" in request and request.get("append_task"):
+                shared.append_task_history(session_id, str(request.get("append_task")))
+            if "set_namespace" in request and isinstance(request.get("set_namespace"), dict):
+                ns = request["set_namespace"]
+                key = ns.get("key")
+                value = ns.get("value")
+                if key is not None:
+                    shared.set_namespace(session_id, str(key), value)
+            if request.get("clear_agent_outputs"):
+                ctx = shared.get_shared_context(session_id)
+                ctx["agent_outputs"] = {}
+                shared.set_shared_context(session_id, ctx, merge=False)
+
+        data = shared.get_all(session_id)
+        return JSONResponse({
+            "session_id": session_id,
+            "shared_context": data.get("shared_context", {}),
+            "namespaces": data.get("namespaces", {}),
+            "updated": updated
+        })
+    except Exception as e:
+        logger.error(f"Failed to update shared state: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/streaming/continue/sse")
 async def continue_streaming_sse(
-    request: Dict[str, Any]
+    payload: Dict[str, Any],
+    request: Request
 ):
     """
     Continue streaming session using native Strands streaming with Server-Sent Events
     This replaces the polling-based approach with proper streaming
     """
-    session_id = request.get("session_id")
-    task = request.get("task", "")
-    previous_messages = request.get("previous_messages", [])
-    agents = request.get("agents", [])
-    max_handoffs = request.get("max_handoffs", 20)
-    execution_mode = request.get("execution_mode", "auto")
+    session_id = payload.get("session_id")
+    task = payload.get("task", "")
+    previous_messages = payload.get("previous_messages", [])
+    agents = payload.get("agents", [])
+    max_handoffs = payload.get("max_handoffs", 20)
+    execution_mode = payload.get("execution_mode", "auto")
     
     logger.info(f"🔄 SSE CONTINUE: session_id={session_id}, task={task[:50]}...")
     
@@ -1552,6 +1822,15 @@ async def continue_streaming_sse(
             
             # Save updated context with proper message key
             strands_service.save_context(session_id, context)
+
+            # Initialize/Update shared state for this continuation
+            try:
+                shared_service = SharedStateService()
+                shared_service.ensure_initialized(session_id)
+                if task:
+                    shared_service.append_task_history(session_id, task)
+            except Exception as e:
+                logger.warning(f"Shared state init (continue) failed: {e}")
             
             # Create swarm request
             swarm_request = SwarmExecutionRequest(
@@ -1563,8 +1842,16 @@ async def continue_streaming_sse(
                 execution_mode=execution_mode
             )
             
-            # Use enhanced service with native Strands streaming
-            service = EnhancedSwarmService()
+            # Use event-driven swarm for true multi-agent behavior
+            from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
+            service = EventDrivenStrandsSwarm()
+            # Expose globally for stop endpoint and map session->execution
+            import app.api.v1.endpoints.streaming as streaming_module
+            streaming_module._global_swarm_service = service
+            streaming_module._services_by_session[session_id] = service
+            if not hasattr(streaming_module, '_session_execution_map'):
+                streaming_module._session_execution_map = {}
+            streaming_module._session_execution_map[session_id] = swarm_request.execution_id or session_id
             
             # Create event queue for async communication between callback and generator
             event_queue = asyncio.Queue()
@@ -1598,6 +1885,8 @@ async def continue_streaming_sse(
                     conversation_history = context.get("previous_messages", [])
                     logger.info(f"📚 Passing {len(conversation_history)} messages to swarm executor")
                     
+                    # Ensure event-driven execution
+                    swarm_request.execution_mode = "event_driven"
                     result = await service.execute_swarm_async(
                         request=swarm_request,
                         user_id="stream_user",
@@ -1623,14 +1912,38 @@ async def continue_streaming_sse(
             
             # Start swarm execution
             swarm_task = asyncio.create_task(run_swarm())
+            # Register live SSE session for stop/cancel
+            import app.api.v1.endpoints.streaming as streaming_module
+            streaming_module._live_sse_sessions[session_id] = {
+                "task": swarm_task,
+                "queue": event_queue
+            }
             
             # Yield events from queue
             while True:
                 try:
+                    # Stop if client disconnected
+                    if await request.is_disconnected():
+                        try:
+                            await service.stop_execution(session_id)
+                        except Exception:
+                            pass
+                        break
                     # Wait for event with timeout
                     event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
                     if event is None:  # End of stream signal
                         break
+                    # Update shared state on agent_completed
+                    try:
+                        if event.get('type') == 'agent_completed' and event.get('agent'):
+                            output = ''
+                            data = event.get('data') or {}
+                            if isinstance(data, dict):
+                                output = data.get('output') or ''
+                            if output:
+                                SharedStateService().set_agent_output(session_id, event['agent'], output)
+                    except Exception as e:
+                        logger.warning(f"Shared state update (continue) failed: {e}")
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     # Send keepalive
@@ -1638,6 +1951,12 @@ async def continue_streaming_sse(
                     # Check if swarm is still running
                     if swarm_task.done():
                         break
+                except asyncio.CancelledError:
+                    try:
+                        await service.stop_execution(session_id)
+                    except Exception:
+                        pass
+                    break
             
         except Exception as e:
             logger.error(f"SSE streaming error: {e}")
@@ -1647,6 +1966,11 @@ async def continue_streaming_sse(
                 "timestamp": datetime.utcnow().isoformat()
             }
             yield f"data: {json.dumps(error_event)}\n\n"
+        finally:
+            # Cleanup live session registry
+            import app.api.v1.endpoints.streaming as streaming_module
+            if session_id in streaming_module._live_sse_sessions:
+                streaming_module._live_sse_sessions.pop(session_id, None)
     
     return StreamingResponse(
         event_generator(),
@@ -1850,6 +2174,12 @@ async def continue_streaming(
     
     # Use enhanced service for better context handling
     service = EnhancedSwarmService()
+    # Expose globally so stop endpoint can stop this execution
+    import app.api.v1.endpoints.streaming as streaming_module
+    streaming_module._global_swarm_service = service
+    if not hasattr(streaming_module, '_session_execution_map'):
+        streaming_module._session_execution_map = {}
+    streaming_module._session_execution_map[session_id] = swarm_request.execution_id or session_id
     
     # Execute in background with context preservation
     background_tasks.add_task(
@@ -2263,7 +2593,7 @@ async def get_execution_status(session_id: str):
     """Get detailed execution status including agent pool information"""
     try:
         # Get basic session info
-        storage = get_stream_storage()
+        # Use the shared storage instance initialized at module import
         session = await storage.get(session_id)
         
         base_status = {

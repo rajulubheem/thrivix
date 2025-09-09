@@ -26,6 +26,8 @@ class SwarmService:
 
     def __init__(self, iterative_agent_service=None):
         self.active_executions = {}
+        # Track active OpenAI streams per execution for cooperative cancellation
+        self._active_streams = {}
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.iterative_agent_service = iterative_agent_service
 
@@ -82,6 +84,10 @@ class SwarmService:
 
             # MAIN SWARM LOOP - Using proper agent loops
             while handoff_count <= max_handoffs:
+                # Cooperative stop between iterations
+                if self.active_executions.get(execution_id, {}).get("status") == "stopped":
+                    logger.info(f"🛑 Execution {execution_id} marked stopped. Exiting main loop.")
+                    break
                 logger.info(f"\n{'='*60}")
                 logger.info(f"SWARM ITERATION {handoff_count + 1}: {current_agent.name}")
 
@@ -106,7 +112,8 @@ class SwarmService:
                     agent_result = await self._execute_agent_simple(
                         agent=current_agent,
                         task=agent_task_context,
-                        callback_handler=callback_handler
+                        callback_handler=callback_handler,
+                        execution_id=execution_id
                     )
 
                 # Process agent results
@@ -188,6 +195,16 @@ class SwarmService:
                 error=str(e)
             )
         finally:
+            # Best-effort close of any active stream for this execution
+            try:
+                stream = self._active_streams.pop(execution_id, None)
+                if stream is not None:
+                    if hasattr(stream, 'aclose') and callable(getattr(stream, 'aclose')):
+                        await stream.aclose()
+                    elif hasattr(stream, 'response') and hasattr(stream.response, 'aclose'):
+                        await stream.response.aclose()
+            except Exception:
+                pass
             if execution_id in self.active_executions:
                 del self.active_executions[execution_id]
 
@@ -349,7 +366,8 @@ Focus on delivering substantial value through your expertise.
         self,
         agent: AgentConfig,
         task: str,
-        callback_handler: Optional[Callable]
+        callback_handler: Optional[Callable],
+        execution_id: str
     ) -> Dict[str, Any]:
         """Simple agent execution fallback"""
 
@@ -360,22 +378,12 @@ Focus on delivering substantial value through your expertise.
                 data={"task": task[:100]}
             )
 
-        # Build messages with conversation history if available
+        # Build messages
         system_prompt = agent.system_prompt or f"You are {agent.name}."
-        
-        # Include conversation history context if this is a continuation
-        if shared_context.get("is_continuation") and shared_context.get("conversation_history"):
-            system_prompt += "\n\nYou are continuing an ongoing conversation. Previous messages are provided for context."
 
         messages = [
             {"role": "system", "content": system_prompt}
         ]
-        
-        # Add conversation history if available
-        if shared_context.get("conversation_history"):
-            for msg in shared_context["conversation_history"]:
-                messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
-        
         # Add current task
         messages.append({"role": "user", "content": task})
 
@@ -383,6 +391,7 @@ Focus on delivering substantial value through your expertise.
             response_text = ""
             model = getattr(agent, 'model', 'gpt-4o-mini')
 
+            # Open the streaming response
             stream = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -390,8 +399,22 @@ Focus on delivering substantial value through your expertise.
                 temperature=0.7,
                 max_tokens=3000
             )
+            # Register active stream for cooperative stop
+            self._active_streams[execution_id] = stream
 
             async for chunk in stream:
+                # Cooperative stop between chunks
+                if self.active_executions.get(execution_id, {}).get("status") == "stopped":
+                    logger.info(f"🛑 Stop requested for {execution_id}; closing OpenAI stream")
+                    try:
+                        if hasattr(stream, 'aclose') and callable(getattr(stream, 'aclose')):
+                            await stream.aclose()
+                        elif hasattr(stream, 'response') and hasattr(stream.response, 'aclose'):
+                            await stream.response.aclose()
+                    except Exception:
+                        pass
+                    break
+
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     response_text += content
@@ -462,9 +485,18 @@ Focus on creating the final deliverable. Usually no handoff needed after your wo
         ]
 
     async def stop_execution(self, execution_id: str) -> bool:
-        """Stop execution"""
+        """Stop execution and attempt to close any active OpenAI stream"""
         if execution_id in self.active_executions:
             self.active_executions[execution_id]["status"] = "stopped"
+            try:
+                stream = self._active_streams.pop(execution_id, None)
+                if stream is not None:
+                    if hasattr(stream, 'aclose') and callable(getattr(stream, 'aclose')):
+                        await stream.aclose()
+                    elif hasattr(stream, 'response') and hasattr(stream.response, 'aclose'):
+                        await stream.response.aclose()
+            except Exception:
+                pass
             return True
         return False
 

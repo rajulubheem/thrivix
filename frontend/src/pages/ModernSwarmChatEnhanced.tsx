@@ -55,16 +55,45 @@ export function ModernSwarmChatEnhanced() {
   const currentSessionRef = useRef<string | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const stoppingRef = useRef<boolean>(false);
+  const lastPollTimeRef = useRef<number>(0);
+  const isPollingRef = useRef<boolean>(false);
+  const pollAbortRef = useRef<AbortController | null>(null);
 
   // Load sessions on mount
   useEffect(() => {
     loadSessions();
+    // Inactivity watchdog: if polling stalls beyond threshold, auto-stop backend
+    const watchdog = setInterval(() => {
+      const THRESHOLD_MS = 45000; // 45s without polling progress triggers stop
+      const now = Date.now();
+      if (
+        isLoading &&
+        currentSessionRef.current &&
+        lastPollTimeRef.current > 0 &&
+        now - lastPollTimeRef.current > THRESHOLD_MS &&
+        !stoppingRef.current
+      ) {
+        console.warn(
+          `⏱️ Polling inactivity detected (> ${THRESHOLD_MS}ms). Stopping execution for`,
+          currentSessionRef.current
+        );
+        stopCurrentExecution();
+      }
+    }, 10000);
     return () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
       }
+      clearInterval(watchdog);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+      }
+      // Proactively stop backend execution if user navigates away during processing
+      if (currentSessionRef.current) {
+        try {
+          fetch(`/api/v1/streaming/stop/${currentSessionRef.current}`, { method: 'POST' });
+        } catch {}
       }
     };
   }, []);
@@ -126,6 +155,22 @@ export function ModernSwarmChatEnhanced() {
       }
     } catch (error) {
       console.error('❌ Failed to load session:', error);
+    }
+  };
+
+  const stopCurrentExecution = async () => {
+    try {
+      const sid = currentSessionRef.current || currentSession?.session_id;
+      if (!sid) return;
+      stoppingRef.current = true;
+      // Abort any inflight poll request immediately
+      if (pollAbortRef.current) {
+        try { pollAbortRef.current.abort(); } catch {}
+      }
+      await fetch(`/api/v1/streaming/stop/${sid}`, { method: 'POST' });
+      setIsLoading(false);
+    } catch (err) {
+      console.error('Failed to stop execution:', err);
     }
   };
 
@@ -291,10 +336,15 @@ export function ModernSwarmChatEnhanced() {
         let polling = true;
         
         const pollForUpdates = async () => {
+          isPollingRef.current = true;
+          lastPollTimeRef.current = Date.now();
           while (polling) {
             try {
+              // Create/refresh abort controller per iteration
+              pollAbortRef.current = new AbortController();
               const pollResponse = await fetch(
-                `/api/v1/streaming/poll/${pollSessionId}?offset=${offset}&timeout=25`
+                `/api/v1/streaming/poll/${pollSessionId}?offset=${offset}&timeout=25`,
+                { signal: pollAbortRef.current.signal }
               );
               
               if (!pollResponse.ok) {
@@ -302,6 +352,7 @@ export function ModernSwarmChatEnhanced() {
               }
               
               const pollData = await pollResponse.json();
+              lastPollTimeRef.current = Date.now();
               
               if (pollData.chunks && pollData.chunks.length > 0) {
                 for (const chunk of pollData.chunks) {
@@ -348,7 +399,7 @@ export function ModernSwarmChatEnhanced() {
                           : a
                       )
                     );
-                  } else if (chunk.type === 'done' || chunk.type === 'error') {
+                  } else if (chunk.type === 'done' || chunk.type === 'error' || chunk.type === 'execution_stopped') {
                     polling = false;
                     setIsLoading(false);
                     
@@ -430,6 +481,10 @@ export function ModernSwarmChatEnhanced() {
               await new Promise(resolve => setTimeout(resolve, 100));
               
             } catch (error) {
+              if ((error as any)?.name === 'AbortError') {
+                // Aborted due to stop — exit loop quietly
+                break;
+              }
               console.error('Polling error:', error);
               polling = false;
               setIsLoading(false);
@@ -449,6 +504,7 @@ export function ModernSwarmChatEnhanced() {
               break;
             }
           }
+          isPollingRef.current = false;
         };
         
         // Start polling
@@ -567,16 +623,21 @@ export function ModernSwarmChatEnhanced() {
                       Session: {currentSession.session_id.slice(0, 8)}...
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {isLoading && (
-                      <Badge variant="secondary" className="gap-2">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Processing
-                      </Badge>
-                    )}
-                  </div>
-                </div>
+              <div className="flex items-center gap-2">
+                {isLoading && (
+                  <Badge variant="secondary" className="gap-2">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Processing
+                  </Badge>
+                )}
+                {isLoading && (
+                  <Button size="sm" variant="outline" onClick={stopCurrentExecution}>
+                    Stop
+                  </Button>
+                )}
               </div>
+            </div>
+          </div>
 
               {/* Chat Interface */}
               <div className="flex-1 overflow-hidden">

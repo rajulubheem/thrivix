@@ -408,6 +408,26 @@ If a tool fails, check:
                         "content": msg["content"]
                     })
             
+            # Inject shared state summary as a system message (Strands agent.state)
+            try:
+                from app.services.shared_state_service import SharedStateService
+                if self.session_id:
+                    shared = SharedStateService().get_shared_context(self.session_id)
+                    if shared:
+                        goal = shared.get("current_goal") or ""
+                        outputs = shared.get("agent_outputs", {}) or {}
+                        # Keep concise summary
+                        outputs_summary = ", ".join(f"{k}: {str(v)[:100]}" for k, v in outputs.items())
+                        system_note = ""
+                        if goal:
+                            system_note += f"Current Goal: {goal}\n"
+                        if outputs_summary:
+                            system_note += f"Known Agent Outputs: {outputs_summary}\n"
+                        if system_note:
+                            messages.insert(0, {"role": "system", "content": system_note.strip()})
+            except Exception as e:
+                logger.warning(f"Failed to inject shared state into context: {e}")
+            
             # Add current task as new user message
             messages.append({
                 "role": "user",
@@ -1214,7 +1234,8 @@ class EnhancedSwarmService:
                     agent_configs=agent_configs_list,
                     tools=all_tools,
                     callback_handler=callback_handler,
-                    conversation_history=conversation_history  # CRITICAL: Pass conversation history
+                    conversation_history=conversation_history,  # CRITICAL: Pass conversation history
+                    stop_check=lambda: self.active_executions.get(execution_id, {}).get("status") == "stopped",
                 )
                 
                 logger.info(f"✅ Coordinator completed execution")
@@ -1273,6 +1294,15 @@ class EnhancedSwarmService:
         finally:
             if execution_id in self.active_executions:
                 del self.active_executions[execution_id]
+
+    async def stop_execution(self, execution_id: str) -> bool:
+        """Mark execution as stopped so cooperative loops can exit."""
+        if execution_id in self.active_executions:
+            self.active_executions[execution_id]["status"] = "stopped"
+            logger.info(f"🛑 EnhancedSwarmService: stop requested for {execution_id}")
+            return True
+        # If not tracked, still return False
+        return False
 
     async def _extract_artifacts_from_text(self, text: str) -> List[Dict[str, Any]]:
         """Extract code artifacts from text"""

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from typing import List, Optional
 import uuid
 from app.schemas.swarm import (
@@ -17,20 +17,21 @@ from app.config import settings
 
 router = APIRouter()
 
+# Use a shared Swarm service instance so /stop can affect running executions
+_global_swarm_service = EnhancedSwarmService() if settings.USE_ENHANCED_SWARM else SwarmService()
+
 
 @router.post("/execute", response_model=SwarmExecutionResponse)
 async def execute_swarm(
     request: SwarmExecutionRequest,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    http_request: Request = None,
 ):
     """Execute a swarm of agents"""
     try:
-        # Use enhanced service based on settings
-        if settings.USE_ENHANCED_SWARM:
-            swarm_service = EnhancedSwarmService()
-        else:
-            swarm_service = SwarmService()
+        # Use shared service instance
+        swarm_service = _global_swarm_service
         
         # Execute swarm in background if requested
         if request.background:
@@ -49,11 +50,40 @@ async def execute_swarm(
                 message="Swarm execution queued"
             )
         
-        # Execute swarm synchronously
-        result = await swarm_service.execute_swarm_async(
-            request,
-            current_user["id"]
-        )
+        # Ensure we have an execution_id for cooperative cancellation
+        if not request.execution_id:
+            import uuid as _uuid
+            request.execution_id = str(_uuid.uuid4())
+
+        # Start a small monitor to stop on client disconnect
+        async def _monitor_disconnect(exec_id: str):
+            if http_request is None:
+                return
+            try:
+                while True:
+                    if await http_request.is_disconnected():
+                        try:
+                            await swarm_service.stop_execution(exec_id)
+                        except Exception:
+                            pass
+                        break
+                    await asyncio.sleep(0.25)
+            except Exception:
+                pass
+
+        monitor_task = asyncio.create_task(_monitor_disconnect(request.execution_id))
+        try:
+            # Execute swarm synchronously
+            result = await swarm_service.execute_swarm_async(
+                request,
+                current_user["id"]
+            )
+        finally:
+            # Cancel monitor when finished
+            try:
+                monitor_task.cancel()
+            except Exception:
+                pass
         return result
         
     except Exception as e:
@@ -67,7 +97,7 @@ async def list_executions(
     current_user: dict = Depends(get_current_user)
 ):
     """List swarm executions for current user"""
-    swarm_service = SwarmService()
+    swarm_service = _global_swarm_service
     executions = await swarm_service.get_user_executions(
         current_user["id"],
         skip,
@@ -82,7 +112,7 @@ async def get_execution(
     current_user: dict = Depends(get_current_user)
 ):
     """Get specific execution details"""
-    swarm_service = SwarmService()
+    swarm_service = _global_swarm_service
     execution = await swarm_service.get_execution(
         execution_id,
         current_user["id"]
@@ -98,7 +128,7 @@ async def stop_execution(
     current_user: dict = Depends(get_current_user)
 ):
     """Stop a running execution"""
-    swarm_service = SwarmService()
+    swarm_service = _global_swarm_service
     stopped = await swarm_service.stop_execution(execution_id)
     if not stopped:
         raise HTTPException(status_code=404, detail="Execution not found or already completed")

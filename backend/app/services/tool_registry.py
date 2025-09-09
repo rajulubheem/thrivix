@@ -37,16 +37,17 @@ class ToolRegistry:
     async def _register_tavily_tool(self):
         """Register Tavily search tool"""
         try:
-            from app.tools.strands_tavily_search import tavily_search, TOOL_SPEC
+            from app.tools.strands_tavily_search import tavily_search, tavily_search_async, TOOL_SPEC
             
             # Check if API key is available
             if not os.getenv("TAVILY_API_KEY"):
                 logger.warning("TAVILY_API_KEY not set - Tavily tool will not work")
                 
+            # Prefer async handler to avoid blocking event loop during SSE
             self.tools["tavily_search"] = {
                 "spec": TOOL_SPEC,
-                "handler": tavily_search,
-                "async": False,
+                "handler": tavily_search_async if 'tavily_search_async' in locals() else tavily_search,
+                "async": True,
                 "requires_approval": True,
                 "description": "Search the web for current information using Tavily API",
                 "capabilities": ["web_search", "research", "current_information"]

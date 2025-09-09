@@ -18,11 +18,25 @@ def setup_logging() -> None:
     if os.getenv("LOG_TO_FILE", "false").lower() == "true" or os.getenv("DEBUG", "false").lower() == "true":
         handlers.append(logging.FileHandler("backend.log", mode='a'))
     
+    # Ensure unbuffered, line-buffered stdout to reduce perceived log bursts
+    try:
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=log_level,
         handlers=handlers
     )
+
+    # Quiet noisy libraries unless DEBUG is explicitly enabled
+    if os.getenv("DEBUG", "false").lower() != "true":
+        for noisy in ("httpx", "httpcore", "urllib3", "openai", "strands"):
+            try:
+                logging.getLogger(noisy).setLevel(logging.WARNING)
+            except Exception:
+                pass
 
     # Configure structlog
     structlog.configure(

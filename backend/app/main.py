@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import structlog
 
@@ -65,7 +64,9 @@ app = FastAPI(
 app.add_middleware(RateLimitMiddleware, requests_per_minute=200)
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(RequestIdMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# IMPORTANT: Disable GZip for compatibility with Server-Sent Events (SSE)
+# Compressing SSE can introduce buffering and break real-time streaming.
+# If compression is needed elsewhere, add conditional logic to skip SSE paths.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://localhost:3002"],
@@ -74,6 +75,38 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Selective compression middleware (skip SSE)
+from starlette.middleware.base import BaseHTTPMiddleware
+import gzip
+from starlette.responses import Response, StreamingResponse
+
+class SelectiveGZipMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        try:
+            # Skip SSE or already encoded
+            if getattr(response, 'media_type', None) == 'text/event-stream':
+                return response
+            if isinstance(response, StreamingResponse):
+                return response
+            if response.headers.get('Content-Encoding'):
+                return response
+            body = b"".join([chunk async for chunk in response.body_iterator]) if hasattr(response, 'body_iterator') else await response.body()
+            # Only compress JSON/text larger than threshold
+            ctype = response.headers.get('content-type', '')
+            if ('application/json' in ctype or 'text/' in ctype) and body and len(body) > 1024:
+                gz = gzip.compress(body)
+                resp = Response(content=gz, status_code=response.status_code, headers=dict(response.headers), media_type=response.media_type)
+                resp.headers['Content-Encoding'] = 'gzip'
+                resp.headers['Content-Length'] = str(len(gz))
+                return resp
+            else:
+                return Response(content=body, status_code=response.status_code, headers=dict(response.headers), media_type=response.media_type)
+        except Exception:
+            return response
+
+app.add_middleware(SelectiveGZipMiddleware)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
