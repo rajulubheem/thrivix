@@ -124,6 +124,7 @@ export const OrchestratorPanel: React.FC<OrchestratorPanelProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [showToolLibrary, setShowToolLibrary] = useState(persistentState?.showToolLibrary || false);
   const [selectedCategory, setSelectedCategory] = useState<string>(persistentState?.selectedCategory || 'all');
+  const [realEnabledTools, setRealEnabledTools] = useState<string[]>([]);
 
   // FIXED: Sync with persistent state when it changes
   useEffect(() => {
@@ -136,6 +137,20 @@ export const OrchestratorPanel: React.FC<OrchestratorPanelProps> = ({
       setSelectedCategory(persistentState.selectedCategory);
     }
   }, [persistentState]);
+
+  // Load real enabled tools from backend to inform orchestration and highlighting
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/v1/tools/tools/available');
+        if (!res.ok) return;
+        const data = await res.json();
+        const tools = Array.isArray(data?.tools) ? data.tools : [];
+        const names = tools.filter((t: any) => t?.enabled).map((t: any) => t?.name).filter(Boolean);
+        setRealEnabledTools(names as string[]);
+      } catch {}
+    })();
+  }, []);
 
   // FIXED: Update persistent state when local state changes
   const updatePersistentState = (updates: Partial<PersistentState>) => {
@@ -288,7 +303,8 @@ export const OrchestratorPanel: React.FC<OrchestratorPanelProps> = ({
           preferences: {
             generate_unique: true,
             avoid_templates: true
-          }
+          },
+          context: { allowed_tools: realEnabledTools }
         })
       });
 
@@ -545,6 +561,38 @@ export const OrchestratorPanel: React.FC<OrchestratorPanelProps> = ({
         <div className="tool-library-section">
           <div className="library-header">
             <h3>Available Tools</h3>
+            {realEnabledTools.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 12, color: '#9aa0b4', marginBottom: 6 }}>Real Enabled Tools</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {realEnabledTools.map((t) => (
+                    <button
+                      key={t}
+                      className={`category-pill ${agents.some(a => (a.tools || []).includes(t)) ? 'active' : ''}`}
+                      onClick={() => {
+                        const currentId = expandedAgent || (agents[0]?.id);
+                        if (!currentId) return;
+                        // Update agents array and selectedTools map in sync
+                        let updatedAgents = agents.map(a => {
+                          if (a.id !== currentId) return a;
+                          const has = (a.tools || []).includes(t);
+                          const tools = has ? a.tools.filter(x => x !== t) : [...(a.tools || []), t];
+                          return { ...a, tools };
+                        });
+                        setAgents(updatedAgents);
+                        const cur = selectedTools[currentId] || [];
+                        const curHas = cur.includes(t);
+                        const nextTools = curHas ? cur.filter(x => x !== t) : [...cur, t];
+                        const updatedSelected = { ...selectedTools, [currentId]: nextTools };
+                        setSelectedTools(updatedSelected);
+                        // Persist via parent
+                        onStateUpdate && onStateUpdate({ selectedTools: updatedSelected, agents: updatedAgents });
+                      }}
+                    >{t}</button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div style={{ 
               padding: '16px', 
               background: 'linear-gradient(135deg, rgba(74, 158, 255, 0.15), rgba(139, 92, 246, 0.15))', 

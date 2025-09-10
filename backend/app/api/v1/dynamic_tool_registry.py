@@ -10,6 +10,11 @@ from app.services.dynamic_tool_wrapper import StrandsToolRegistry
 router = APIRouter()
 logger = structlog.get_logger()
 
+@router.get("/available")
+async def get_available_alias() -> Dict[str, Any]:
+    """Alias for available tools to support legacy clients."""
+    return await get_available_tools()
+
 @router.get("/available-tools")
 async def get_available_tools() -> Dict[str, Any]:
     """Get all available tools with metadata"""

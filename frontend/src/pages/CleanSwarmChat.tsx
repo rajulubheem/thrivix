@@ -4,7 +4,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { 
-  Loader2, Send, StopCircle, RefreshCw, User, Bot, Sparkles, 
+  Loader2, Send, StopCircle, RefreshCw, User, Bot, Sparkles, Brain,
   Settings, Activity, Users, MessageSquare, Clock, ChevronRight,
   Zap, Shield, Gauge, Filter, LayoutGrid, List, Play, Pause,
   CheckCircle, AlertCircle, Cpu, Database, GitBranch, Target,
@@ -15,6 +15,7 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import AgentPipeline from '../components/swarm/AgentPipeline';
+import { useNavigate } from 'react-router-dom';
 
 // API Configuration
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -43,6 +44,7 @@ interface SessionData {
 }
 
 export function CleanSwarmChat() {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -51,6 +53,7 @@ export function CleanSwarmChat() {
   const [streamingContent, setStreamingContent] = useState<Map<string, string>>(new Map());
   const [toolCalls, setToolCalls] = useState<any[]>([]);
   const [toolResults, setToolResults] = useState<any[]>([]);
+  const [showToolsBar, setShowToolsBar] = useState<boolean>(false);
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [handoffs, setHandoffs] = useState<any[]>([]);
   const [sharedState, setSharedState] = useState<any>(null);
@@ -71,12 +74,34 @@ export function CleanSwarmChat() {
   const [orchAutoStart, setOrchAutoStart] = useState<boolean>(false);
   const [orchTask, setOrchTask] = useState<string>('');
   const [showOrchEditor, setShowOrchEditor] = useState<boolean>(false);
+  const [orchDraftTask, setOrchDraftTask] = useState<string>('');
+  const [availableTools, setAvailableTools] = useState<string[]>(['python_repl', 'file_write', 'file_read', 'tavily_search']);
+  const [isGeneratingAgents, setIsGeneratingAgents] = useState<boolean>(false);
+  const [runParallel, setRunParallel] = useState<boolean>(false);
 
   const persistOrchAgents = useCallback((agents: any[]) => {
     try {
       setOrchAgents(agents);
       sessionStorage.setItem('orchestratorAgents', JSON.stringify(agents));
     } catch {}
+  }, []);
+
+  // Try to load available tools from backend registry (optional)
+  useEffect(() => {
+    (async () => {
+      try {
+        // Prefer available-tools endpoint; keep fallback if alias is added later
+        let res = await fetch('/api/v1/tool-registry/available-tools');
+        if (!res.ok) {
+          res = await fetch('/api/v1/tool-registry/available');
+        }
+        if (res.ok) {
+          const data = await res.json();
+          const names = Array.isArray(data?.tools) ? data.tools.map((t: any) => t.name || t) : [];
+          if (names.length) setAvailableTools(names);
+        }
+      } catch {}
+    })();
   }, []);
   // Execution mode + config
   const [executionMode, setExecutionMode] = useState<'event_driven'|'turn_based'|'hybrid'>('event_driven');
@@ -327,26 +352,61 @@ export function CleanSwarmChat() {
         : '/api/v1/streaming/continue/sse';
 
       // Attach orchestrator-generated agents if present
-      const mappedAgents = (orchAgents || []).map((a: any) => ({
-        name: a?.name || a?.role || 'custom_agent',
-        system_prompt: a?.system_prompt || a?.description || a?.role || 'You are a helpful agent.',
-        tools: Array.isArray(a?.tools) ? a.tools : [],
-        description: a?.description || a?.role || '',
-        model: a?.model || 'gpt-4o-mini',
-        temperature: typeof a?.temperature === 'number' ? a.temperature : 0.7,
-        max_tokens: typeof a?.max_tokens === 'number' ? a.max_tokens : 4000,
-      }));
+      const mappedAgents = (orchAgents || []).map((a: any) => {
+        // Choose tools from multiple possible fields
+        const toolList = Array.isArray(a?.tools) && a.tools.length > 0
+          ? a.tools
+          : (Array.isArray(a?.primary_tools) ? a.primary_tools : []);
+        // Heuristic: ensure core build/search tools are present when task implies building
+        const tset = new Set<string>(toolList);
+        const taskLower = (task || '').toLowerCase();
+        const roleLower = (a?.role || a?.name || '').toLowerCase();
+        const needsBuild = /(build|create|implement|code|app|prototype|scaffold|cli|write\s+files|project|module|generate)/.test(taskLower)
+          || /(dev|build|coder|engineer|developer|builder|creator|writer|file|operations)/.test(roleLower);
+        if (needsBuild) {
+          ['python_repl','file_write','file_read'].forEach(t => tset.add(t));
+        }
+        // Ensure research capability for research-like roles
+        if (/(research|ingest|discover|explore|analy)/.test(roleLower)) {
+          tset.add('web_search');
+        }
+        const toolsFinal = Array.from(tset);
+        // Build a rich system prompt if not provided
+        let sys = a?.system_prompt || '';
+        if (!sys) {
+          const instr = Array.isArray(a?.instructions) ? a.instructions.slice(0, 8) : [];
+          const instrText = instr.length ? ('\n\nInstructions:\n- ' + instr.map((s: string) => (s || '').trim()).filter(Boolean).join('\n- ')) : '';
+          const toolsText = toolsFinal.length ? ('\n\nAvailable tools: ' + toolsFinal.join(', ')) : '';
+          sys = (
+            `You are ${a?.role || a?.name || 'a specialized agent'}. ${a?.description || ''}`.trim() +
+            instrText + toolsText +
+            `\n\nGuidance:\n- Prefer using the available tools to produce tangible outputs.\n- If you need information, use web_search; to write or run code, use python_repl and file_write.\n- Always produce concrete artifacts or clear next actions.\n- If blocked, state blockers and what you need to proceed.\n`
+          );
+        }
+        return {
+          name: a?.name || a?.role || 'custom_agent',
+          system_prompt: sys || 'You are a helpful agent.',
+          tools: toolsFinal,
+          description: a?.description || a?.role || '',
+          model: a?.model || 'gpt-4o-mini',
+          temperature: typeof a?.temperature === 'number' ? a.temperature : 0.7,
+          max_tokens: typeof a?.max_tokens === 'number' ? a.max_tokens : 4000,
+        };
+      });
 
       // For continuation, Strands loads conversation automatically
       const requestBody = {
         task,
         session_id: sessionId,
         agents: mappedAgents,
-        max_handoffs: 0,
-        execution_mode: executionMode,
+        // Allow more handoffs so agents can collaborate meaningfully
+        max_handoffs: 6,
+        // Respect UI mode; for custom agents prefer sequential unless parallel requested
+        execution_mode: (mappedAgents.length > 0 && !runParallel ? 'sequential' : executionMode),
         context: {
           swarm_config: {
             mode: executionMode,
+            parallel: runParallel,
             // In strict mode, coordinator enforces baton; in autonomous keep limits permissive
             max_concurrent_agents: modeConfig.max_concurrent_agents,
             max_total_agents: modeConfig.max_total_agents,
@@ -542,6 +602,17 @@ export function CleanSwarmChat() {
                         parameters: event.data.parameters,
                         timestamp: event.timestamp
                       }]);
+                      // Inline tool call with parameters
+                      const actual = event.data.tool || 'unknown_tool';
+                      const wrapper = event.data.wrapper;
+                      const header = wrapper && wrapper !== actual ? `Tool: ${actual} (via ${wrapper})` : `Tool: ${actual}`;
+                      const paramsBlock = event.data.parameters ? `\n\nParameters:\n\n\`\`\`json\n${JSON.stringify(event.data.parameters, null, 2)}\n\`\`\`` : '';
+                      setMessages(prev => [...prev, {
+                        id: `tool_${Date.now()}`,
+                        role: 'system',
+                        content: `${header}${paramsBlock}`,
+                        timestamp: new Date().toISOString()
+                      } as any]);
                       // Detect handoff_to_user and enqueue approval
                       if (event.data.tool === 'handoff_to_user') {
                         const message = event.data.parameters?.message || 'Input required';
@@ -568,6 +639,17 @@ export function CleanSwarmChat() {
                         results: event.data.results,
                         timestamp: event.timestamp
                       }]);
+                      // Inline result with raw output
+                      const actual = event.data.tool || 'unknown_tool';
+                      const ok = event.data.success !== false;
+                      const resultObj = event.data.result || event.data.error || {};
+                      const raw = (() => { try { return JSON.stringify(resultObj, null, 2); } catch { return String(resultObj); } })();
+                      setMessages(prev => [...prev, {
+                        id: `tool_result_${Date.now()}`,
+                        role: 'system',
+                        content: `${ok ? '✅' : '❌'} ${actual} ${ok ? 'completed' : 'failed'}\n\nRaw Output:\n\n\`\`\`json\n${raw}\n\`\`\``,
+                        timestamp: new Date().toISOString()
+                      } as any]);
                     }
                     break;
 
@@ -604,7 +686,16 @@ export function CleanSwarmChat() {
                       reason: event.reason || event.data?.reason,
                       timestamp: event.timestamp
                     }]);
+                    // Also surface a concise system message
+                    setMessages(prev => [...prev, {
+                      id: `handoff_${Date.now()}`,
+                      role: 'system',
+                      content: `Handoff: ${(event.from || event.data?.from || 'agent')} → ${(event.to || event.data?.to || 'agent')}`,
+                      timestamp: new Date().toISOString()
+                    } as any]);
                     break;
+
+                  
 
                   case 'tool_approval_required':
                     if (event.agent && event.data) {
@@ -678,6 +769,12 @@ export function CleanSwarmChat() {
                   case 'handoff.requested':
                   case 'handoff':
                     pushTimeline('handoff', { from: event?.data?.from, to: event?.data?.to });
+                    setMessages(prev => [...prev, {
+                      id: `handoff_${Date.now()}`,
+                      role: 'system',
+                      content: `Handoff: ${(event?.data?.from || 'agent')} → ${(event?.data?.to || 'agent')}`,
+                      timestamp: new Date().toISOString()
+                    } as any]);
                     break;
                   case 'task.progress':
                     pushTimeline('task_progress', { status: event?.data?.status || 'progress' });
@@ -1264,9 +1361,11 @@ export function CleanSwarmChat() {
 
             {/* Right Controls */}
             <div className="flex items-center gap-2">
-              {/* Orchestrator quick action */}
-              <Button size="sm" variant="ghost" onClick={() => (window.location.href = '/orchestrator')} title="Open Orchestrator">
-                Orchestrator
+              <Button size="sm" variant="ghost" onClick={() => navigate('/swarm/tools')} title="Tools Hub">
+                Tools
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => navigate('/orchestrator/config')} title="Configure Agents">
+                <Brain className="h-4 w-4 mr-1" /> Configure Agents
               </Button>
               {isLoading && (
                 <Button
@@ -1355,6 +1454,7 @@ export function CleanSwarmChat() {
           )}
         </div>
 
+        {/* Orchestrator UI moved to dedicated route (/orchestrator/config) */}
         {/* Main Content by Tab */}
         <ScrollArea className="flex-1 overflow-x-hidden" ref={scrollAreaRef}>
           <div className="w-full">
@@ -1700,6 +1800,48 @@ export function CleanSwarmChat() {
           </div>
         </ScrollArea>
 
+        {/* Collapsible Tools Bar */}
+        <div className="border-t bg-white dark:bg-gray-900 px-4 py-2">
+          <div className="max-w-4xl mx-auto">
+            <button
+              className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700"
+              onClick={() => setShowToolsBar(s => !s)}
+            >
+              {showToolsBar ? 'Hide Tools' : `Show Tools (${toolCalls.length + toolResults.length})`}
+            </button>
+            {showToolsBar && (
+              <div className="mt-2 max-h-40 overflow-y-auto text-xs space-y-2">
+                {[...toolCalls.slice(-10).map(c => ({ type: 'call', ...c })), ...toolResults.slice(-10).map(r => ({ type: 'result', ...r }))]
+                  .sort((a, b) => (new Date(a.timestamp || 0).getTime()) - (new Date(b.timestamp || 0).getTime()))
+                  .map((item, idx) => (
+                    <div key={idx} className="p-2 rounded border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="mr-2">{item.type === 'call' ? '🔧' : (item.success !== false ? '✅' : '❌')}</span>
+                          <strong>{item.tool}</strong>
+                          {item.agent ? <span className="ml-2 text-gray-500">(agent: {item.agent})</span> : null}
+                        </div>
+                        <span className="text-gray-400">{new Date(item.timestamp || Date.now()).toLocaleTimeString()}</span>
+                      </div>
+                      {item.parameters && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer">Parameters</summary>
+                          <pre className="mt-1 bg-black/5 dark:bg-black/30 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto">{JSON.stringify(item.parameters, null, 2)}</pre>
+                        </details>
+                      )}
+                      {item.type === 'result' && (item.results || item.summary) && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer">Result</summary>
+                          <pre className="mt-1 bg-black/5 dark:bg-black/30 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto">{JSON.stringify(item.results || item.summary, null, 2)}</pre>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Input Area */}
         <div className="border-t bg-white dark:bg-gray-900 p-4">
           <div className="max-w-4xl mx-auto">
@@ -1726,80 +1868,10 @@ export function CleanSwarmChat() {
             </div>
           </div>
 
-          {/* Orchestrator agents preview bar */}
-          {orchAgents && orchAgents.length > 0 && (
-            <div className="mt-2 px-3 py-2 rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm">
-                <Users className="h-4 w-4 text-blue-600" />
-                <span className="text-blue-700 dark:text-blue-200">{orchAgents.length} custom agents ready</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => setShowOrchEditor((v) => !v)}>
-                  {showOrchEditor ? 'Hide' : 'Preview / Edit'}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => { persistOrchAgents([]); sessionStorage.removeItem('orchestratorTask'); }}>
-                  Clear
-                </Button>
-              </div>
-            </div>
-          )}
+          {/* Orchestrator preview bar removed to reduce confusion */}
         </div>
 
-        {/* Orchestrator agents editor panel */}
-        {showOrchEditor && (
-          <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-            <div className="text-sm font-semibold mb-2">Custom Agents</div>
-            <div className="space-y-3">
-              {orchAgents.map((agent: any, idx: number) => (
-                <div key={idx} className="p-3 rounded border border-gray-200 dark:border-gray-700">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Input
-                      value={agent.name || ''}
-                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], name: e.target.value }; persistOrchAgents(next); }}
-                      placeholder="Agent name"
-                      className="h-8"
-                    />
-                    <Input
-                      value={agent.model || 'gpt-4o-mini'}
-                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], model: e.target.value }; persistOrchAgents(next); }}
-                      placeholder="Model"
-                      className="h-8 w-40"
-                    />
-                    <Input
-                      type="number"
-                      step="0.1"
-                      value={typeof agent.temperature === 'number' ? agent.temperature : 0.7}
-                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], temperature: parseFloat(e.target.value) }; persistOrchAgents(next); }}
-                      placeholder="Temp"
-                      className="h-8 w-24"
-                    />
-                    <Button size="sm" variant="ghost" className="text-red-600" onClick={() => { const next=orchAgents.filter((_,i)=>i!==idx); persistOrchAgents(next); }}>Remove</Button>
-                  </div>
-                  <div className="mb-2">
-                    <Input
-                      value={(agent.tools && agent.tools.join(', ')) || ''}
-                      onChange={(e) => { const list=e.target.value.split(',').map(s=>s.trim()).filter(Boolean); const next=[...orchAgents]; next[idx] = { ...next[idx], tools: list }; persistOrchAgents(next); }}
-                      placeholder="Tools (comma-separated)"
-                      className="h-8"
-                    />
-                  </div>
-                  <div>
-                    <textarea
-                      value={agent.system_prompt || ''}
-                      onChange={(e) => { const next=[...orchAgents]; next[idx] = { ...next[idx], system_prompt: e.target.value }; persistOrchAgents(next); }}
-                      placeholder="System prompt"
-                      className="w-full h-24 p-2 text-sm rounded border border-gray-200 dark:border-gray-700 bg-transparent"
-                    />
-                  </div>
-                </div>
-              ))}
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => { const next=[...orchAgents, { name: `custom_agent_${orchAgents.length+1}`, system_prompt: 'You are a helpful agent.', tools: [], model: 'gpt-4o-mini', temperature: 0.7, max_tokens: 4000 }]; persistOrchAgents(next); }}>Add Agent</Button>
-                <span className="text-xs text-gray-500">Edits are saved automatically</span>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* In-depth editor moved to /orchestrator/config */}
       </div>
 
       {/* Agent Detail Modal */}

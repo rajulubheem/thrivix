@@ -63,15 +63,38 @@ class ToolDiscoveryService:
                         "returns": "Search results with URLs and summaries"
                     },
                     "http_request": {
-                        "description": "Make HTTP requests to APIs and websites",
+                        "description": "Make HTTP requests to APIs and websites (GET/HEAD)",
                         "parameters": {
-                            "method": "string - HTTP method (GET, POST, PUT, DELETE)",
+                            "method": "string - HTTP method (GET or HEAD)",
                             "url": "string - URL to request",
-                            "headers": "dict - Optional headers",
-                            "body": "string - Optional request body",
-                            "convert_to_markdown": "boolean - Convert HTML to markdown"
+                            "headers": "dict - Optional headers"
                         },
-                        "example": {"method": "GET", "url": "https://api.example.com/data"}
+                        "example": {"method": "GET", "url": "https://example.com"}
+                    },
+                    "fetch_webpage": {
+                        "description": "Fetch a webpage and extract readable text",
+                        "parameters": {"url": "string - Target http(s) URL (required)"},
+                        "example": {"url": "https://example.com"}
+                    },
+                    "extract_links": {
+                        "description": "Extract hyperlinks from a webpage",
+                        "parameters": {"url": "string - Target http(s) URL (required)"},
+                        "example": {"url": "https://example.com"}
+                    },
+                    "rss_fetch": {
+                        "description": "Fetch and parse an RSS feed",
+                        "parameters": {"url": "string - RSS/Atom feed URL (required)", "limit": "integer - Max items (optional)"},
+                        "example": {"url": "https://hnrss.org/frontpage", "limit": 5}
+                    },
+                    "sitemap_fetch": {
+                        "description": "Fetch and parse a sitemap.xml",
+                        "parameters": {"url": "string - sitemap.xml URL (required)", "limit": "integer - Max URLs (optional)"},
+                        "example": {"url": "https://example.com/sitemap.xml", "limit": 100}
+                    },
+                    "wikipedia_search": {
+                        "description": "Search Wikipedia and get a summary",
+                        "parameters": {"query": "string - Search query (required)", "lang": "string - Language code (optional, default: en)"},
+                        "example": {"query": "Large language model", "lang": "en"}
                     }
                 }
             },
@@ -81,10 +104,9 @@ class ToolDiscoveryService:
                     "python_repl": {
                         "description": "Execute Python code in a sandboxed environment",
                         "parameters": {
-                            "code": "string - Python code to execute",
-                            "persist_state": "boolean - Keep variables between executions (default: true)"
+                            "code": "string - Python code to execute (required)"
                         },
-                        "example": {"code": "import pandas as pd\nprint('Hello')", "persist_state": True},
+                        "example": {"code": "print(2 + 2)"},
                         "returns": "Execution output and results"
                     },
                     "calculator": {
@@ -94,6 +116,11 @@ class ToolDiscoveryService:
                         },
                         "example": {"expression": "2 + 2 * 3"},
                         "returns": "Calculation result"
+                    },
+                    "code_interpreter": {
+                        "description": "Execute code using the Python interpreter",
+                        "parameters": {"code": "string - Python code to execute (required)"},
+                        "example": {"code": "print('Hello')"}
                     }
                 }
             },
@@ -217,7 +244,7 @@ class ToolDiscoveryService:
                         if category_name not in tools_by_category:
                             tools_by_category[category_name] = []
                         tools_by_category[category_name].append(tool_name)
-        
+
         for category, tools in tools_by_category.items():
             category_info = catalog[category]
             guide += f"### {category_info['description']}\n"
@@ -235,6 +262,9 @@ class ToolDiscoveryService:
                 if tool_info.get("example"):
                     example_str = json.dumps(tool_info['example'])
                     guide += f"- Example: `{example_str}`\n"
+
+                # Add a reminder of correct call format for the agent
+                guide += "- Call Format: [TOOL: {name}]\\n  {{parameters as JSON}}\\n  [/TOOL]\\n".format(name=tool_name)
         
         return guide
 
@@ -259,17 +289,42 @@ class ToolValidator:
         # Check required parameters
         missing = [p for p in required_params if p not in parameters]
         if missing:
-            return False, f"Missing required parameters: {', '.join(missing)}"
+            # Provide example usage if available
+            example = tool_help.get("example")
+            example_str = f" Example: `{json.dumps(example)}`" if example else ""
+            return False, f"Missing required parameters: {', '.join(missing)}.{example_str}"
         
         # Validate specific tools
         if tool_name == "file_write":
             if "content" not in parameters and "path" in parameters:
                 # Agent might be confusing file_write with file_read
-                return False, "file_write requires 'content' parameter. Did you mean to use file_read?"
+                return False, "file_write requires 'content' parameter. To read a file use file_read with {\"path\": \"...\"}. To save output, call file_write with {\"path\": \"...\", \"content\": \"...\"}."
         
         if tool_name == "file_read":
             if "content" in parameters:
                 # Agent is trying to write with file_read
-                return False, "file_read doesn't accept 'content'. Use file_write to save content."
+                return False, "file_read doesn't accept 'content'. Use file_write to save content, e.g. {\"path\": \"output.txt\", \"content\": \"...\"}."
+            if "query" in parameters:
+                return False, "file_read expects {\"path\": \"...\"}. To search the web use tavily_search with {\"query\": \"...\"}."
+
+        if tool_name in ("tavily_search", "web_search"):
+            if "url" in parameters and "query" not in parameters:
+                return False, "For web_search supply {\"query\": \"...\"}. To fetch a specific page, use fetch_webpage with {\"url\": \"http(s)://...\"}."
+
+        if tool_name == "http_request":
+            method = str(parameters.get("method", "GET")).upper()
+            if method not in ("GET", "HEAD"):
+                return False, "http_request supports only GET or HEAD. Set {\"method\": \"GET\"}."
+            if not parameters.get("url"):
+                return False, "http_request requires {\"url\": \"http(s)://...\"}."
+
+        if tool_name == "fetch_webpage" and "url" not in parameters:
+            return False, "fetch_webpage requires {\"url\": \"http(s)://...\"}. To discover URLs first, use tavily_search with {\"query\": \"...\"}."
+
+        if tool_name == "diagram" and "description" not in parameters:
+            return False, "diagram requires {\"description\": \"...\"}."
+
+        if tool_name in ("python_repl", "code_interpreter") and "code" not in parameters:
+            return False, "Provide {\"code\": \"...\"} to execute. Save results with file_write if needed."
         
         return True, "Valid"

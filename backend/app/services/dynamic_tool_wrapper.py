@@ -27,8 +27,7 @@ class DynamicToolWrapper:
         # Get the actual function signature
         sig = inspect.signature(tool_func) if hasattr(tool_func, '__call__') else None
         
-        @tool
-        async def wrapped_tool(**kwargs):
+        async def _base_wrapped(**kwargs):
             """Dynamically wrapped tool with visibility"""
             # Work on local copies to avoid rebinding closure vars
             current_tool_name = tool_name
@@ -46,6 +45,21 @@ class DynamicToolWrapper:
                 else:
                     actual_params = kwargs['kwargs']
             
+            # Emit structured tool_call for UI (actual tool and wrapper info)
+            if self.callback_handler:
+                try:
+                    await self.callback_handler(
+                        type="tool_call",
+                        agent=agent_name,
+                        data={
+                            "tool": current_tool_name,
+                            "wrapper": "wrapped_tool",
+                            "parameters": actual_params
+                        }
+                    )
+                except Exception:
+                    pass
+
             # Validate and fix common tool mistakes
             from app.services.tool_discovery import ToolValidator
             
@@ -59,6 +73,27 @@ class DynamicToolWrapper:
                     write_key = f"{agent_name}_file_write"
                     if write_key in self.wrapped_tools:
                         current_tool_func = self.wrapped_tools[write_key]
+
+            # Heuristic: if file_read is called with a 'query', delegate to a search tool
+            if current_tool_name == "file_read" and "query" in actual_params:
+                try:
+                    # Prefer tavily_search if available
+                    replacement = None
+                    if os.getenv("TAVILY_API_KEY"):
+                        replacement = self.wrap_strands_tool("tavily_search", agent_name)
+                        if replacement:
+                            logger.info(f"🔎 Redirecting file_read(query) to tavily_search for {agent_name}")
+                            current_tool_name = "tavily_search"
+                            current_tool_func = replacement
+                    if not replacement:
+                        # Try wikipedia_search as a no-key fallback
+                        replacement = self.wrap_strands_tool("wikipedia_search", agent_name)
+                        if replacement:
+                            logger.info(f"🔎 Redirecting file_read(query) to wikipedia_search for {agent_name}")
+                            current_tool_name = "wikipedia_search"
+                            current_tool_func = replacement
+                except Exception as e:
+                    logger.warning(f"Heuristic redirect failed: {e}")
             
             # Validate parameters
             is_valid, validation_msg = ToolValidator.validate_tool_call(current_tool_name, actual_params)
@@ -76,10 +111,38 @@ class DynamicToolWrapper:
                             "text": error_msg
                         }
                     )
+                    # Emit structured error as tool_result for UI
+                    try:
+                        await self.callback_handler(
+                            type="tool_result",
+                            agent=agent_name,
+                            data={
+                                "tool": current_tool_name,
+                                "success": False,
+                                "error": validation_msg,
+                                "parameters": actual_params,
+                                "wrapper": "wrapped_tool"
+                            }
+                        )
+                    except Exception:
+                        pass
                 return {"status": "error", "content": [{"text": validation_msg}]}
             
             # Send tool called notification with clean display
             if self.callback_handler:
+                # Also emit structured call for UI
+                try:
+                    await self.callback_handler(
+                        type="tool_call",
+                        agent=agent_name,
+                        data={
+                            "tool": current_tool_name,
+                            "wrapper": "wrapped_tool",
+                            "parameters": actual_params
+                        }
+                    )
+                except Exception:
+                    pass
                 tool_msg = f"\n🔧 **Tool Called:** `{current_tool_name}`\n"
                 
                 # Get clean purpose description
@@ -114,19 +177,44 @@ class DynamicToolWrapper:
             
             try:
                 # Execute the original tool with correct parameters
-                if asyncio.iscoroutinefunction(current_tool_func):
-                    # Direct coroutine function
-                    result = await current_tool_func(**actual_params)
-                elif hasattr(current_tool_func, '__call__'):
-                    # Callable instance – inspect its __call__
+                # Adapt to Strands SDK-style tools that expect a 'tool' (ToolUse) argument
+                def _build_tool_use(params: Dict[str, Any]) -> Dict[str, Any]:
+                    return {
+                        "toolUseId": f"call_{int(asyncio.get_event_loop().time()*1000)}",
+                        "input": params or {}
+                    }
+
+                # Determine call signature
+                call_target = current_tool_func
+                is_async = asyncio.iscoroutinefunction(call_target)
+                if not is_async and hasattr(current_tool_func, '__call__'):
                     call_attr = current_tool_func.__call__
-                    if asyncio.iscoroutinefunction(call_attr):
-                        result = await call_attr(**actual_params)
-                    else:
-                        result = await asyncio.to_thread(call_attr, **actual_params)
+                    call_target = call_attr
+                    is_async = asyncio.iscoroutinefunction(call_attr)
+
+                try:
+                    sig = inspect.signature(call_target)
+                except Exception:
+                    sig = None
+
+                if sig:
+                    params = list(sig.parameters.values())
                 else:
-                    # Fallback to thread offload
-                    result = await asyncio.to_thread(current_tool_func, **actual_params)
+                    params = []
+
+                # If first param is named 'tool', adapt to ToolUse API
+                if params and params[0].name == 'tool':
+                    tool_use = _build_tool_use(actual_params if isinstance(actual_params, dict) else {})
+                    if is_async:
+                        result = await call_target(tool=tool_use)
+                    else:
+                        result = await asyncio.to_thread(call_target, tool=tool_use)
+                else:
+                    # Regular kwargs style
+                    if is_async:
+                        result = await call_target(**(actual_params if isinstance(actual_params, dict) else {}))
+                    else:
+                        result = await asyncio.to_thread(call_target, **(actual_params if isinstance(actual_params, dict) else {}))
                 
                 # Send success notification
                 if self.callback_handler:
@@ -160,9 +248,11 @@ class DynamicToolWrapper:
                         type="tool_result",
                         agent=agent_name,
                         data={
-                            "tool": tool_name,
+                            "tool": current_tool_name,
                             "success": True,
-                            "result": result
+                            "result": result,
+                            "parameters": actual_params,
+                            "wrapper": "wrapped_tool"
                         }
                     )
                 
@@ -170,6 +260,30 @@ class DynamicToolWrapper:
                 
             except Exception as e:
                 logger.error(f"Tool {tool_name} error: {e}")
+
+                # If we accidentally got a module instead of a callable, try to resolve the function
+                try:
+                    import types
+                    if isinstance(current_tool_func, types.ModuleType) and hasattr(current_tool_func, current_tool_name):
+                        fix = getattr(current_tool_func, current_tool_name)
+                        if callable(fix):
+                            logger.warning(f"Recovered from module-not-callable: invoking {current_tool_name} from submodule")
+                            result = await fix(**actual_params) if asyncio.iscoroutinefunction(fix) else await asyncio.to_thread(fix, **actual_params)
+                            if self.callback_handler:
+                                await self.callback_handler(
+                                    type="tool_result",
+                                    agent=agent_name,
+                                    data={
+                                        "tool": current_tool_name,
+                                        "success": True,
+                                        "result": result,
+                                        "parameters": actual_params,
+                                        "wrapper": "wrapped_tool"
+                                    }
+                                )
+                            return result
+                except Exception:
+                    pass
                 
                 if self.callback_handler:
                     error_msg = f"❌ **Tool `{tool_name}` Error:** {str(e)}\n"
@@ -181,26 +295,78 @@ class DynamicToolWrapper:
                             "text": error_msg
                         }
                     )
+                    try:
+                        await self.callback_handler(
+                            type="tool_result",
+                            agent=agent_name,
+                            data={
+                                "tool": current_tool_name,
+                                "success": False,
+                                "error": str(e),
+                                "parameters": actual_params,
+                                "wrapper": "wrapped_tool"
+                            }
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        await self.callback_handler(
+                            type="tool_result",
+                            agent=agent_name,
+                            data={
+                                "tool": current_tool_name,
+                                "success": False,
+                                "error": str(e),
+                                "parameters": actual_params,
+                                "wrapper": "wrapped_tool"
+                            }
+                        )
+                    except Exception:
+                        pass
                 
                 return {"status": "error", "content": [{"text": str(e)}]}
-        
-        # Copy metadata
-        wrapped_tool.__name__ = tool_name
-        wrapped_tool.__doc__ = tool_func.__doc__
-        
-        return wrapped_tool
+        # Rename function to the actual tool name BEFORE decorating
+        _base_wrapped.__name__ = tool_name
+        _base_wrapped.__doc__ = tool_func.__doc__
+
+        # Apply the Strands @tool decorator now that the name is correct
+        visible_tool = tool(_base_wrapped)
+        return visible_tool
     
     def wrap_strands_tool(self, tool_name: str, agent_name: str) -> Optional[Callable]:
         """Wrap a tool from strands-tools package"""
         
         try:
+            # Prefer app.tools implementations first (stable call signatures)
+            app_tool_modules = [
+                'app.tools.python_repl_tool',
+                'app.tools.file_tools',
+                'app.tools.web_tools',
+                'app.tools.system_tools',
+            ]
+            
+            for module_name in app_tool_modules:
+                try:
+                    module = importlib.import_module(module_name)
+                    if hasattr(module, tool_name):
+                        tool_func = getattr(module, tool_name)
+                        logger.info(f"✅ Loaded tool {tool_name} from {module_name}")
+                        return self.create_visible_wrapper(tool_name, tool_func, agent_name)
+                except ImportError:
+                    continue
+
             # Try to import from strands_agents_tools
             try:
+                import types
                 module = importlib.import_module('strands_tools')
                 if hasattr(module, tool_name):
-                    tool_func = getattr(module, tool_name)
-                    logger.info(f"✅ Loaded tool {tool_name} from strands_agents_tools")
-                    return self.create_visible_wrapper(tool_name, tool_func, agent_name)
+                    obj = getattr(module, tool_name)
+                    # Some distributions expose a submodule named after the tool
+                    if isinstance(obj, types.ModuleType) and hasattr(obj, tool_name):
+                        obj = getattr(obj, tool_name)
+                    if callable(obj):
+                        logger.info(f"✅ Loaded tool {tool_name} from strands_agents_tools")
+                        return self.create_visible_wrapper(tool_name, obj, agent_name)
             except ImportError:
                 pass
             
@@ -242,29 +408,16 @@ class DynamicToolWrapper:
                 try:
                     module = importlib.import_module(module_name)
                     if hasattr(module, tool_name):
-                        tool_func = getattr(module, tool_name)
-                        logger.info(f"✅ Loaded tool {tool_name} from {module_name}")
-                        return self.create_visible_wrapper(tool_name, tool_func, agent_name)
+                        obj = getattr(module, tool_name)
+                        if isinstance(obj, types.ModuleType) and hasattr(obj, tool_name):
+                            obj = getattr(obj, tool_name)
+                        if callable(obj):
+                            logger.info(f"✅ Loaded tool {tool_name} from {module_name}")
+                            return self.create_visible_wrapper(tool_name, obj, agent_name)
                 except ImportError as e:
                     logger.warning(f"Could not import {module_name}: {e}")
             
-            # Try app.tools modules
-            app_tool_modules = [
-                'app.tools.python_repl_tool',
-                'app.tools.file_tools',
-                'app.tools.web_tools',
-                'app.tools.system_tools',
-            ]
-            
-            for module_name in app_tool_modules:
-                try:
-                    module = importlib.import_module(module_name)
-                    if hasattr(module, tool_name):
-                        tool_func = getattr(module, tool_name)
-                        logger.info(f"✅ Loaded tool {tool_name} from {module_name}")
-                        return self.create_visible_wrapper(tool_name, tool_func, agent_name)
-                except ImportError:
-                    continue
+            # (already tried app.tools above)
             
             logger.warning(f"Tool {tool_name} not found in available modules")
             return None
@@ -446,6 +599,64 @@ class StrandsToolRegistry:
                 "source": "strands_tools"
             },
         }
+
+        # Best-effort discovery: enumerate callable tools in strands_tools
+        try:
+            module = importlib.import_module('strands_tools')
+            for attr in dir(module):
+                if attr.startswith('_'):
+                    continue
+                if attr in tools:
+                    continue
+                try:
+                    obj = getattr(module, attr)
+                    if callable(obj):
+                        desc = (obj.__doc__ or '').strip().split('\n')[0]
+                        tools[attr] = {
+                            "description": desc or f"Strands tool {attr}",
+                            "category": "unknown",
+                            "source": "strands_tools"
+                        }
+                except Exception:
+                    continue
+            # Deep scan: walk submodules for callable tools
+            try:
+                import pkgutil
+                visited = set()
+                for finder, name, ispkg in pkgutil.walk_packages(module.__path__, module.__name__ + "."):
+                    if name in visited:
+                        continue
+                    visited.add(name)
+                    # Avoid heavy/private modules
+                    base = name.split('.')[-1]
+                    if base.startswith('_'):
+                        continue
+                    try:
+                        sub = importlib.import_module(name)
+                    except Exception:
+                        continue
+                    for attr in dir(sub):
+                        if attr.startswith('_'):
+                            continue
+                        key = attr
+                        if key in tools:
+                            continue
+                        try:
+                            obj = getattr(sub, attr)
+                            if callable(obj):
+                                desc = (obj.__doc__ or '').strip().split('\n')[0]
+                                tools[key] = {
+                                    "description": desc or f"Strands tool {key}",
+                                    "category": "unknown",
+                                    "source": "strands_tools"
+                                }
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+        except Exception:
+            # strands_tools not installed or import error
+            pass
         
         return tools
     

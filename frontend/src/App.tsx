@@ -22,6 +22,8 @@ import { EventDrivenSwarmInterface } from './components/swarm/EventDrivenSwarmIn
 import { TrueDynamicSwarmChatInterface } from './components/swarm/TrueDynamicSwarmChatInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
+import OrchestratorConfig from './pages/OrchestratorConfig';
+import SwarmToolsHub from './pages/SwarmToolsHub';
 
 function App() {
   return (
@@ -37,6 +39,8 @@ function App() {
             
             {/* Unified Orchestrator - Single powerful orchestrator with MCP and custom agents */}
             <Route path="/orchestrator" element={<UnifiedOrchestratorV2 />} />
+            <Route path="/orchestrator/config" element={<OrchestratorConfig />} />
+            <Route path="/swarm/tools" element={<SwarmToolsHub />} />
             
             {/* Enhanced Swarm for demo */}
             <Route path="/enhanced" element={<EnhancedSwarmChat />} />

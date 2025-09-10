@@ -20,8 +20,10 @@ from app.services.shared_state_service import SharedStateService
 # from app.services.swarm_dag_adapter import swarm_dag_adapter, ExecutionMode  # Disabled DAG
 from app.core.config import settings
 from .streaming_optimizer import optimizer
+from .tools_hub import router as tools_hub_router
 
 router = APIRouter()
+router.include_router(tools_hub_router, prefix="/tools", tags=["tools-hub"])
 # Track live SSE sessions for hard cancellation
 _live_sse_sessions: Dict[str, Dict[str, Any]] = {}
 # Track service instances per session for precise stop routing
@@ -364,60 +366,95 @@ async def start_streaming_sse(
                 
                 await event_queue.put(event)
             
-            # Use EnhancedSwarmService for stable /swarm SSE
-            from app.services.enhanced_swarm_service import EnhancedSwarmService
-            service = EnhancedSwarmService()
-            # Expose globally for stop endpoint and map session->execution
-            import app.api.v1.endpoints.streaming as streaming_module
-            streaming_module._global_swarm_service = service
-            streaming_module._services_by_session[session_id] = service
-            if not hasattr(streaming_module, '_session_execution_map'):
-                streaming_module._session_execution_map = {}
-            streaming_module._session_execution_map[session_id] = payload.execution_id or session_id
-            
-            logger.info(f"🚀 Starting native Strands streaming for new session {session_id}")
-            
+            # Determine swarm engine
+            swarm_cfg = (payload.context or {}).get('swarm_config', {}) if hasattr(payload, 'context') else {}
+            engine = (swarm_cfg.get('engine') or '').lower()
+
             # Send start event with session ID
             yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
-            
-            # Start swarm execution
-            async def run_swarm():
-                try:
-                    # CRITICAL FIX: Set execution_id to session_id for proper session management
-                    payload.execution_id = session_id
-                    logger.info(f"🔗 SSE: Set request.execution_id to {session_id} for session synchronization")
-                    
-                    result = await service.execute_swarm_async(
-                        request=payload,
-                        user_id="stream_user",
-                        callback_handler=streaming_callback,
-                        conversation_history=[]
-                    )
-                    # CRITICAL FIX: Extract actual message content from result
-                    result_content = ""
-                    if result:
-                        if hasattr(result, 'result'):
-                            result_content = result.result  # Get the actual message content
-                        elif hasattr(result, 'message'):
-                            result_content = result.message
-                        else:
-                            result_content = str(result)
-                    
-                    # Send completion with actual content
-                    await event_queue.put({
-                        'type': 'session_complete',
-                        'result': result_content,
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                except Exception as e:
-                    logger.error(f"Swarm execution error: {e}")
-                    await event_queue.put({
-                        'type': 'error',
-                        'error': str(e),
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                finally:
-                    await event_queue.put(None)  # End signal
+
+            if False and engine in ('event', 'graph', 'event_driven'):
+                # Use event-driven streaming swarm (supports handoffs)
+                logger.info(f"🧠 Using event-driven swarm engine for session {session_id}")
+                from app.services.streaming_swarm_service import StreamingSwarmService
+                ev_service = StreamingSwarmService()
+
+                # Build agent configs map if provided
+                agent_configs = None
+                if payload.agents:
+                    try:
+                        agent_configs = {
+                            a.name: {
+                                'system_prompt': a.system_prompt,
+                                'tools': getattr(a, 'tools', []) or [],
+                                'model': getattr(a, 'model', 'gpt-4o-mini') or 'gpt-4o-mini',
+                                'temperature': getattr(a, 'temperature', 0.7) or 0.7,
+                                'max_tokens': getattr(a, 'max_tokens', 4000) or 4000
+                            } for a in payload.agents
+                        }
+                    except Exception as e:
+                        logger.warning(f"Failed to map agent configs: {e}")
+
+                async for ev in ev_service.execute_streaming_swarm(
+                    execution_id=session_id,
+                    task=payload.task,
+                    agent_configs=agent_configs,
+                    max_handoffs=payload.max_handoffs or 10,
+                    max_iterations=payload.max_iterations or 20,
+                    conversation_history=[]
+                ):
+                    # Forward events as SSE
+                    yield f"data: {json.dumps(ev)}\n\n"
+                return
+            else:
+                # Default: EnhancedSwarmService (sequential/parallel)
+                from app.services.enhanced_swarm_service import EnhancedSwarmService
+                service = EnhancedSwarmService()
+                # Expose globally for stop endpoint and map session->execution
+                import app.api.v1.endpoints.streaming as streaming_module
+                streaming_module._global_swarm_service = service
+                streaming_module._services_by_session[session_id] = service
+                if not hasattr(streaming_module, '_session_execution_map'):
+                    streaming_module._session_execution_map = {}
+                streaming_module._session_execution_map[session_id] = payload.execution_id or session_id
+
+                logger.info(f"🚀 Starting native Strands streaming for new session {session_id}")
+
+                # Start swarm execution
+                async def run_swarm():
+                    try:
+                        payload.execution_id = session_id
+                        logger.info(f"🔗 SSE: Set request.execution_id to {session_id} for session synchronization")
+
+                        result = await service.execute_swarm_async(
+                            request=payload,
+                            user_id="stream_user",
+                            callback_handler=streaming_callback,
+                            conversation_history=[]
+                        )
+                        result_content = ""
+                        if result:
+                            if hasattr(result, 'result'):
+                                result_content = result.result
+                            elif hasattr(result, 'message'):
+                                result_content = result.message
+                            else:
+                                result_content = str(result)
+
+                        await event_queue.put({
+                            'type': 'session_complete',
+                            'result': result_content,
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"Swarm execution error: {e}")
+                        await event_queue.put({
+                            'type': 'error',
+                            'error': str(e),
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                    finally:
+                        await event_queue.put(None)
             
             # Start execution
             swarm_task = asyncio.create_task(run_swarm())
@@ -1837,119 +1874,143 @@ async def continue_streaming_sse(
                 execution_mode=execution_mode
             )
             
-            # Use EnhancedSwarmService for stable /swarm SSE continuation
-            from app.services.enhanced_swarm_service import EnhancedSwarmService
-            service = EnhancedSwarmService()
-            # Expose globally for stop endpoint and map session->execution
-            import app.api.v1.endpoints.streaming as streaming_module
-            streaming_module._global_swarm_service = service
-            streaming_module._services_by_session[session_id] = service
-            if not hasattr(streaming_module, '_session_execution_map'):
-                streaming_module._session_execution_map = {}
-            streaming_module._session_execution_map[session_id] = swarm_request.execution_id or session_id
-            
-            # Create event queue for async communication between callback and generator
-            event_queue = asyncio.Queue()
-            
-            # Streaming callback that puts events in queue
-            async def streaming_callback(**kwargs):
-                event_type = kwargs.get("type", "unknown")
-                agent = kwargs.get("agent")
-                data = kwargs.get("data", {})
-                
-                # Create SSE event
-                event = {
-                    "type": event_type,
-                    "agent": agent,
-                    "data": data,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                
-                # Put event in queue for generator to yield
-                await event_queue.put(event)
-                
-            # Execute swarm and stream events
-            logger.info(f"🚀 Starting native Strands streaming for session {session_id}")
-            
+            # Determine swarm engine
+            swarm_cfg = (swarm_request.context or {}).get('swarm_config', {}) if hasattr(swarm_request, 'context') else {}
+            engine = (swarm_cfg.get('engine') or '').lower()
+
             # Send start event
             yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.utcnow().isoformat()})}\n\n"
-            
-            # Start swarm execution in background
-            async def run_swarm():
-                try:
-                    conversation_history = context.get("previous_messages", [])
-                    logger.info(f"📚 Passing {len(conversation_history)} messages to swarm executor")
-                    
-                    result = await service.execute_swarm_async(
-                        request=swarm_request,
-                        user_id="stream_user",
-                        callback_handler=streaming_callback,
-                        conversation_history=conversation_history
-                    )
-                    # Send completion event
-                    await event_queue.put({
-                        'type': 'session_complete', 
-                        'result': str(result) if result else None, 
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                except Exception as e:
-                    logger.error(f"Swarm execution error: {e}")
-                    await event_queue.put({
-                        'type': 'error', 
-                        'error': str(e), 
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                finally:
-                    # Signal end of stream
-                    await event_queue.put(None)
-            
-            # Start swarm execution
-            swarm_task = asyncio.create_task(run_swarm())
-            # Register live SSE session for stop/cancel
-            import app.api.v1.endpoints.streaming as streaming_module
-            streaming_module._live_sse_sessions[session_id] = {
-                "task": swarm_task,
-                "queue": event_queue
-            }
-            
-            # Yield events from queue
-            while True:
-                try:
-                    # Stop if client disconnected
-                    if await request.is_disconnected():
+
+            if False and engine in ('event', 'graph', 'event_driven'):
+                # Event-driven engine path
+                from app.services.streaming_swarm_service import StreamingSwarmService
+                ev_service = StreamingSwarmService()
+
+                agent_configs = None
+                if swarm_request.agents:
+                    try:
+                        agent_configs = {
+                            a.name: {
+                                'system_prompt': a.system_prompt,
+                                'tools': getattr(a, 'tools', []) or [],
+                                'model': getattr(a, 'model', 'gpt-4o-mini') or 'gpt-4o-mini',
+                                'temperature': getattr(a, 'temperature', 0.7) or 0.7,
+                                'max_tokens': getattr(a, 'max_tokens', 4000) or 4000
+                            } for a in swarm_request.agents
+                        }
+                    except Exception as e:
+                        logger.warning(f"Failed to map agent configs: {e}")
+
+                async for ev in ev_service.execute_streaming_swarm(
+                    execution_id=session_id,
+                    task=task,
+                    agent_configs=agent_configs,
+                    max_handoffs=swarm_request.max_handoffs or 10,
+                    max_iterations=swarm_request.max_iterations or 20,
+                    conversation_history=previous_messages
+                ):
+                    # Update shared state for agent completion
+                    try:
+                        if ev.get('type') in ('agent_complete','agent_completed') and ev.get('agent'):
+                            SharedStateService().set_agent_output(session_id, ev['agent'], ev.get('message') or '')
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps(ev)}\n\n"
+                return
+            else:
+                # Default: EnhancedSwarmService
+                from app.services.enhanced_swarm_service import EnhancedSwarmService
+                service = EnhancedSwarmService()
+                # Expose globally for stop endpoint and map session->execution
+                import app.api.v1.endpoints.streaming as streaming_module
+                streaming_module._global_swarm_service = service
+                streaming_module._services_by_session[session_id] = service
+                if not hasattr(streaming_module, '_session_execution_map'):
+                    streaming_module._session_execution_map = {}
+                streaming_module._session_execution_map[session_id] = swarm_request.execution_id or session_id
+
+                # Create event queue for async communication between callback and generator
+                event_queue = asyncio.Queue()
+
+                async def streaming_callback(**kwargs):
+                    event_type = kwargs.get("type", "unknown")
+                    agent = kwargs.get("agent")
+                    data = kwargs.get("data", {})
+                    event = {
+                        "type": event_type,
+                        "agent": agent,
+                        "data": data,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    await event_queue.put(event)
+
+                logger.info(f"🚀 Starting native Strands streaming for session {session_id}")
+
+                async def run_swarm():
+                    try:
+                        conversation_history = context.get("previous_messages", [])
+                        logger.info(f"📚 Passing {len(conversation_history)} messages to swarm executor")
+
+                        result = await service.execute_swarm_async(
+                            request=swarm_request,
+                            user_id="stream_user",
+                            callback_handler=streaming_callback,
+                            conversation_history=conversation_history
+                        )
+                        await event_queue.put({
+                            'type': 'session_complete', 
+                            'result': str(result) if result else None, 
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"Swarm execution error: {e}")
+                        await event_queue.put({
+                            'type': 'error', 
+                            'error': str(e), 
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                    finally:
+                        await event_queue.put(None)
+
+                swarm_task = asyncio.create_task(run_swarm())
+                import app.api.v1.endpoints.streaming as streaming_module
+                streaming_module._live_sse_sessions[session_id] = {
+                    "task": swarm_task,
+                    "queue": event_queue
+                }
+
+                while True:
+                    try:
+                        if await request.is_disconnected():
+                            try:
+                                await service.stop_execution(session_id)
+                            except Exception:
+                                pass
+                            break
+                        event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                        if event is None:
+                            break
+                        try:
+                            if event.get('type') == 'agent_completed' and event.get('agent'):
+                                output = ''
+                                data = event.get('data') or {}
+                                if isinstance(data, dict):
+                                    output = data.get('output') or ''
+                                if output:
+                                    SharedStateService().set_agent_output(session_id, event['agent'], output)
+                        except Exception as e:
+                            logger.warning(f"Shared state update (continue) failed: {e}")
+                        yield f"data: {json.dumps(event)}\n\n"
+                    except asyncio.TimeoutError:
+                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+                        if swarm_task.done():
+                            break
+                    except asyncio.CancelledError:
                         try:
                             await service.stop_execution(session_id)
                         except Exception:
                             pass
                         break
-                    # Wait for event with timeout
-                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
-                    if event is None:  # End of stream signal
-                        break
-                    # Update shared state on agent_completed
-                    try:
-                        if event.get('type') == 'agent_completed' and event.get('agent'):
-                            output = ''
-                            data = event.get('data') or {}
-                            if isinstance(data, dict):
-                                output = data.get('output') or ''
-                            if output:
-                                SharedStateService().set_agent_output(session_id, event['agent'], output)
-                    except Exception as e:
-                        logger.warning(f"Shared state update (continue) failed: {e}")
-                    yield f"data: {json.dumps(event)}\n\n"
-                except asyncio.TimeoutError:
-                    # Send keepalive
-                    yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
-                    # Check if swarm is still running
-                    if swarm_task.done():
-                        break
-                except asyncio.CancelledError:
-                    try:
-                        await service.stop_execution(session_id)
-                    except Exception:
-                        pass
-                    break
             
         except Exception as e:
             logger.error(f"SSE streaming error: {e}")

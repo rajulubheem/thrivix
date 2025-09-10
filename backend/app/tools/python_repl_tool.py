@@ -108,6 +108,61 @@ class PythonReplTool:
             # Allow safe imports
             '__import__': self._safe_import,
         }
+
+    def _safe_import(self, name, *args, **kwargs):
+        """Safe import function that only allows certain modules"""
+        # Whitelist of safe modules
+        safe_modules = [
+            'math', 'random', 'datetime', 'time', 'json', 're',
+            'collections', 'itertools', 'functools', 'operator',
+            'string', 'textwrap', 'unicodedata', 'decimal',
+            'fractions', 'statistics', 'copy', 'pprint',
+            'enum', 'typing', 'dataclasses', 'abc',
+            'heapq', 'bisect', 'array', 'weakref',
+            'types', 'copyreg', 'hashlib', 'hmac',
+            'secrets', 'uuid', 'html', 'xml',
+            'urllib.parse', 'base64', 'binascii',
+            'zlib', 'gzip', 'bz2', 'lzma'
+        ]
+        
+        # Check if module is in whitelist
+        module_name = name.split('.')[0]
+        if module_name in safe_modules:
+            return __import__(name, *args, **kwargs)
+        else:
+            raise ImportError(f"Import of '{name}' is not allowed for safety reasons")
+
+    def _is_safe_code(self, code: str) -> bool:
+        """Check if code is safe to execute"""
+        
+        # Dangerous keywords and functions
+        dangerous = [
+            'exec', 'eval', 'compile',
+            'open', 'file', 'input', 'raw_input',
+            '__loader__', '__file__',
+            'globals', 'locals', 'vars',
+            'getattr', 'setattr', 'delattr', 'hasattr',
+            '__dict__', '__class__', '__bases__',
+            'subprocess', 'os.system', 'sys.exit',
+            'exit', 'quit'
+        ]
+        
+        code_lower = code.lower()
+        for keyword in dangerous:
+            if keyword.lower() in code_lower:
+                logger.warning(f"Blocked dangerous code pattern: {keyword}")
+                return False
+        
+        # Try to parse the code
+        try:
+            ast.parse(code)
+            return True
+        except SyntaxError:
+            # Let it fail during execution with proper error
+            return True
+        except Exception as e:
+            logger.warning(f"Code parsing failed: {e}")
+            return False
     
     async def __call__(self, **kwargs):
         """Execute Python code"""
@@ -220,74 +275,6 @@ class PythonReplTool:
                 "error": str(e),
                 "code": code
             }
-
-# Export a default instance for dynamic loading
-python_repl = PythonReplTool()
-
-__all__ = [
-    "PythonReplTool",
-    "PYTHON_REPL_SPEC",
-    "python_repl",
-]
-    def _safe_import(self, name, *args, **kwargs):
-        """Safe import function that only allows certain modules"""
-        # Whitelist of safe modules
-        safe_modules = [
-            'math', 'random', 'datetime', 'time', 'json', 're',
-            'collections', 'itertools', 'functools', 'operator',
-            'string', 'textwrap', 'unicodedata', 'decimal',
-            'fractions', 'statistics', 'copy', 'pprint',
-            'enum', 'typing', 'dataclasses', 'abc',
-            'heapq', 'bisect', 'array', 'weakref',
-            'types', 'copyreg', 'hashlib', 'hmac',
-            'secrets', 'uuid', 'html', 'xml',
-            'urllib.parse', 'base64', 'binascii',
-            'zlib', 'gzip', 'bz2', 'lzma'
-        ]
-        
-        # Check if module is in whitelist
-        module_name = name.split('.')[0]
-        if module_name in safe_modules:
-            return __import__(name, *args, **kwargs)
-        else:
-            raise ImportError(f"Import of '{name}' is not allowed for safety reasons")
-    
-    def _is_safe_code(self, code: str) -> bool:
-        """Check if code is safe to execute"""
-        
-        # Dangerous keywords and functions
-        dangerous = [
-            'exec', 'eval', 'compile',
-            'open', 'file', 'input', 'raw_input',
-            '__loader__', '__file__',
-            'globals', 'locals', 'vars',
-            'getattr', 'setattr', 'delattr', 'hasattr',
-            '__dict__', '__class__', '__bases__',
-            'subprocess', 'os.system', 'sys.exit',
-            'exit', 'quit'
-        ]
-        
-        code_lower = code.lower()
-        for keyword in dangerous:
-            if keyword.lower() in code_lower:
-                logger.warning(f"Blocked dangerous code pattern: {keyword}")
-                return False
-        
-        # Try to parse the code
-        try:
-            ast.parse(code)
-            return True
-        except SyntaxError:
-            # Let it fail during execution with proper error
-            return True
-        except Exception as e:
-            logger.warning(f"Code parsing failed: {e}")
-            return False
-    
-    def clear_state(self):
-        """Clear the persistent state"""
-        self.global_state.clear()
-        return {"success": True, "message": "State cleared"}
 
 # Export for use
 python_repl = PythonReplTool()

@@ -132,6 +132,7 @@ export const ModernSwarmChatFixed: React.FC = () => {
   const [messages, setMessages] = useState<any[]>([]);
   const [activeAgents, setActiveAgents] = useState<LocalAgent[]>([]);
   const [toolExecutions, setToolExecutions] = useState<ToolExecution[]>([]);
+  const [showToolsBar, setShowToolsBar] = useState(false);
   const [isSwarmActive, setIsSwarmActive] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>(['research_agent', 'ux_researcher']);
   const [isLoading, setIsLoading] = useState(false);
@@ -175,6 +176,13 @@ export const ModernSwarmChatFixed: React.FC = () => {
       };
       setToolExecutions(prev => [...prev, toolExec]);
       updateAgentStatus(agent, 'executing', `Using ${tool}...`);
+      // Inline message in chat (basic call)
+      setMessages(prev => [...prev, {
+        id: `msg-tool-${Date.now()}`,
+        role: 'system',
+        content: `Tool: ${tool}${filename ? `\n\nParameters:\n\n\`\`\`json\n${JSON.stringify({ filename }, null, 2)}\n\`\`\`` : ''}`,
+        timestamp: new Date()
+      }]);
     },
     onToolExecuted: (agent: string, data: any) => {
       // Update tool execution with result
@@ -193,6 +201,18 @@ export const ModernSwarmChatFixed: React.FC = () => {
         }
         return updated;
       });
+      // Inline message in chat (show raw output)
+      const toolName = data.tool || 'unknown_tool';
+      const ok = data.success !== false;
+      const raw = (() => { try { return JSON.stringify(data.result || data.error || {}, null, 2); } catch { return String(data.result || data.error || ''); } })();
+      const paramsRaw = (() => { try { return JSON.stringify(data.parameters || {}, null, 2); } catch { return String(data.parameters || ''); } })();
+      const wrapper = data.wrapper && data.wrapper !== toolName ? ` (via ${data.wrapper})` : '';
+      setMessages(prev => [...prev, {
+        id: `msg-tool-result-${Date.now()}`,
+        role: 'system',
+        content: `${ok ? '✅' : '❌'} ${toolName}${wrapper} ${ok ? 'completed' : 'failed'}\n\n${paramsRaw && paramsRaw !== '{}' ? `Parameters:\n\n\`\`\`json\n${paramsRaw}\n\`\`\`\n\n` : ''}Raw Output:\n\n\`\`\`json\n${raw}\n\`\`\``,
+        timestamp: new Date()
+      }]);
     },
     onHandoff: (from: string, to: string) => {
       // Visual handoff
@@ -474,6 +494,43 @@ export const ModernSwarmChatFixed: React.FC = () => {
               isLoading={isLoading || isStreaming}
               placeholder="Ask the swarm to help with any task..."
             />
+            {/* Collapsible tools bar under chat */}
+            <div className="border-t px-3 py-2 bg-background/70">
+              <button
+                className="text-xs px-2 py-1 rounded bg-muted hover:bg-muted/80"
+                onClick={() => setShowToolsBar(s => !s)}
+              >
+                {showToolsBar ? 'Hide Tools' : `Show Tools (${toolExecutions.length})`}
+              </button>
+              {showToolsBar && (
+                <div className="mt-2 max-h-40 overflow-y-auto text-xs space-y-2">
+                  {toolExecutions.slice(-12).reverse().map(exec => (
+                    <div key={exec.id} className="p-2 rounded border bg-card/50">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="mr-2">{exec.status === 'executing' ? '🔧' : exec.status === 'success' ? '✅' : '❌'}</span>
+                          <strong>{exec.tool}</strong>
+                          <span className="ml-2 text-muted-foreground">(agent: {exec.agent})</span>
+                        </div>
+                        <span className="text-muted-foreground">{exec.timestamp.toLocaleTimeString()}</span>
+                      </div>
+                      {exec.parameters && Object.keys(exec.parameters).length > 0 && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer">Parameters</summary>
+                          <pre className="mt-1 p-2 rounded border overflow-auto">{JSON.stringify(exec.parameters, null, 2)}</pre>
+                        </details>
+                      )}
+                      {exec.result && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer">Result</summary>
+                          <pre className="mt-1 p-2 rounded border overflow-auto">{JSON.stringify(exec.result, null, 2)}</pre>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

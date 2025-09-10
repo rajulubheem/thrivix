@@ -252,10 +252,27 @@ async def get_test_examples():
                 }
             },
             {
-                "tool": "shell_command",
-                "description": "Execute shell commands",
+                "tool": "shell",
+                "description": "Execute safe shell commands",
                 "test_params": {
                     "command": "echo 'Hello from shell'"
+                }
+            },
+            {
+                "tool": "use_aws",
+                "description": "Interact with AWS services",
+                "test_params": {
+                    "service": "s3",
+                    "action": "list_buckets"
+                }
+            },
+            {
+                "tool": "retrieve",
+                "description": "Advanced retrieval from multiple sources",
+                "test_params": {
+                    "source": "vector_db",
+                    "query": "serverless best practices",
+                    "limit": 3
                 }
             }
         ]

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import swarm, swarm_dag, sse, agents, orchestrator, tools, streaming, virtual_files, tool_config, mcp, chat, settings, true_swarm, orchestrator_api, unified_orchestrator_api, admin
+from app.api.v1 import dynamic_tool_registry
 from app.api.v1 import tool_approval, dynamic_tools, simple_approval, dynamic_tool_registry, tool_help, tool_debug, file_viewer
 from app.api import graph_endpoints, graph_demo
 
@@ -53,6 +54,7 @@ api_router.include_router(settings.router, prefix="/settings", tags=["settings"]
 api_router.include_router(dynamic_tool_registry.router, prefix="/tool-registry", tags=["tool-registry"])
 api_router.include_router(tool_help.router, prefix="/tool-help", tags=["tool-help"])
 api_router.include_router(tool_debug.router, prefix="/tool-debug", tags=["tool-debug"])
+api_router.include_router(dynamic_tool_registry.router, prefix="/tool-registry", tags=["tool-registry"])
 api_router.include_router(file_viewer.router, prefix="/file-viewer", tags=["file-viewer"])
 api_router.include_router(admin.router, tags=["admin"])
 api_router.include_router(graph_endpoints.router, tags=["graph"])

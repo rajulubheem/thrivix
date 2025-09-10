@@ -89,6 +89,13 @@
       "description": "Web search using Tavily for real-time information",
       "category": "web_search"
     },
+    "web_search": {
+      "name": "web_search",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Web search via Tavily (alias)",
+      "category": "web_search"
+    },
     "tavily_web_search": {
       "name": "tavily_web_search",
       "enabled": true,
@@ -101,6 +108,76 @@
       "enabled": true,
       "requires_approval": false,
       "description": "Write content to files",
+      "category": "file_operations"
+    },
+    "http_request": {
+      "name": "http_request",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Make a simple HTTP request",
+      "category": "web_search"
+    },
+    "wikipedia_search": {
+      "name": "wikipedia_search",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Search Wikipedia and get a summary",
+      "category": "web_search"
+    },
+    "fetch_webpage": {
+      "name": "fetch_webpage",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Fetch webpage and extract text",
+      "category": "web_search"
+    },
+    "extract_links": {
+      "name": "extract_links",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Extract links from a webpage",
+      "category": "web_search"
+    },
+    "rss_fetch": {
+      "name": "rss_fetch",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Fetch and parse an RSS feed",
+      "category": "web_search"
+    },
+    "sitemap_fetch": {
+      "name": "sitemap_fetch",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Fetch and parse sitemap.xml",
+      "category": "web_search"
+    },
+    "json_parse": {
+      "name": "json_parse",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Parse JSON and return info",
+      "category": "data"
+    },
+    "csv_preview": {
+      "name": "csv_preview",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Parse CSV and preview rows",
+      "category": "data"
+    },
+    "list_files": {
+      "name": "list_files",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "List virtual files",
+      "category": "file_operations"
+    },
+    "delete_file": {
+      "name": "delete_file",
+      "enabled": true,
+      "requires_approval": true,
+      "description": "Delete a virtual file",
       "category": "file_operations"
     },
     "file_read": {
@@ -116,6 +193,188 @@
       "requires_approval": false,
       "description": "Execute Python code",
       "category": "code_execution"
+    },
+    "current_time": {
+      "name": "current_time",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Get current time in UTC or local",
+      "category": "time"
+    },
+    "sleep": {
+      "name": "sleep",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Pause execution for a few seconds",
+      "category": "utility"
+    },
+    "environment": {
+      "name": "environment",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Read environment variables",
+      "category": "system"
+    },
+    "system_info": {
+      "name": "system_info",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Get basic system information",
+      "category": "system"
+    },
+    "journal": {
+      "name": "journal",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Write a journal entry to in-memory log",
+      "category": "utility"
+    },
+    "memory": {
+      "name": "memory",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "In-memory key-value store",
+      "category": "memory"
+    },
+    "task_planner": {
+      "name": "task_planner",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Create a simple task plan",
+      "category": "planning"
+    },
+    "agent_todo": {
+      "name": "agent_todo",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Manage an in-memory TODO list",
+      "category": "planning"
+    },
+    "diagram": {
+      "name": "diagram",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Generate a simple Mermaid diagram",
+      "category": "documentation"
+    },
+    "use_aws": {
+      "name": "use_aws",
+      "enabled": true,
+      "requires_approval": true,
+      "description": "Interact with AWS services (S3, Lambda, DynamoDB, etc.)",
+      "category": "aws"
+    },
+    "retrieve": {
+      "name": "retrieve",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Advanced retrieval from multiple sources (RAG helper)",
+      "category": "strands_agents"
+    },
+    "use_llm": {
+      "name": "use_llm",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Call an LLM with a prompt (simulated)",
+      "category": "strands_agents"
+    },
+    "agent_as_tool": {
+      "name": "agent_as_tool",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Use an agent as a callable tool (stub)",
+      "category": "strands_agents"
+    },
+    "agent": {
+      "name": "agent",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Create a simple agent plan (stub)",
+      "category": "strands_agents"
+    },
+    "swarm": {
+      "name": "swarm",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Coordinate multiple agents (stub)",
+      "category": "strands_agents"
+    },
+    "think": {
+      "name": "think",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Internal reasoning helper that structures thoughts",
+      "category": "strands_agents"
+    },
+    "load_tool": {
+      "name": "load_tool",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Load tool metadata from registry",
+      "category": "strands_agents"
+    },
+    "agent_graph": {
+      "name": "agent_graph",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Generate a simple agent graph diagram",
+      "category": "strands_agents"
+    },
+    "handoff_to_user": {
+      "name": "handoff_to_user",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Request user input or hand off control",
+      "category": "strands_agents"
+    },
+    "agent_core_memory": {
+      "name": "agent_core_memory",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Core memory store for agents (in-memory)",
+      "category": "strands_agents"
+    },
+    "code_interpreter": {
+      "name": "code_interpreter",
+      "enabled": true,
+      "requires_approval": true,
+      "description": "Execute code using the Python interpreter",
+      "category": "strands_agents"
+    },
+    "tavily_map": {
+      "name": "tavily_map",
+      "enabled": true,
+      "requires_approval": true,
+      "description": "Tavily quick search (basic depth)",
+      "category": "strands_agents"
+    },
+    "tavily_extract": {
+      "name": "tavily_extract",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Extract readable text from a URL",
+      "category": "strands_agents"
+    },
+    "tavily_crawl": {
+      "name": "tavily_crawl",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Crawl a site starting at a URL (limited)",
+      "category": "strands_agents"
+    },
+    "calculator": {
+      "name": "calculator",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Perform mathematical calculations",
+      "category": "calculation"
+    },
+    "code_generator": {
+      "name": "code_generator",
+      "enabled": true,
+      "requires_approval": false,
+      "description": "Generate code templates and boilerplate",
+      "category": "code_generation"
     },
     "shell": {
       "name": "shell",

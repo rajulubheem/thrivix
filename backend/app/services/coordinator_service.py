@@ -92,6 +92,11 @@ IMPORTANT INSTRUCTIONS:
 3. Maintain context across all interactions
 4. Provide direct, synthesized answers
 5. Use your tools when needed to complete tasks
+6. When a specialist is needed, DELEGATE by calling the tool `handoff_to_agent` with:
+   - to_agent: the exact agent name from your configured capabilities
+   - reason: why you are delegating
+   - context: JSON context (inputs, partial results, file paths)
+   Do not write a plan when code or file operations are required — delegate instead.
 
 Remember: You are the ONLY agent in this session. You see everything and remember everything.
 """

@@ -171,11 +171,39 @@ class UnifiedOrchestrator:
         else:
             agents = await self._generate_smart_agents(analysis, max_agents, use_mcp_tools)
         
+        # Research-first ordering: if WEB_SEARCH is required, move a web_search-capable agent to front
+        try:
+            requires_web = AgentCapability.WEB_SEARCH in set(analysis.get("required_capabilities", []))
+            if requires_web:
+                web_agents = [a for a in agents if AgentCapability.WEB_SEARCH in set(a.capabilities or [])]
+                non_web = [a for a in agents if AgentCapability.WEB_SEARCH not in set(a.capabilities or [])]
+                if web_agents:
+                    # Preserve relative order otherwise
+                    agents = [web_agents[0]] + non_web + web_agents[1:]
+        except Exception:
+            pass
+
         # Design workflow
         workflow = self._design_workflow(agents, analysis)
         
         # Allocate tools to agents
-        tool_allocation = self._allocate_tools(agents, use_mcp_tools)
+        allowed_tools = []
+        tools_catalog: List[Dict[str, Any]] = []
+        try:
+            if context and isinstance(context.get("allowed_tools"), list):
+                allowed_tools = [str(t) for t in context.get("allowed_tools") if t]
+            if context and isinstance(context.get("tools_catalog"), list):
+                tools_catalog = context.get("tools_catalog")
+        except Exception:
+            allowed_tools = []
+        tool_allocation = self._allocate_tools(
+            agents,
+            use_mcp_tools,
+            allowed_tools,
+            tools_catalog=tools_catalog,
+            task=task,
+            analysis=analysis,
+        )
         
         # Define success metrics
         success_metrics = self._define_success_metrics(analysis)
@@ -519,28 +547,169 @@ class UnifiedOrchestrator:
         
         return workflow
     
-    def _allocate_tools(self, agents: List[AgentProfile], use_mcp_tools: bool) -> Dict[str, List[str]]:
-        """Allocate tools to agents based on their roles and capabilities"""
+    def _allocate_tools(
+        self,
+        agents: List[AgentProfile],
+        use_mcp_tools: bool,
+        allowed_tools: Optional[List[str]] = None,
+        tools_catalog: Optional[List[Dict[str, Any]]] = None,
+        task: Optional[str] = None,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, List[str]]:
+        """Allocate tools to agents based on roles, task context, and tool metadata.
+        Updates each agent's primary/secondary tools with a prioritized selection.
+        """
         allocation = {}
+        allowed_set = set([t.strip() for t in (allowed_tools or []) if isinstance(t, str) and t.strip()])
+        task_lower = (task or "").lower()
+        req_caps = set((analysis or {}).get("required_capabilities", []))
+
+        # Build tool metadata index from catalog and registry
+        catalog_index: Dict[str, Dict[str, Any]] = {}
+        if tools_catalog:
+            for t in tools_catalog:
+                name = t.get("name") or t.get("id")
+                if name:
+                    catalog_index[name] = {
+                        "name": name,
+                        "description": t.get("description", ""),
+                        "category": (t.get("category") or "").lower(),
+                        "requires_approval": bool(t.get("requires_approval", False))
+                    }
+        # Augment with unified tool service data
+        for name, info in self.tool_service.all_tools.items():
+            if name not in catalog_index:
+                catalog_index[name] = {
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "category": str(info.get("category", "")).lower(),
+                    "requires_approval": bool(info.get("requires_approval", False))
+                }
+
+        # Capability to category preferences
+        cap_to_cats = {
+            AgentCapability.WEB_SEARCH: {"web_search", "web"},
+            AgentCapability.FILE_OPERATIONS: {"file_operations", "file"},
+            AgentCapability.CODE_EXECUTION: {"code_execution", "code"},
+            AgentCapability.DATA_ANALYSIS: {"data", "calculation"},
+            AgentCapability.API_INTEGRATION: {"web_search", "api", "web"},
+            AgentCapability.DOCUMENTATION: {"documentation", "utility"},
+            AgentCapability.VISUALIZATION: {"documentation"},
+            AgentCapability.TESTING: {"testing", "code"},
+            AgentCapability.DEPLOYMENT: {"aws", "system"},
+            AgentCapability.MEMORY_MANAGEMENT: {"memory", "utility"},
+            AgentCapability.COMMUNICATION: {"communication"},
+            AgentCapability.DATABASE_OPERATIONS: {"database", "data"},
+        }
+
+        def score(tool_name: str, agent: AgentProfile) -> float:
+            s = 0.0
+            meta = catalog_index.get(tool_name, {})
+            cat = meta.get("category", "")
+            desc = f"{meta.get('description','')} {tool_name}".lower()
+
+            # Base: agent familiarity
+            if tool_name in agent.primary_tools:
+                s += 5
+            if tool_name in agent.secondary_tools:
+                s += 2
+
+            # Capabilities vs categories
+            for cap in set(agent.capabilities) | req_caps:
+                prefs = cap_to_cats.get(cap, set())
+                if cat in prefs:
+                    s += 2.5
+
+            # Role/description keywords
+            role_text = f"{agent.role} {agent.description}".lower()
+            if any(k in role_text for k in ["research", "investigat", "summary", "search"]):
+                if any(k in tool_name for k in ["tavily", "web_search", "wikipedia", "fetch_webpage", "extract_links", "rss_fetch", "sitemap"]):
+                    s += 2
+            if any(k in role_text for k in ["develop", "code", "implement"]):
+                if any(k in tool_name for k in ["python_repl", "code_generator", "file_write", "file_read", "code_interpreter"]):
+                    s += 2
+            if any(k in role_text for k in ["design", "document", "diagram", "doc"]):
+                if any(k in tool_name for k in ["diagram", "agent_graph", "journal"]):
+                    s += 1.5
+            if any(k in role_text for k in ["data", "analy", "stats"]):
+                if any(k in tool_name for k in ["calculator", "python_repl", "csv", "json_parse"]):
+                    s += 1.5
+
+            # Task keywords influence
+            if any(k in task_lower for k in ["crawl", "links", "sitemap"]):
+                if any(k in tool_name for k in ["extract_links", "sitemap_fetch", "tavily_crawl"]):
+                    s += 1.5
+            if any(k in task_lower for k in ["aws", "s3", "lambda", "dynamo"]):
+                if "use_aws" in tool_name:
+                    s += 2
+
+            # Prefer non-approval for default picks slightly
+            if not meta.get("requires_approval", False):
+                s += 0.3
+
+            return s
+
         
         for agent in agents:
             # Get all tools for this agent
             tools = agent.get_all_tools()
             
             # Don't filter - use all tools the agent has
-            # The frontend already validated these
-            available_tools = tools.copy()
+            # The frontend may supply an allowed list to constrain tools
+            if allowed_set:
+                available_tools = [t for t in tools if t in allowed_set]
+            else:
+                available_tools = tools.copy()
             
-            # Add some universal tools if they exist
-            if "memory_store" in self.tool_service.all_tools:
-                available_tools.append("memory_store")
-            if "memory_recall" in self.tool_service.all_tools:
-                available_tools.append("memory_recall")
-            
-            # Log the allocation
-            logger.info(f"Agent {agent.name} allocated tools: {available_tools}")
-            
-            allocation[agent.name] = list(set(available_tools))
+            # Rank by score using metadata and context
+            unique_tools = list(set(available_tools))
+            scored = [(t, score(t, agent)) for t in unique_tools]
+            ranked = [t for t, _ in sorted(scored, key=lambda x: x[1], reverse=True)]
+
+            # Debug: log top-scored tools with categories and scores
+            try:
+                top_k = scored
+                top_k.sort(key=lambda x: x[1], reverse=True)
+                top_k = top_k[:8]
+                top_info = []
+                for t, sc in top_k:
+                    meta = catalog_index.get(t, {})
+                    cat = meta.get("category", "")
+                    top_info.append(f"{t}({cat}):{sc:.2f}")
+                logger.info(f"Tool scoring for agent '{agent.name}': " + ", ".join(top_info))
+            except Exception:
+                pass
+
+            # Ensure core tools per capability
+            essentials = []
+            if AgentCapability.CODE_EXECUTION in agent.capabilities and "python_repl" in catalog_index:
+                essentials.append("python_repl")
+            if AgentCapability.FILE_OPERATIONS in agent.capabilities:
+                for t in ["file_write", "file_read"]:
+                    if t in catalog_index:
+                        essentials.append(t)
+            if AgentCapability.WEB_SEARCH in agent.capabilities:
+                for t in ["tavily_search", "web_search", "fetch_webpage"]:
+                    if t in catalog_index:
+                        essentials.append(t)
+
+            # Merge essentials with ranked and keep order/uniqueness
+            preferred = []
+            for t in essentials + ranked:
+                if t not in preferred:
+                    preferred.append(t)
+
+            # Limit counts
+            primary = preferred[:6]
+            secondary = preferred[6:12]
+
+            # Update agent profiles so downstream API reflects selection
+            agent.primary_tools = primary
+            agent.secondary_tools = secondary
+
+            # Log and store allocation
+            logger.info(f"Agent {agent.name} allocated tools (primary): {primary}")
+            allocation[agent.name] = primary
             
         return allocation
     

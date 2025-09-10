@@ -56,8 +56,29 @@ class SystemSettings(BaseModel):
     swarm: SwarmConfig = Field(default_factory=SwarmConfig)
     general: Dict[str, Any] = Field(default_factory=dict)
 
-# File path for storing settings
-SETTINGS_FILE = "app_settings.json"
+# File path resolution for settings
+def _resolve_settings_file() -> str:
+    """Resolve a robust path to app_settings.json.
+    Checks CWD, then project root relative to this file.
+    """
+    candidates = []
+    # 1) Current working directory
+    candidates.append(os.path.abspath(os.path.join(os.getcwd(), "app_settings.json")))
+    # 2) Project root (five levels up from this file -> backend/)
+    here = os.path.abspath(os.path.dirname(__file__))
+    project_root = os.path.abspath(os.path.join(here, "../../../.."))
+    candidates.append(os.path.join(project_root, "app_settings.json"))
+    # 3) Fallback: alongside backend/app
+    backend_dir = os.path.abspath(os.path.join(here, "../../.."))
+    candidates.append(os.path.join(backend_dir, "app_settings.json"))
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    # Default to CWD even if not present; will trigger defaults
+    return candidates[0]
+
+SETTINGS_FILE = _resolve_settings_file()
 
 def load_settings() -> SystemSettings:
     """Load settings from file or return defaults"""

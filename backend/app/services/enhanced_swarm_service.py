@@ -80,6 +80,39 @@ class StrandsSwarmAgent:
         tool_guide = ""
         if tool_names:
             tool_guide = ToolDiscoveryService.format_tool_usage_guide(name, tool_names)
+
+        # Add a concise, task-focused Tool Playbook based on available tools
+        def build_tool_playbook(agent_name: str, tools: list[str]) -> str:
+            tips = []
+            tset = set(tools)
+            # Web research flow
+            if any(t in tset for t in ["tavily_search", "web_search", "wikipedia_search"]):
+                tips.append("For research: use tavily_search/web_search to find sources; then use fetch_webpage to extract text and file_write to save notes.")
+            if "extract_links" in tset:
+                tips.append("To explore related pages: run extract_links on a page and follow relevant URLs.")
+            if "rss_fetch" in tset:
+                tips.append("To monitor updates: use rss_fetch to pull latest items, then summarize with python_repl.")
+            # Files and code
+            if "file_write" in tset and "file_read" in tset:
+                tips.append("To save artifacts: use file_write with path+content; read back with file_read.")
+            if "python_repl" in tset:
+                tips.append("For calculations or generation: use python_repl with code. Capture output (stdout) and persist via file_write.")
+            if "diagram" in tset:
+                tips.append("For diagrams: use diagram with a description to get Mermaid; save as .md via file_write.")
+            # Data utilities
+            if "json_parse" in tset:
+                tips.append("Parse JSON responses with json_parse, then store results with file_write.")
+            if "csv_preview" in tset:
+                tips.append("Preview CSV text with csv_preview before further processing.")
+            # Virtual FS ops
+            if "list_files" in tset:
+                tips.append("List existing virtual files with list_files to discover prior outputs.")
+            # Fallback reminder
+            tips.append("Always follow: [TOOL: name] then JSON params on the next line, then [/TOOL].")
+            playbook = "\n".join(f"- {t}" for t in tips)
+            return f"## Tool Playbook\n\n{playbook}\n"
+
+        tool_playbook = build_tool_playbook(name, tool_names)
         
         # Don't include conversation history in system prompt - will pass as messages parameter
         if self.conversation_history and len(self.conversation_history) > 0:
@@ -93,6 +126,8 @@ YOU HAVE ACCESS TO THE FOLLOWING TOOLS:
 {', '.join(tool_names) if tool_names else 'No tools available'}
 
 {tool_guide if tool_guide else ''}
+
+{tool_playbook if tool_playbook else ''}
 
 IMPORTANT INSTRUCTIONS:
 1. Always use the exact tool name when calling a tool
@@ -645,6 +680,245 @@ def create_tavily_tool(agent_name: str, callback_handler: Optional[Callable] = N
     return tavily_search
 
 
+def create_fetch_webpage_tool(agent_name: str, callback_handler: Optional[Callable] = None):
+    """Create a simple fetch_webpage tool that retrieves and extracts readable text from a URL"""
+
+    @tool
+    async def fetch_webpage(url: str, timeout: int = 20) -> dict:
+        """Fetch a webpage and extract readable text.
+
+        Args:
+            url: The URL to fetch (required)
+            timeout: Timeout in seconds (optional, default 20)
+        """
+        if not url:
+            return {"status": "error", "content": [{"text": "URL parameter is required"}]}
+
+        # Emit tool_call for UI
+        if callback_handler:
+            try:
+                await callback_handler(
+                    type="tool_call",
+                    agent=agent_name,
+                    data={"tool": "fetch_webpage", "parameters": {"url": url}}
+                )
+            except Exception:
+                pass
+
+        # Visible message
+        if callback_handler:
+            msg = f"\n🔧 **Tool Called:** `fetch_webpage`\n**URL:** {url}\n⏳ Fetching...\n"
+            await callback_handler(type="text_generation", agent=agent_name, data={"chunk": msg, "text": msg})
+
+        try:
+            import httpx
+            from bs4 import BeautifulSoup  # type: ignore
+        except Exception:
+            httpx = None
+            BeautifulSoup = None
+
+        try:
+            text = ""
+            html = ""
+            status = 0
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; StrandsBot/1.0; +https://example.com/bot)"
+            }
+            if httpx is not None:
+                async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=timeout) as client:
+                    resp = await client.get(url)
+                    status = resp.status_code
+                    html = resp.text or ""
+            else:
+                # Synchronous fallback
+                import urllib.request
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+                    status = resp.status
+                    html = resp.read().decode("utf-8", errors="ignore")
+
+            title = ""
+            if BeautifulSoup is not None and html:
+                soup = BeautifulSoup(html, "html.parser")
+                # Remove scripts/styles
+                for tag in soup(["script", "style", "noscript"]):
+                    tag.decompose()
+                title = (soup.title.string.strip() if soup.title and soup.title.string else "")
+                text = "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())
+            else:
+                # Minimal extraction: strip tags naively
+                import re as _re
+                text = _re.sub(r"<[^>]+>", " ", html)
+                text = _re.sub(r"\s+", " ", text).strip()
+
+            result = {
+                "url": url,
+                "status": status,
+                "title": title,
+                "text": text[:200000]  # cap to avoid huge payloads
+            }
+
+            if callback_handler:
+                await callback_handler(
+                    type="tool_result",
+                    agent=agent_name,
+                    data={"tool": "fetch_webpage", "success": True, "result": {"title": title, "status": status}}
+                )
+
+            return {"status": "success", "content": [{"json": result}]}
+        except Exception as e:
+            err = f"Fetch error: {e}"
+            logger.error(err)
+            if callback_handler:
+                await callback_handler(type="text_generation", agent=agent_name, data={"chunk": err, "text": err})
+                await callback_handler(type="tool_result", agent=agent_name, data={"tool": "fetch_webpage", "success": False, "error": str(e)})
+            return {"status": "error", "content": [{"text": str(e)}]}
+
+    return fetch_webpage
+
+
+def create_handoff_to_agent_tool(
+    service: "EnhancedSwarmService",
+    execution_id: str,
+    request: SwarmExecutionRequest,
+    callback_handler: Optional[Callable] = None,
+):
+    """Create a handoff_to_agent tool usable by the coordinator.
+
+    This does NOT change the execution engine. It simply lets the coordinator
+    invoke a configured agent as a sub-task, stream its output, then continue.
+    """
+
+    # Local helper to resolve tools for a target agent
+    async def _resolve_tools_for(agent_cfg: AgentConfig, agent_name: str):
+        tools: List[Any] = []
+        added: set = set()
+        STRICT = os.getenv("STRICT_AGENT_TOOLS", "true").lower() in ("1", "true", "yes")
+        try:
+            for tname in getattr(agent_cfg, 'tools', []) or []:
+                if tname in added:
+                    continue
+                if tname == "tavily_search" and os.getenv("TAVILY_API_KEY"):
+                    tools.append(create_tavily_tool(agent_name, callback_handler))
+                    added.add(tname)
+                elif tname in ("file_write", "file_read"):
+                    fw, fr = create_file_tools(agent_name, callback_handler)
+                    if "file_write" in (agent_cfg.tools or []) and "file_write" not in added:
+                        tools.append(fw)
+                        added.add("file_write")
+                    if "file_read" in (agent_cfg.tools or []) and "file_read" not in added:
+                        tools.append(fr)
+                        added.add("file_read")
+                elif tname == "python_repl":
+                    tools.append(create_python_repl_tool(agent_name, callback_handler))
+                    added.add(tname)
+                else:
+                    if not STRICT:
+                        try:
+                            from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+                            wrapper = DynamicToolWrapper(callback_handler=callback_handler)
+                            wrapped = wrapper.wrap_strands_tool(tname, agent_name)
+                            if wrapped:
+                                tools.append(wrapped)
+                                added.add(tname)
+                        except Exception as e:
+                            logger.warning(f"handoff_to_agent: tool {tname} not available: {e}")
+        except Exception as e:
+            logger.warning(f"handoff_to_agent: resolving tools failed: {e}")
+        return tools
+
+    @tool
+    async def handoff_to_agent(to_agent: str, reason: str = "", context: dict = None) -> dict:
+        """Delegate work to a specific configured agent and stream its output.
+
+        Args:
+            to_agent: Name of the target agent (required)
+            reason: Why this agent is being called (optional)
+            context: Additional JSON context to pass (optional)
+        """
+        if not to_agent:
+            return {"status": "error", "content": [{"text": "to_agent is required"}]}
+
+        # Emit a visible handoff event and tool_call for counters
+        try:
+            if callback_handler:
+                await callback_handler(
+                    type="tool_call",
+                    agent="coordinator",
+                    data={"tool": "handoff_to_agent", "parameters": {"to_agent": to_agent, "reason": reason}}
+                )
+                await callback_handler(
+                    type="handoff",
+                    agent="coordinator",
+                    data={"from": "coordinator", "to": to_agent, "reason": reason}
+                )
+        except Exception:
+            pass
+
+        # Find target agent config (case-insensitive match)
+        target_cfg: Optional[AgentConfig] = None
+        try:
+            for acfg in request.agents or []:
+                if acfg.name.lower() == to_agent.lower():
+                    target_cfg = acfg
+                    break
+            if not target_cfg:
+                # Try substring match
+                for acfg in request.agents or []:
+                    if to_agent.lower() in acfg.name.lower():
+                        target_cfg = acfg
+                        break
+            if not target_cfg:
+                msg = f"Agent '{to_agent}' not found among configured agents"
+                if callback_handler:
+                    await callback_handler(type="text_generation", agent="coordinator", data={"chunk": msg, "text": msg})
+                return {"status": "error", "content": [{"text": msg}]}
+        except Exception as e:
+            return {"status": "error", "content": [{"text": f"Lookup failed: {e}"}]}
+
+        # Resolve tools and run target agent in the same session
+        try:
+            tools = await _resolve_tools_for(target_cfg, target_cfg.name)
+            swarm_agent = StrandsSwarmAgent(
+                name=target_cfg.name,
+                system_prompt=target_cfg.system_prompt,
+                tools=tools,
+                model=getattr(target_cfg, 'model', 'gpt-4o-mini') or 'gpt-4o-mini',
+                temperature=getattr(target_cfg, 'temperature', 0.7) or 0.7,
+                max_tokens=getattr(target_cfg, 'max_tokens', 4000) or 4000,
+                session_id=execution_id,
+                callback_handler=callback_handler,
+                conversation_history=None
+            )
+
+            previous_work: List[str] = []
+            if context:
+                try:
+                    ctx_str = json.dumps(context, indent=2)
+                except Exception:
+                    ctx_str = str(context)
+                previous_work.append(f"HANDOFF CONTEXT (from coordinator):\n{ctx_str}")
+            if reason:
+                previous_work.append(f"HANDOFF REASON: {reason}")
+
+            result = await swarm_agent.execute(task=request.task, previous_work=previous_work)
+            output = result.get("response", "")
+
+            # Record in shared state
+            try:
+                SharedStateService().set_agent_output(execution_id, target_cfg.name, output)
+            except Exception:
+                pass
+
+            return {"status": "success", "content": [{"text": output[:1000]}]}
+        except Exception as e:
+            err = f"handoff_to_agent error: {e}"
+            logger.error(err)
+            return {"status": "error", "content": [{"text": err}]}
+
+    return handoff_to_agent
+
+
 def create_file_tools(agent_name: str, callback_handler: Optional[Callable] = None):
     """Create file tools with visible status updates"""
 
@@ -665,6 +939,17 @@ def create_file_tools(agent_name: str, callback_handler: Optional[Callable] = No
             error_msg = "Error: 'content' parameter is required for file_write"
             logger.error(error_msg)
             return {"status": "error", "content": [{"text": error_msg}]}
+
+        # Emit tool_call for UI counters
+        if callback_handler:
+            try:
+                await callback_handler(
+                    type="tool_call",
+                    agent=agent_name,
+                    data={"tool": "file_write", "parameters": {"path": path, "size": len(content or '')}}
+                )
+            except Exception:
+                pass
 
         try:
             # Write to virtual filesystem
@@ -745,6 +1030,17 @@ def create_file_tools(agent_name: str, callback_handler: Optional[Callable] = No
         """
         if not path:
             return {"status": "error", "content": [{"text": "Path parameter is required"}]}
+
+        # Emit tool_call for UI counters
+        if callback_handler:
+            try:
+                await callback_handler(
+                    type="tool_call",
+                    agent=agent_name,
+                    data={"tool": "file_read", "parameters": {"path": path}}
+                )
+            except Exception:
+                pass
 
         # Send tool called notification with details
         if callback_handler:
@@ -831,6 +1127,17 @@ def create_python_repl_tool(agent_name: str, callback_handler: Optional[Callable
         if not code:
             return {"status": "error", "content": [{"text": "Code parameter is required"}]}
         
+        # Emit tool_call for UI counters
+        if callback_handler:
+            try:
+                await callback_handler(
+                    type="tool_call",
+                    agent=agent_name,
+                    data={"tool": "python_repl", "parameters": {"chars": len(code or ''), "persist_state": persist_state}}
+                )
+            except Exception:
+                pass
+
         # Send tool called notification with details
         if callback_handler:
             tool_msg = f"\n🔧 **Tool Called:** `python_repl`\n"
@@ -981,8 +1288,151 @@ class EnhancedSwarmService:
         logger.info(f"🚀 Starting Strands swarm execution {execution_id}")
 
         try:
-            # If explicit agents are provided, execute them directly (sequentially) for /swarm SSE
+            # If explicit agents are provided, execute them directly for /swarm SSE
             if request.agents and len(request.agents) > 0:
+                # Check for parallel plan in swarm_config
+                swarm_cfg = (request.context or {}).get('swarm_config', {}) if hasattr(request, 'context') else {}
+                run_parallel = bool(swarm_cfg.get('parallel'))
+                group_mode = swarm_cfg.get('group_mode', 'concurrent')
+                groups = swarm_cfg.get('groups')  # Optional grouping; not used in v1 if absent
+
+                # Helper to resolve tools and run a single agent
+                async def run_single_agent(agent_cfg: AgentConfig, prev_work: Optional[List[str]] = None) -> Dict[str, Any]:
+                    # Resolve tool names (STRICT by default)
+                    resolved_tools: List[Any] = []
+                    added: set = set()
+                    STRICT = os.getenv("STRICT_AGENT_TOOLS", "true").lower() in ("1", "true", "yes")
+                    try:
+                        tool_names = (getattr(agent_cfg, 'tools', []) or [])
+                        for tname in tool_names:
+                            if tname in added:
+                                continue
+                            # Alias: web_search -> tavily_search
+                            if tname in ("tavily_search", "web_search"):
+                                if os.getenv("TAVILY_API_KEY"):
+                                    resolved_tools.append(create_tavily_tool(agent_cfg.name, callback_handler))
+                                    added.add("tavily_search")
+                                else:
+                                    logger.warning("⚠️ TAVILY_API_KEY not set; skipping web search tools")
+                                continue
+                            # Fetch webpage tool
+                            if tname == "fetch_webpage":
+                                try:
+                                    resolved_tools.append(create_fetch_webpage_tool(agent_cfg.name, callback_handler))
+                                    added.add("fetch_webpage")
+                                except Exception as e:
+                                    logger.warning(f"Could not add fetch_webpage: {e}")
+                                continue
+                            # File tools
+                            if tname in ("file_write", "file_read"):
+                                fw, fr = create_file_tools(agent_cfg.name, callback_handler)
+                                if "file_write" in tool_names and "file_write" not in added:
+                                    resolved_tools.append(fw)
+                                    added.add("file_write")
+                                if "file_read" in tool_names and "file_read" not in added:
+                                    resolved_tools.append(fr)
+                                    added.add("file_read")
+                                continue
+                            # Python REPL
+                            if tname == "python_repl":
+                                resolved_tools.append(create_python_repl_tool(agent_cfg.name, callback_handler))
+                                added.add("python_repl")
+                                continue
+                            # Optional fallback to dynamic wrapper when NOT strict
+                            if not STRICT:
+                                try:
+                                    from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+                                    tool_wrapper = DynamicToolWrapper(callback_handler=callback_handler)
+                                    wrapped = tool_wrapper.wrap_strands_tool(tname, agent_cfg.name)
+                                    if wrapped:
+                                        resolved_tools.append(wrapped)
+                                        added.add(tname)
+                                except Exception as tool_err:
+                                    logger.warning(f"Tool resolution failed for {agent_cfg.name}: {tool_err}")
+                    except Exception as tool_err:
+                        logger.warning(f"Tool resolution failed for {agent_cfg.name}: {tool_err}")
+
+                    swarm_agent = StrandsSwarmAgent(
+                        name=agent_cfg.name,
+                        system_prompt=agent_cfg.system_prompt,
+                        tools=resolved_tools,
+                        model=getattr(agent_cfg, 'model', 'gpt-4o-mini') or 'gpt-4o-mini',
+                        temperature=getattr(agent_cfg, 'temperature', 0.7) or 0.7,
+                        max_tokens=getattr(agent_cfg, 'max_tokens', 4000) or 4000,
+                        session_id=execution_id,
+                        callback_handler=callback_handler,
+                        conversation_history=conversation_history or []
+                    )
+                    result = await swarm_agent.execute(task=request.task, previous_work=prev_work)
+                    output = result.get("response", "")
+                    # Save to shared state for visibility
+                    try:
+                        SharedStateService().set_agent_output(execution_id, agent_cfg.name, output)
+                    except Exception:
+                        pass
+                    if callback_handler:
+                        await callback_handler(
+                            type="agent_completed",
+                            agent=agent_cfg.name,
+                            data={"output": output}
+                        )
+                    return {"name": agent_cfg.name, "output": output}
+
+                if run_parallel:
+                    # Identify aggregator if specified or by heuristic
+                    aggregator_cfg = swarm_cfg.get('aggregator')
+                    provided_names = [a.name for a in request.agents]
+                    aggregator: Optional[AgentConfig] = None
+                    if aggregator_cfg:
+                        # aggregator_cfg may be dict
+                        try:
+                            aggregator = aggregator_cfg if isinstance(aggregator_cfg, AgentConfig) else AgentConfig(**aggregator_cfg)
+                        except Exception:
+                            aggregator = None
+                    else:
+                        for a in request.agents:
+                            if any(key in a.name.lower() for key in ['final', 'synth', 'aggregate']):
+                                aggregator = a
+                                break
+
+                    parallel_agents = [a for a in request.agents if aggregator is None or a.name != aggregator.name]
+
+                    # Run all parallel agents concurrently (single group v1)
+                    tasks = [asyncio.create_task(run_single_agent(acfg, None)) for acfg in parallel_agents]
+                    results = await asyncio.gather(*tasks, return_exceptions=False)
+                    agent_sequence = [r["name"] for r in results]
+                    combined = [r["output"] for r in results if r.get("output")]
+
+                    # Aggregation
+                    final_response = ""
+                    if aggregator:
+                        # Provide previous_work to aggregator
+                        agg_result = await run_single_agent(aggregator, combined)
+                        final_response = agg_result.get("output", "")
+                        agent_sequence.append(aggregator.name)
+                    else:
+                        # Simple synthesis
+                        parts = []
+                        for r in results:
+                            out = r.get("output", "")
+                            if out:
+                                parts.append(f"### {r['name']}\n\n{out}")
+                        final_response = "\n\n".join(parts) or "Execution completed."
+
+                    if callback_handler:
+                        await callback_handler(type="execution_completed", data={"result": final_response})
+
+                    return SwarmExecutionResponse(
+                        execution_id=execution_id,
+                        status=ExecutionStatus.COMPLETED,
+                        result=final_response,
+                        handoffs=0,
+                        tokens_used=0,
+                        agent_sequence=agent_sequence,
+                        artifacts=[]
+                    )
+
+                # Default: sequential branch
                 agent_sequence: List[str] = []
                 all_artifacts: List[Artifact] = []
                 combined_output_parts: List[str] = []
@@ -998,51 +1448,17 @@ class EnhancedSwarmService:
 
                 # Execute each provided agent sequentially with streaming
                 previous_outputs: List[str] = []
+                previous_outputs: List[str] = []
                 for agent_cfg in request.agents:
                     try:
-                        # Resolve tool names to Strands callables if provided
-                        resolved_tools: List[Any] = []
-                        try:
-                            from app.services.dynamic_tool_wrapper import DynamicToolWrapper
-                            tool_wrapper = DynamicToolWrapper(callback_handler=callback_handler)
-                            for tname in (getattr(agent_cfg, 'tools', []) or []):
-                                wrapped = tool_wrapper.wrap_strands_tool(tname, agent_cfg.name)
-                                if wrapped:
-                                    resolved_tools.append(wrapped)
-                        except Exception as tool_err:
-                            logger.warning(f"Tool resolution failed for {agent_cfg.name}: {tool_err}")
-
-                        swarm_agent = StrandsSwarmAgent(
-                            name=agent_cfg.name,
-                            system_prompt=agent_cfg.system_prompt,
-                            tools=resolved_tools,
-                            model=getattr(agent_cfg, 'model', 'gpt-4o-mini') or 'gpt-4o-mini',
-                            temperature=getattr(agent_cfg, 'temperature', 0.7) or 0.7,
-                            max_tokens=getattr(agent_cfg, 'max_tokens', 4000) or 4000,
-                            session_id=execution_id,
-                            callback_handler=callback_handler,
-                            conversation_history=conversation_history or []
-                        )
-                        result = await swarm_agent.execute(task=request.task, previous_work=previous_outputs or None)
-                        output = result.get("response", "")
-
+                        result = await run_single_agent(agent_cfg, previous_outputs or None)
+                        output = result.get("output", "")
+                        
                         # Track
                         agent_sequence.append(agent_cfg.name)
                         if output:
                             combined_output_parts.append(f"### {agent_cfg.name}\n\n{output}\n")
                             previous_outputs.append(output)
-                            # Save to shared state for visibility
-                            try:
-                                SharedStateService().set_agent_output(execution_id, agent_cfg.name, output)
-                            except Exception:
-                                pass
-
-                        if callback_handler:
-                            await callback_handler(
-                                type="agent_completed",
-                                agent=agent_cfg.name,
-                                data={"output": output}
-                            )
                     except Exception as agent_err:
                         logger.error(f"Agent {agent_cfg.name} failed: {agent_err}")
 
@@ -1249,14 +1665,22 @@ class EnhancedSwarmService:
                             if tool_name in added_tools:
                                 continue
                             
-                            if tool_name == "tavily_search":
+                            if tool_name == "tavily_search" or tool_name == "web_search":
                                 if os.getenv("TAVILY_API_KEY"):
                                     tool = create_tavily_tool("coordinator", callback_handler)
                                     all_tools.append(tool)
-                                    added_tools.add(tool_name)
+                                    added_tools.add("tavily_search")
                                     logger.info(f"✅ Added tavily_search to coordinator")
                                 else:
                                     logger.warning(f"⚠️ TAVILY_API_KEY not set, skipping tavily_search")
+                            elif tool_name == "fetch_webpage":
+                                try:
+                                    tool = create_fetch_webpage_tool("coordinator", callback_handler)
+                                    all_tools.append(tool)
+                                    added_tools.add("fetch_webpage")
+                                    logger.info(f"✅ Added fetch_webpage to coordinator")
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Could not add fetch_webpage: {e}")
                             elif tool_name in ["file_write", "file_read"]:
                                 if "file_write" not in added_tools and "file_read" not in added_tools:
                                     file_write, file_read = create_file_tools("coordinator", callback_handler)
@@ -1286,6 +1710,14 @@ class EnhancedSwarmService:
                                         logger.warning(f"⚠️ Tool {tool_name} not found")
                                 except Exception as e:
                                     logger.warning(f"Could not add tool {tool_name}: {e}")
+
+                # Add explicit handoff tool so coordinator can delegate to configured agents
+                try:
+                    handoff_tool = create_handoff_to_agent_tool(self, execution_id, request, callback_handler)
+                    all_tools.append(handoff_tool)
+                    logger.info("✅ Added handoff_to_agent tool to coordinator")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not add handoff_to_agent tool: {e}")
 
                 # COORDINATOR PATTERN: Use single persistent coordinator instead of multiple agents
                 logger.info(f"🎯 Using Coordinator Pattern with {len(all_tools)} tools")
