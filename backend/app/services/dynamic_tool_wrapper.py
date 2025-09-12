@@ -143,37 +143,10 @@ class DynamicToolWrapper:
                     )
                 except Exception:
                     pass
-                tool_msg = f"\n🔧 **Tool Called:** `{current_tool_name}`\n"
-                
-                # Get clean purpose description
-                doc = current_tool_func.__doc__ or f"Execute {current_tool_name}"
-                first_line = doc.split('\n')[0].strip()
-                tool_msg += f"**Purpose:** {first_line}\n"
-                
-                # Show clean parameters
-                if actual_params:
-                    # Format parameters nicely
-                    if isinstance(actual_params, dict):
-                        param_lines = []
-                        for key, value in actual_params.items():
-                            if isinstance(value, str) and len(value) > 100:
-                                value = value[:100] + "..."
-                            param_lines.append(f"  • {key}: {value}")
-                        if param_lines:
-                            tool_msg += f"**Parameters:**\n" + "\n".join(param_lines) + "\n"
-                    else:
-                        tool_msg += f"**Parameters:** {str(actual_params)[:200]}\n"
-                
-                tool_msg += f"⏳ Executing...\n"
-                
-                await self.callback_handler(
-                    type="text_generation",
-                    agent=agent_name,
-                    data={
-                        "chunk": tool_msg,
-                        "text": tool_msg
-                    }
-                )
+                # Don't send tool information as text content - it's already sent as structured tool_call event
+                # This was causing duplicate tool displays in the UI
+                # tool_msg = f"\n🔧 **Tool Called:** `{current_tool_name}`\n"
+                # ... (commented out to prevent duplicate tool displays)
             
             try:
                 # Execute the original tool with correct parameters

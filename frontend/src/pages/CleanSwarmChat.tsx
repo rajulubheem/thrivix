@@ -78,6 +78,9 @@ export function CleanSwarmChat() {
   const [availableTools, setAvailableTools] = useState<string[]>(['python_repl', 'file_write', 'file_read', 'tavily_search']);
   const [isGeneratingAgents, setIsGeneratingAgents] = useState<boolean>(false);
   const [runParallel, setRunParallel] = useState<boolean>(false);
+  
+  // Track accumulating tool calls to prevent duplicate messages
+  const accumulatingToolsRef = useRef<Map<string, any>>(new Map());
 
   const persistOrchAgents = useCallback((agents: any[]) => {
     try {
@@ -595,35 +598,95 @@ export function CleanSwarmChat() {
 
                   case 'tool_call':
                     if (event.agent && event.data) {
-                      pushTimeline('tool_call', { tool: event.data.tool });
-                      setToolCalls(prev => [...prev, {
-                        agent: event.agent,
-                        tool: event.data.tool,
-                        parameters: event.data.parameters,
-                        timestamp: event.timestamp
-                      }]);
-                      // Inline tool call with parameters
-                      const actual = event.data.tool || 'unknown_tool';
-                      const wrapper = event.data.wrapper;
-                      const header = wrapper && wrapper !== actual ? `Tool: ${actual} (via ${wrapper})` : `Tool: ${actual}`;
-                      const paramsBlock = event.data.parameters ? `\n\nParameters:\n\n\`\`\`json\n${JSON.stringify(event.data.parameters, null, 2)}\n\`\`\`` : '';
-                      setMessages(prev => [...prev, {
-                        id: `tool_${Date.now()}`,
-                        role: 'system',
-                        content: `${header}${paramsBlock}`,
-                        timestamp: new Date().toISOString()
-                      } as any]);
-                      // Detect handoff_to_user and enqueue approval
-                      if (event.data.tool === 'handoff_to_user') {
-                        const message = event.data.parameters?.message || 'Input required';
-                        setApprovals(prev => [...prev, {
-                          id: `handoff_${Date.now()}_${Math.random()}`,
-                          type: 'handoff_to_user',
+                      const toolName = event.data.tool || 'unknown_tool';
+                      const toolKey = `${event.agent}_${toolName}`;
+                      const paramChunk = event.data.parameters || '';
+                      
+                      // Get or create accumulator for this tool
+                      let toolAcc = accumulatingToolsRef.current.get(toolKey);
+                      if (!toolAcc) {
+                        toolAcc = {
                           agent: event.agent,
-                          message,
-                          breakout: !!event.data.parameters?.breakout_of_loop,
-                          ts: event.timestamp
+                          tool: toolName,
+                          parameters: '',
+                          messageId: `tool_${toolKey}_${Date.now()}`,
+                          complete: false
+                        };
+                        accumulatingToolsRef.current.set(toolKey, toolAcc);
+                      }
+                      
+                      // Accumulate parameters
+                      toolAcc.parameters += paramChunk;
+                      
+                      // Check if parameters are complete (valid JSON)
+                      let isComplete = false;
+                      if (toolAcc.parameters.trim().startsWith('{') && 
+                          toolAcc.parameters.trim().endsWith('}')) {
+                        try {
+                          JSON.parse(toolAcc.parameters);
+                          isComplete = true;
+                        } catch {
+                          // Not yet valid JSON
+                        }
+                      }
+                      
+                      // Only create/update message when tool call is complete
+                      if (isComplete && !toolAcc.complete) {
+                        toolAcc.complete = true;
+                        
+                        pushTimeline('tool_call', { tool: toolName });
+                        setToolCalls(prev => [...prev, {
+                          agent: event.agent,
+                          tool: toolName,
+                          parameters: toolAcc.parameters,
+                          timestamp: event.timestamp
                         }]);
+                        
+                        // Create single message for complete tool call
+                        const wrapper = event.data.wrapper;
+                        const header = wrapper && wrapper !== toolName ? `Tool: ${toolName} (via ${wrapper})` : `Tool: ${toolName}`;
+                        let parsedParams: any;
+                        try {
+                          parsedParams = JSON.parse(toolAcc.parameters);
+                        } catch {
+                          parsedParams = toolAcc.parameters;
+                        }
+                        const paramsBlock = parsedParams ? `\n\nParameters:\n\n\`\`\`json\n${JSON.stringify(parsedParams, null, 2)}\n\`\`\`` : '';
+                        
+                        setMessages(prev => {
+                          // Check if message already exists and update it
+                          const existing = prev.find(m => m.id === toolAcc.messageId);
+                          if (existing) {
+                            return prev.map(m => 
+                              m.id === toolAcc.messageId 
+                                ? { ...m, content: `${header}${paramsBlock}` }
+                                : m
+                            );
+                          } else {
+                            return [...prev, {
+                              id: toolAcc.messageId,
+                              role: 'system',
+                              content: `${header}${paramsBlock}`,
+                              timestamp: new Date().toISOString()
+                            } as any];
+                          }
+                        });
+                        
+                        // Clear accumulator after complete
+                        accumulatingToolsRef.current.delete(toolKey);
+                        
+                        // Detect handoff_to_user and enqueue approval
+                        if (toolName === 'handoff_to_user') {
+                          const message = parsedParams?.message || 'Input required';
+                          setApprovals(prev => [...prev, {
+                            id: `handoff_${Date.now()}_${Math.random()}`,
+                            type: 'handoff_to_user',
+                            agent: event.agent,
+                            message,
+                            breakout: !!parsedParams?.breakout_of_loop,
+                            ts: event.timestamp
+                          }]);
+                        }
                       }
                     }
                     break;
@@ -639,17 +702,24 @@ export function CleanSwarmChat() {
                         results: event.data.results,
                         timestamp: event.timestamp
                       }]);
-                      // Inline result with raw output
-                      const actual = event.data.tool || 'unknown_tool';
-                      const ok = event.data.success !== false;
+                      
+                      // Skip creating message for empty or trivial results
                       const resultObj = event.data.result || event.data.error || {};
                       const raw = (() => { try { return JSON.stringify(resultObj, null, 2); } catch { return String(resultObj); } })();
-                      setMessages(prev => [...prev, {
-                        id: `tool_result_${Date.now()}`,
-                        role: 'system',
-                        content: `${ok ? '✅' : '❌'} ${actual} ${ok ? 'completed' : 'failed'}\n\nRaw Output:\n\n\`\`\`json\n${raw}\n\`\`\``,
-                        timestamp: new Date().toISOString()
-                      } as any]);
+                      
+                      // Don't show tool_result messages if the output is empty or just "{}"
+                      const isEmptyResult = raw === '{}' || raw === '""' || raw === 'null' || raw === '[]' || !raw || raw === '{\n}';
+                      if (!isEmptyResult) {
+                        // Only show tool result if there's meaningful output
+                        const actual = event.data.tool || 'unknown_tool';
+                        const ok = event.data.success !== false;
+                        setMessages(prev => [...prev, {
+                          id: `tool_result_${Date.now()}`,
+                          role: 'system',
+                          content: `${ok ? '✅' : '❌'} ${actual} ${ok ? 'completed' : 'failed'}\n\nRaw Output:\n\n\`\`\`json\n${raw}\n\`\`\``,
+                          timestamp: new Date().toISOString()
+                        } as any]);
+                      }
                     }
                     break;
 

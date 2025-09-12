@@ -30,6 +30,7 @@ interface Message {
   timestamp: Date;
   status?: 'sending' | 'sent' | 'error';
   agent?: string;
+  tools?: any[];
 }
 
 interface Agent {
@@ -145,7 +146,8 @@ export function ModernSwarmChatEnhanced() {
           content: msg.content,
           timestamp: new Date(msg.created_at || Date.now()),
           status: 'sent' as const,
-          agent: msg.agent_name || msg.message_metadata?.agent
+          agent: msg.agent_name || msg.message_metadata?.agent,
+          tools: msg.message_metadata?.tools || []
         }));
         
         console.log(`📝 Formatted messages:`, formattedMessages);
@@ -332,6 +334,7 @@ export function ModernSwarmChatEnhanced() {
         // Use polling instead of EventSource
         const pollSessionId = data.execution_id || data.session_id;
         let accumulatedContent = '';
+        let accumulatedTools: any[] = [];
         let offset = 0;
         let polling = true;
         
@@ -356,9 +359,12 @@ export function ModernSwarmChatEnhanced() {
               
               if (pollData.chunks && pollData.chunks.length > 0) {
                 for (const chunk of pollData.chunks) {
-                  if ((chunk.type === 'text' || chunk.type === 'delta') && chunk.content) {
+                  if ((chunk.type === 'text' || chunk.type === 'delta' || chunk.type === 'text_generation') && (chunk.content || chunk.data?.chunk)) {
+                    // Get the chunk content
+                    const chunkContent = chunk.content || chunk.data?.chunk || '';
+                    
                     // Accumulate content
-                    accumulatedContent += chunk.content;
+                    accumulatedContent += chunkContent;
                     
                     // Update message in UI
                     setMessages(prev => {
@@ -367,6 +373,89 @@ export function ModernSwarmChatEnhanced() {
                       if (lastMessage && lastMessage.id === assistantMessageId) {
                         lastMessage.content = accumulatedContent;
                         lastMessage.status = 'sent';
+                        lastMessage.tools = accumulatedTools;
+                      }
+                      return newMessages;
+                    });
+                  } else if (chunk.type === 'tool_call') {
+                    // Accumulate tool calls - streaming parameters come in chunks
+                    const toolName = chunk.data?.tool || 'unknown';
+                    const toolParams = chunk.data?.parameters || '';
+                    
+                    // Find or create tool entry
+                    let toolEntry = accumulatedTools.find(t => 
+                      t.name === toolName && !t.complete
+                    );
+                    
+                    if (!toolEntry) {
+                      // Create new tool entry only if we don't have an incomplete one
+                      toolEntry = {
+                        id: `tool_${toolName}_${accumulatedTools.length}`,
+                        name: toolName,
+                        parameters: '',
+                        status: 'running',
+                        complete: false,
+                        startTime: Date.now()
+                      };
+                      accumulatedTools.push(toolEntry);
+                    }
+                    
+                    // Append parameters
+                    toolEntry.parameters += toolParams;
+                    
+                    // Check if parameters are complete (valid JSON)
+                    if (toolEntry.parameters.trim().startsWith('{') && 
+                        toolEntry.parameters.trim().endsWith('}')) {
+                      try {
+                        const parsed = JSON.parse(toolEntry.parameters);
+                        toolEntry.parameters = parsed;
+                        toolEntry.complete = true;
+                      } catch {
+                        // Not yet valid JSON, keep accumulating
+                      }
+                    }
+                    
+                    // Update message with deduplicated tools (only show complete or last running)
+                    const displayTools = accumulatedTools.filter((tool, index) => {
+                      // Show completed tools
+                      if (tool.complete || tool.status === 'completed') return true;
+                      // Show only the last running tool for each name
+                      const sameName = accumulatedTools.filter(t => t.name === tool.name);
+                      return sameName[sameName.length - 1] === tool;
+                    });
+                    
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessage = newMessages[newMessages.length - 1];
+                      if (lastMessage && lastMessage.id === assistantMessageId) {
+                        lastMessage.tools = displayTools;
+                      }
+                      return newMessages;
+                    });
+                  } else if (chunk.type === 'tool_result') {
+                    // Update tool status
+                    const toolName = chunk.data?.tool || chunk.agent;
+                    const tool = accumulatedTools.find(t => 
+                      t.name === toolName && (t.status === 'running' || !t.output)
+                    );
+                    if (tool) {
+                      tool.status = 'completed';
+                      tool.output = chunk.data?.result || chunk.data?.output;
+                      tool.endTime = Date.now();
+                    }
+                    
+                    // Update message with deduplicated tools
+                    const displayTools = accumulatedTools.filter((tool, index) => {
+                      if (tool.complete || tool.status === 'completed') return true;
+                      const sameName = accumulatedTools.filter(t => t.name === tool.name);
+                      return sameName[sameName.length - 1] === tool;
+                    });
+                    
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastMessage = newMessages[newMessages.length - 1];
+                      if (lastMessage && lastMessage.id === assistantMessageId) {
+                        lastMessage.tools = displayTools;
                       }
                       return newMessages;
                     });
@@ -406,10 +495,20 @@ export function ModernSwarmChatEnhanced() {
                     // Save final assistant message to backend
                     if (accumulatedContent && activeSessionId) {
                       try {
+                        // Deduplicate tools before saving
+                        const finalTools = accumulatedTools.filter((tool, index) => {
+                          if (tool.complete || tool.status === 'completed') return true;
+                          const sameName = accumulatedTools.filter(t => t.name === tool.name);
+                          return sameName[sameName.length - 1] === tool;
+                        });
+                        
                         const savedMessage = await chatApi.addMessage(activeSessionId, {
                           role: 'assistant',
                           content: accumulatedContent,
-                          message_metadata: { agent: 'coordinator' }
+                          message_metadata: { 
+                            agent: 'coordinator',
+                            tools: finalTools.length > 0 ? finalTools : undefined
+                          }
                         });
                         
                         // Update the streaming message with the saved message ID
@@ -420,6 +519,7 @@ export function ModernSwarmChatEnhanced() {
                             lastMessage.id = savedMessage.message_id || savedMessage.id?.toString() || assistantMessageId;
                             lastMessage.status = 'sent';
                             lastMessage.timestamp = new Date(savedMessage.created_at || Date.now());
+                            lastMessage.tools = finalTools;
                           }
                           return newMessages;
                         });
@@ -450,10 +550,20 @@ export function ModernSwarmChatEnhanced() {
                 // Save final message if we have content
                 if (accumulatedContent && activeSessionId) {
                   try {
+                    // Deduplicate tools before saving
+                    const finalTools = accumulatedTools.filter((tool, index) => {
+                      if (tool.complete || tool.status === 'completed') return true;
+                      const sameName = accumulatedTools.filter(t => t.name === tool.name);
+                      return sameName[sameName.length - 1] === tool;
+                    });
+                    
                     const savedMessage = await chatApi.addMessage(activeSessionId, {
                       role: 'assistant',
                       content: accumulatedContent,
-                      message_metadata: { agent: 'coordinator' }
+                      message_metadata: { 
+                        agent: 'coordinator',
+                        tools: finalTools.length > 0 ? finalTools : undefined
+                      }
                     });
                     
                     // Update the streaming message with the saved message ID
@@ -464,6 +574,7 @@ export function ModernSwarmChatEnhanced() {
                         lastMessage.id = savedMessage.message_id || savedMessage.id?.toString() || assistantMessageId;
                         lastMessage.status = 'sent';
                         lastMessage.timestamp = new Date(savedMessage.created_at || Date.now());
+                        lastMessage.tools = finalTools;
                       }
                       return newMessages;
                     });
@@ -529,78 +640,71 @@ export function ModernSwarmChatEnhanced() {
 
   return (
     <ModernLayout>
-      <div className="flex h-full">
-        {/* Sidebar */}
-        <div className="w-80 border-r bg-muted/10 flex flex-col">
-          <div className="p-4 border-b">
+      <div className="flex h-full bg-background">
+        {/* Sidebar - Cleaner Style */}
+        <div className="w-64 border-r border-border/40 bg-sidebar flex flex-col">
+          <div className="p-3 border-b border-border/40">
             <Button 
               onClick={() => createSession()} 
-              className="w-full"
-              variant="default"
+              className="w-full justify-start gap-3 h-10 font-normal"
+              variant="outline"
             >
-              <Plus className="h-4 w-4 mr-2" />
-              New Chat
+              <Plus className="h-4 w-4" />
+              New chat
             </Button>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4">
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Recent Chats</h3>
-            <div className="space-y-2">
+          <div className="flex-1 overflow-y-auto p-2">
+            <div className="space-y-1">
               {sessions.map((session) => (
                 <div
                   key={session.session_id}
                   className={cn(
-                    "group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors",
+                    "group flex items-center justify-between px-3 py-2 rounded-md cursor-pointer transition-all duration-200",
                     sessionId === session.session_id 
-                      ? "bg-primary/10 border border-primary/20" 
-                      : "hover:bg-muted/50"
+                      ? "bg-muted/50" 
+                      : "hover:bg-muted/30"
                   )}
                   onClick={() => navigate(`/swarm/${session.session_id}`)}
                 >
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {session.title || 'Untitled Chat'}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {session.messages.length} messages
+                      <p className="text-sm truncate">
+                        {session.title || 'New chat'}
                       </p>
                     </div>
                   </div>
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
                     onClick={(e) => {
                       e.stopPropagation();
                       deleteSession(session.session_id);
                     }}
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Agent Status */}
+          {/* Agent Status - Minimal Style */}
           {activeAgents.length > 0 && (
-            <div className="border-t p-4">
-              <h3 className="text-sm font-medium mb-3">Active Agents</h3>
+            <div className="border-t border-border/40 p-3">
               <div className="space-y-2">
                 {activeAgents.map((agent) => (
-                  <div key={agent.id} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">{agent.name}</span>
-                      <Badge variant={
-                        agent.status === 'completed' ? 'default' :
-                        agent.status === 'thinking' ? 'secondary' : 'outline'
-                      }>
-                        {agent.status}
-                      </Badge>
+                  <div key={agent.id} className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                        <span className="text-xs text-muted-foreground">
+                          {agent.name}
+                        </span>
+                      </div>
                     </div>
-                    <Progress value={agent.progress} className="h-1" />
                   </div>
                 ))}
               </div>
@@ -608,20 +712,18 @@ export function ModernSwarmChatEnhanced() {
           )}
         </div>
 
-        {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col">
+        {/* Main Chat Area - Clean Background */}
+        <div className="flex-1 flex flex-col bg-background">
           {currentSession ? (
             <>
-              {/* Header */}
-              <div className="border-b px-6 py-4">
+              {/* Header - Minimal Style */}
+              <div className="border-b border-border/40 px-4 py-3">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold">
-                      {currentSession.title || 'Swarm Chat'}
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      Session: {currentSession.session_id.slice(0, 8)}...
-                    </p>
+                  <div className="flex items-center gap-2">
+                    <Bot className="h-5 w-5 text-muted-foreground" />
+                    <span className="font-medium">
+                      Swarm Intelligence
+                    </span>
                   </div>
               <div className="flex items-center gap-2">
                 {isLoading && (
@@ -652,15 +754,19 @@ export function ModernSwarmChatEnhanced() {
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-medium mb-2">Start a new conversation</h3>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Create a new chat or select an existing one
+              <div className="text-center max-w-md">
+                <Bot className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
+                <h3 className="text-xl font-normal mb-2">How can I help you today?</h3>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Start a conversation with the swarm intelligence
                 </p>
-                <Button onClick={() => createSession()}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Chat
+                <Button 
+                  onClick={() => createSession()}
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <Plus className="h-4 w-4" />
+                  Start new chat
                 </Button>
               </div>
             </div>

@@ -608,21 +608,8 @@ def create_tavily_tool(agent_name: str, callback_handler: Optional[Callable] = N
 
             logger.info(f"🔍 Executing Tavily search: {query}")
 
-            # Send visible search notification with details
-            if callback_handler:
-                search_msg = f"\n🔧 **Tool Called:** `tavily_search`\n"
-                search_msg += f"**Purpose:** Web search for current information\n"
-                search_msg += f"**Query:** \"{query}\"\n"
-                search_msg += f"**Depth:** {search_depth} | **Max Results:** {max_results}\n"
-                search_msg += f"⏳ Searching...\n"
-                await callback_handler(
-                    type="text_generation",
-                    agent=agent_name,
-                    data={
-                        "chunk": search_msg,
-                        "text": search_msg
-                    }
-                )
+            # Don't send tool text - already sent as structured tool_call event
+            # Commented out to prevent duplicate tool displays in UI
 
             # Execute search
             client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
@@ -705,10 +692,8 @@ def create_fetch_webpage_tool(agent_name: str, callback_handler: Optional[Callab
             except Exception:
                 pass
 
-        # Visible message
-        if callback_handler:
-            msg = f"\n🔧 **Tool Called:** `fetch_webpage`\n**URL:** {url}\n⏳ Fetching...\n"
-            await callback_handler(type="text_generation", agent=agent_name, data={"chunk": msg, "text": msg})
+        # Don't send tool text - already sent as structured tool_call event
+        # Commented out to prevent duplicate tool displays in UI
 
         try:
             import httpx
@@ -1042,20 +1027,8 @@ def create_file_tools(agent_name: str, callback_handler: Optional[Callable] = No
             except Exception:
                 pass
 
-        # Send tool called notification with details
-        if callback_handler:
-            tool_msg = f"\n🔧 **Tool Called:** `file_read`\n"
-            tool_msg += f"**Purpose:** Read file contents\n"
-            tool_msg += f"**Target File:** `{path}`\n"
-            tool_msg += f"⏳ Reading...\n"
-            await callback_handler(
-                type="text_generation",
-                agent=agent_name,
-                data={
-                    "chunk": tool_msg,
-                    "text": tool_msg
-                }
-            )
+        # Don't send tool text - already sent as structured tool_call event
+        # Commented out to prevent duplicate tool displays in UI
 
         if path in GLOBAL_VIRTUAL_FILES:
             content = GLOBAL_VIRTUAL_FILES[path]
@@ -1138,21 +1111,8 @@ def create_python_repl_tool(agent_name: str, callback_handler: Optional[Callable
             except Exception:
                 pass
 
-        # Send tool called notification with details
-        if callback_handler:
-            tool_msg = f"\n🔧 **Tool Called:** `python_repl`\n"
-            tool_msg += f"**Purpose:** Execute Python code\n"
-            tool_msg += f"**Code Length:** {len(code)} characters\n"
-            tool_msg += f"**Persist State:** {persist_state}\n"
-            tool_msg += f"⏳ Executing...\n"
-            await callback_handler(
-                type="text_generation",
-                agent=agent_name,
-                data={
-                    "chunk": tool_msg,
-                    "text": tool_msg
-                }
-            )
+        # Don't send tool text - already sent as structured tool_call event
+        # Commented out to prevent duplicate tool displays in UI
             
             # Show code preview
             code_lines = code.splitlines()[:10]

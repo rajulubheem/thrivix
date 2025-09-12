@@ -14,10 +14,16 @@ import {
   Check,
   RefreshCw,
   ChevronDown,
+  ChevronRight,
   Sparkles,
   X,
+  XCircle,
   Loader2,
   ArrowDown,
+  Wrench,
+  Eye,
+  EyeOff,
+  Terminal,
 } from "lucide-react";
 import { LightweightChatInput } from "./LightweightChatInput";
 import { Button } from "../ui/button";
@@ -68,6 +74,146 @@ interface ModernChatInterfaceProps {
   highlightAgent?: string | null;
 }
 
+// Tool Details Modal
+const ToolDetailsModal = memo(
+  ({
+    tools,
+    onClose,
+  }: {
+    tools: any[];
+    onClose: () => void;
+  }) => {
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+        <div 
+          className="bg-background rounded-lg max-w-3xl w-full max-h-[80vh] overflow-hidden shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between p-4 border-b">
+            <h3 className="font-semibold">Tool Execution Details</h3>
+            <button
+              onClick={onClose}
+              className="p-1 hover:bg-muted rounded-md transition-colors"
+            >
+              <XCircle className="h-5 w-5" />
+            </button>
+          </div>
+          
+          <div className="p-4 overflow-y-auto max-h-[calc(80vh-8rem)]">
+            <div className="space-y-4">
+              {tools.map((tool, idx) => (
+                <div key={tool.id || idx} className="border rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-lg">{getToolIcon(tool.name)}</span>
+                    <span className="font-medium">{tool.name}</span>
+                    {tool.status === 'completed' && (
+                      <Check className="h-4 w-4 text-green-500" />
+                    )}
+                  </div>
+                  
+                  {tool.parameters && (
+                    <div className="mb-3">
+                      <div className="text-sm font-medium text-muted-foreground mb-1">Parameters:</div>
+                      <pre className="text-xs bg-muted/50 p-3 rounded-md overflow-x-auto">
+                        {typeof tool.parameters === 'string' 
+                          ? tool.parameters 
+                          : JSON.stringify(tool.parameters, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  
+                  {(tool.output || tool.result) && (
+                    <div>
+                      <div className="text-sm font-medium text-muted-foreground mb-1">Output:</div>
+                      <pre className="text-xs bg-muted/50 p-3 rounded-md overflow-x-auto max-h-64 overflow-y-auto">
+                        {typeof (tool.output || tool.result) === 'string'
+                          ? (tool.output || tool.result)
+                          : JSON.stringify(tool.output || tool.result, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+);
+
+// Helper function for tool icons
+const getToolIcon = (name?: string) => {
+  const toolName = name?.toLowerCase() || '';
+  if (toolName.includes('fetch') || toolName.includes('webpage')) return '🌐';
+  if (toolName.includes('search') || toolName.includes('tavily')) return '🔍';
+  if (toolName.includes('code') || toolName.includes('execute')) return '💻';
+  if (toolName.includes('file') || toolName.includes('write')) return '📄';
+  if (toolName.includes('api')) return '🔌';
+  return '🔧';
+};
+
+// Tool Output Display Component - Horizontal Bar Style
+const ToolOutputBar = memo(
+  ({
+    tools,
+    onClick,
+  }: {
+    tools: any[];
+    onClick: () => void;
+  }) => {
+    if (!tools || tools.length === 0) return null;
+    
+    const completedCount = tools.filter(t => t.status === 'completed').length;
+    const totalCount = tools.length;
+    
+    return (
+      <button
+        onClick={onClick}
+        className="flex items-center gap-3 w-full px-3 py-2 bg-muted/10 hover:bg-muted/20 rounded-lg transition-all group"
+      >
+        <div className="flex items-center gap-2 flex-1">
+          <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground">
+            {completedCount === totalCount 
+              ? `Used ${totalCount} tool${totalCount > 1 ? 's' : ''}`
+              : `Running tools... (${completedCount}/${totalCount})`}
+          </span>
+          
+          <div className="flex items-center gap-1.5">
+            {Array.from(new Set(tools.map(t => t.name))).slice(0, 4).map((name, idx) => (
+              <div
+                key={idx}
+                className="flex items-center gap-1 px-2 py-0.5 bg-background/50 rounded text-xs"
+              >
+                <span>{getToolIcon(name)}</span>
+                <span className="text-muted-foreground">{name}</span>
+                {tools.filter(t => t.name === name).length > 1 && (
+                  <span className="text-muted-foreground/60">
+                    ×{tools.filter(t => t.name === name).length}
+                  </span>
+                )}
+              </div>
+            ))}
+            {Array.from(new Set(tools.map(t => t.name))).length > 4 && (
+              <span className="text-xs text-muted-foreground">
+                +{Array.from(new Set(tools.map(t => t.name))).length - 4} more
+              </span>
+            )}
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {completedCount < totalCount && (
+            <div className="h-3 w-3 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+          )}
+          <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:translate-x-0.5 transition-transform" />
+        </div>
+      </button>
+    );
+  }
+);
+
 // Move MessageContent outside the main component
 const MessageContent = memo(
   ({
@@ -80,14 +226,102 @@ const MessageContent = memo(
     copyToClipboard: (text: string, id: string) => void;
   }) => {
     const [showThinking, setShowThinking] = useState(false);
+    const [showToolDetails, setShowToolDetails] = useState(false);
+    
+    // Parse tool outputs from message content
+    const parseToolsFromContent = (content: string) => {
+      const tools: any[] = [];
+      
+      // Extract all tool mentions
+      const toolMentions = new Map<string, string[]>();
+      const lines = content.split('\n');
+      let currentTool: string | null = null;
+      let currentContent: string[] = [];
+      
+      for (const line of lines) {
+        // Check for tool start
+        const toolMatch = line.match(/Tool:\s*(\w+)/);
+        const completedMatch = line.match(/✅\s*(\w+)\s+completed/);
+        
+        if (toolMatch || completedMatch) {
+          // Save previous tool if exists
+          if (currentTool) {
+            const existing = toolMentions.get(currentTool) || [];
+            existing.push(currentContent.join('\n'));
+            toolMentions.set(currentTool, existing);
+          }
+          
+          // Start new tool
+          currentTool = toolMatch ? toolMatch[1] : (completedMatch ? completedMatch[1] : null);
+          currentContent = [line];
+        } else if (currentTool) {
+          currentContent.push(line);
+        }
+      }
+      
+      // Save last tool
+      if (currentTool) {
+        const existing = toolMentions.get(currentTool) || [];
+        existing.push(currentContent.join('\n'));
+        toolMentions.set(currentTool, existing);
+      }
+      
+      // Convert to tool objects
+      toolMentions.forEach((contents, toolName) => {
+        const combinedContent = contents.join('\n');
+        tools.push({
+          id: `${message.id}_${toolName}_${tools.length}`,
+          name: toolName,
+          parameters: extractParameters(combinedContent),
+          output: extractOutput(combinedContent),
+          status: combinedContent.includes('✅') ? 'completed' : 'running',
+          count: contents.filter((c: string) => c.includes('Tool:')).length || 1
+        });
+      });
+      
+      return tools;
+    };
+    
+    const extractParameters = (content: string) => {
+      const paramMatch = content.match(/Parameters:([\s\S]*?)(?=\n(?:Output:|Raw Output:|$))/i);
+      if (paramMatch) {
+        try {
+          const paramText = paramMatch[1].trim();
+          // Try to parse as JSON
+          if (paramText.startsWith('{')) {
+            return JSON.parse(paramText);
+          }
+          return paramText;
+        } catch {
+          return paramMatch[1].trim();
+        }
+      }
+      return null;
+    };
+    
+    const extractOutput = (content: string) => {
+      const outputMatch = content.match(/(?:Raw Output:|Output:)([\s\S]*?)(?=\n(?:Tool:|$))/i);
+      if (outputMatch) {
+        return outputMatch[1].trim();
+      }
+      return null;
+    };
     
     if (message.role === "assistant") {
+      // Use tools from message.tools array if available, otherwise parse from content
+      // Only parse from content if no tools array exists (for backward compatibility)
+      const allTools = message.tools && message.tools.length > 0 
+        ? message.tools 
+        : parseToolsFromContent(message.content);
+      
       // Split message into planning and response sections
       const planningMarker = '📋 **Planning Task Execution**';
       const responseMarker = '## Response:';
       
       let planningContent = '';
       let responseContent = message.content;
+      
+      // Tool output sections are no longer sent from backend, so no need to filter
       
       if (message.content.includes(planningMarker)) {
         const parts = message.content.split(responseMarker);
@@ -114,8 +348,24 @@ const MessageContent = memo(
       
       return (
         <div className="space-y-3">
+          {/* Tool Outputs Section - Horizontal Bar */}
+          {allTools.length > 0 && (
+            <>
+              <ToolOutputBar 
+                tools={allTools}
+                onClick={() => setShowToolDetails(true)}
+              />
+              {showToolDetails && (
+                <ToolDetailsModal
+                  tools={allTools}
+                  onClose={() => setShowToolDetails(false)}
+                />
+              )}
+            </>
+          )}
+          
           {planningContent && (
-            <div className="border border-muted rounded-lg p-3 bg-muted/20">
+            <div className="border border-muted/50 rounded-lg p-3 bg-muted/10">
               <button
                 onClick={() => setShowThinking(!showThinking)}
                 className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors w-full text-left"
@@ -127,11 +377,11 @@ const MessageContent = memo(
                   )}
                 />
                 <Sparkles className="h-4 w-4" />
-                AI Thinking Process (Click to {showThinking ? 'hide' : 'show'})
+                AI Thinking Process
               </button>
               
               {showThinking && (
-                <div className="mt-3 prose prose-sm dark:prose-invert max-w-none opacity-80">
+                <div className="mt-3 prose prose-sm dark:prose-invert max-w-none opacity-70">
                   <ReactMarkdown>
                     {planningContent}
                   </ReactMarkdown>
@@ -141,7 +391,7 @@ const MessageContent = memo(
           )}
           
           {/* Main response content */}
-          <div className="prose prose-sm dark:prose-invert max-w-none">
+          <div className="prose prose-sm dark:prose-invert max-w-none break-words">
             <ReactMarkdown
               components={{
                 code({ className, children, ...props }: any) {
@@ -384,7 +634,7 @@ const ModernChatInterfaceComponent: React.FC<ModernChatInterfaceProps> = ({
 
                   <div
                     className={cn(
-                      "flex flex-col gap-1 max-w-[70%]",
+                      "flex flex-col gap-1 max-w-[85%]",
                       message.role === "user" ? "items-end" : "items-start",
                     )}
                   >
@@ -406,7 +656,7 @@ const ModernChatInterfaceComponent: React.FC<ModernChatInterfaceProps> = ({
 
                     <Card
                       className={cn(
-                        "shadow-sm transition-all duration-200",
+                        "shadow-sm transition-all duration-200 max-w-full overflow-hidden",
                         message.role === "user"
                           ? "bg-primary text-primary-foreground"
                           : "bg-card",
@@ -414,7 +664,7 @@ const ModernChatInterfaceComponent: React.FC<ModernChatInterfaceProps> = ({
                         message.status === "streaming" && "streaming-message",
                       )}
                     >
-                      <CardContent className="p-3">
+                      <CardContent className="p-3 overflow-x-auto">
                         <div className="message-content">
                           <MessageContent
                             message={message}
@@ -423,49 +673,6 @@ const ModernChatInterfaceComponent: React.FC<ModernChatInterfaceProps> = ({
                           />
                         </div>
 
-                        {/* Tool Calls Display */}
-                        {message.tools && message.tools.length > 0 && (
-                          <div className="mt-3 space-y-2">
-                            {message.tools.map((tool) => (
-                              <div
-                                key={tool.id}
-                                className="p-2 bg-muted rounded-md"
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-medium">
-                                    {tool.name}
-                                  </span>
-                                  {tool.status === "pending" && showTools && (
-                                    <div className="flex gap-1">
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        onClick={() => onToolApprove?.(tool.id)}
-                                      >
-                                        <Check className="h-3 w-3" />
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        onClick={() => onToolReject?.(tool.id)}
-                                      >
-                                        <X className="h-3 w-3" />
-                                      </Button>
-                                    </div>
-                                  )}
-                                  {tool.status === "approved" && (
-                                    <Badge
-                                      variant="default"
-                                      className="text-xs"
-                                    >
-                                      Approved
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                       </CardContent>
                     </Card>
 
