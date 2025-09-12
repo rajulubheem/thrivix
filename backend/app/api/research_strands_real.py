@@ -2,6 +2,8 @@
 Research API using Strands Agents with Real Tools - Fixed version
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+import asyncio
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 import asyncio
@@ -10,9 +12,15 @@ import logging
 from datetime import datetime
 from strands import Agent
 from strands.models.openai import OpenAIModel
+from app.services.strands_session_service import StrandsSessionService
 from strands_tools import handoff_to_user
-from app.tools.tavily_search_tool import tavily_search, get_all_search_results, clear_search_results
-from app.tools.use_llm_wrapper import use_llm_fixed
+from app.tools.tavily_search_tool import tavily_search, get_all_search_results, get_last_search_results, clear_search_results
+from app.tools.research_planner_tool import research_planner
+from app.tools.research_synthesis_tool import research_synthesis
+from app.tools.research_verifier_tool import research_verifier
+from app.tools.simple_browser_tool import browse_and_capture, browse_multiple_sites, get_captured_screenshots, clear_screenshots
+from app.services.shared_state_service import SharedStateService
+from app.tools.use_llm_wrapper import use_llm_fixed, use_llm_with_model
 import os
 import json
 import threading
@@ -22,11 +30,46 @@ logger = logging.getLogger(__name__)
 
 # Store active research sessions
 research_sessions: Dict[str, Dict[str, Any]] = {}
+SESSION_SERVICE = StrandsSessionService()
+SHARED_STATE = SharedStateService()
+
+def _load_optional_strands_tools() -> List:
+    """Best-effort import of useful strands_tools for deep research.
+    Returns a list of callable tools. Safe no-op if strands_tools not installed.
+    """
+    tool_names = [
+        'http_request',        # Fetch APIs/HTML with headers
+        'python_repl',         # Quick data analysis
+        'diagram',             # Mermaid diagrams / graphs
+        'generate_image',      # Charts/renders when needed
+        'image_reader',        # OCR/analysis on images
+        'retrieve',            # Retrieval / KB
+        'task_planner',        # Explicit plan scaffolding
+        'workflow',            # Multi-step orchestration
+        'journal',             # Running notes for report
+        'file_read', 'file_write', # Artifact IO
+        'editor',              # Structured editing
+        'calculator',          # Quick math
+        'current_time',        # Timestamping
+        'environment', 'system_info' # Context
+    ]
+    loaded = []
+    try:
+        import importlib
+        mod = importlib.import_module('strands_tools')
+        for name in tool_names:
+            fn = getattr(mod, name, None)
+            if callable(fn):
+                loaded.append(fn)
+    except Exception:
+        pass
+    return loaded
 
 class ResearchStartRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
     require_approval: Optional[bool] = False
+    mode: Optional[str] = 'deep'
 
 class ResearchStatusResponse(BaseModel):
     session_id: str
@@ -79,7 +122,10 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
             await asyncio.sleep(0.2)
             
             # Set up tools list - include use_llm_fixed for deep analysis
-            tools = [tavily_search, use_llm_fixed]
+            tools = [tavily_search, research_planner, research_synthesis, research_verifier, use_llm_fixed, browse_and_capture, browse_multiple_sites]
+            # Optionally extend with strands_tools (if installed) for richer research/report/visualization
+            if os.getenv('RESEARCH_ENABLE_STRANDS_TOOLS', '1') in ('1','true','yes'):
+                tools.extend(_load_optional_strands_tools())
             if require_approval:
                 # Use the standard handoff_to_user from strands_agents_tools
                 tools.append(handoff_to_user)
@@ -94,10 +140,14 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
             content_buffer = []
             sources_found = []
             search_count = 0
+            total_tool_calls = 0
+            rate_limit_hits = 0
             reasoning_steps = []  # Track agent's reasoning process
             processed_tool_ids = set()  # Track which tool uses we've already processed
             thoughts_buffer = []  # Track agent's thoughts and planning
             current_thought = ""  # Current thought being built
+            # Buffer streamed tool inputs by toolUseId to avoid acting on partial chunks
+            tool_input_buffers: Dict[str, Dict[str, Any]] = {}
             
             # Create OpenAI model configuration with higher token limit for deep analysis
             openai_model = OpenAIModel(
@@ -111,9 +161,380 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 }
             )
             
-            # Create Strands research agent with enhanced prompting for deep research
-            research_agent = Agent(
-                model=openai_model,
+            # Structured pipeline switch (aligns with agent loop + agents-as-tools concepts)
+            USE_STRUCTURED_PIPELINE = True
+
+            if USE_STRUCTURED_PIPELINE:
+                # Create a single session-managed coordinator agent that will be reused
+                # across planning, research coordination, and synthesis. This ensures
+                # a single conversation log and consistent agent_id (session_id).
+                coordinator_agent = SESSION_SERVICE.create_agent_with_session(
+                    session_id=session_id,
+                    agent_name="coordinator",
+                    tools=tools,
+                    system_prompt=(
+                        "You are an expert research coordinator. Maintain continuity with prior session "
+                        "context. Plan, search with tools, and synthesize findings with citations."
+                    ),
+                    model_config={"model_id": "gpt-4o-mini", "max_tokens": 8000, "temperature": 0.7}
+                )
+                # ===== Phase 1: Planner (no web tools) =====
+                session.setdefault('events', [])
+                # emit phase_start(planning)
+                session['events'].append({'type': 'phase_start', 'phase': 'planning', 'ts': datetime.now().isoformat()})
+                # Build context from previous content (last ~1500 chars)
+                prev_context = (session.get('content','') or '')[-1500:]
+                session['steps'].append({
+                    'id': 'phase-1',
+                    'title': 'Planning research',
+                    'description': 'Creating bounded search plan',
+                    'status': 'active',
+                    'icon': 'plan'
+                })
+                session['thoughts'].append({
+                    'type': 'planning',
+                    'content': f'🧭 Planning search strategy for: {query}',
+                    'timestamp': datetime.now().isoformat()
+                })
+
+                plan_prompt = (
+                    "SESSION_GOAL: " + query + "\n"
+                    "Create a bounded web search plan for the user query. "
+                    "Output STRICT JSON with fields: queries (array of strings, max 10), goals (array), stop_condition (string). "
+                    "Focus on diverse angles and recency. Use prior conversation context implicitly; DO NOT repeat or quote prior answer text."
+                    f"\n\nUSER_QUERY: {query}\n\nJSON_ONLY:"
+                )
+                # Use the session-managed coordinator agent for planning so the
+                # plan becomes part of the conversation context
+                plan_text_chunks = []
+                try:
+                    async for pevt in coordinator_agent.stream_async(plan_prompt):
+                        if "data" in pevt:
+                            plan_text_chunks.append(pevt["data"])
+                except Exception as _pe:
+                    logger.warning(f"Planner stream failed, will fallback to direct tool: {_pe}")
+                plan_text = ''.join(plan_text_chunks) if plan_text_chunks else None
+                if not plan_text:
+                    # Fallback: call the planner tool directly if streaming fails
+                    plan_text = research_planner(query=query, max_queries=int(os.getenv('TAVILY_MAX_CALLS_PER_RUN', 12)))
+
+                def _extract_json_block(text: str):
+                    import re, json
+                    if not text:
+                        return None
+                    m = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
+                    raw = m.group(1) if m else text
+                    try:
+                        return json.loads(raw)
+                    except Exception:
+                        # Try to find the first {...} block
+                        m2 = re.search(r"(\{[\s\S]*\})", raw)
+                        if m2:
+                            try:
+                                return json.loads(m2.group(1))
+                            except Exception:
+                                return None
+                        return None
+
+                import os as _os
+                plan = _extract_json_block(plan_text) or {"queries": [], "goals": [], "stop_condition": "budget"}
+                _max_calls = int(_os.getenv("TAVILY_MAX_CALLS_PER_RUN", 12))
+                queries = [q for q in plan.get('queries', []) if isinstance(q, str)][: _max_calls]
+
+                session['steps'][-1]['status'] = 'completed'
+                # emit phase_end(planning)
+                session['events'].append({'type': 'phase_end', 'phase': 'planning', 'plan': plan, 'ts': datetime.now().isoformat()})
+                session['steps'].append({
+                    'id': 'phase-2',
+                    'title': 'Executing planned searches',
+                    'description': f'Running {len(queries)} searches',
+                    'status': 'active',
+                    'icon': 'search'
+                })
+                # emit phase_start(research)
+                session['events'].append({'type': 'phase_start', 'phase': 'research', 'count': len(queries), 'ts': datetime.now().isoformat()})
+
+                # ===== Phase 2: Researcher (agent-driven tool usage for each planned query) =====
+                for idx, q in enumerate(queries, 1):
+                    session['thoughts'].append({
+                        'type': 'searching',
+                        'content': f'🔎 [Planned Search #{idx}] {q}',
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    step = {
+                        'id': f'planned-search-{idx}',
+                        'title': f'Planned Search #{idx}',
+                        'description': q,
+                        'status': 'active',
+                        'icon': 'search'
+                    }
+                    session['steps'].append(step)
+                    # emit tool_start for tavily
+                    session['events'].append({'type': 'tool_start', 'tool': 'tavily_search', 'query': q, 'index': idx, 'ts': datetime.now().isoformat()})
+                    # Ask the coordinator agent to use tavily_search for this query
+                    instruction = (
+                        "SESSION_GOAL: " + query + "\n"
+                        f"Use tavily_search on this query and then provide a concise 1-2 sentence summary.\n\nQUERY: {q}"
+                    )
+                    try:
+                        async for _evt in coordinator_agent.stream_async(instruction):
+                            # The tavily_search tool populates global results we read below
+                            if isinstance(_evt, dict) and 'tool_result' in _evt:
+                                # Try to parse a brief summary if available
+                                tr = _evt.get('tool_result') or {}
+                                if isinstance(tr, dict):
+                                    out_text = tr.get('result') or tr.get('output') or tr.get('content') or ''
+                                    if isinstance(out_text, str):
+                                        # Heuristic: first line as summary
+                                        step['summary'] = (out_text.splitlines() or [''])[0][:200]
+                    except Exception as _e:
+                        logger.warning(f"Agent-driven search failed for '{q}': {_e}")
+
+                    # Attach structured results for this specific search
+                    try:
+                        last_results = get_last_search_results() or []
+                        mapped = []
+                        for i, r in enumerate(last_results, 1):
+                            u = r.get('url', '')
+                            dom = extract_domain(u)
+                            # Prefer provider images if available
+                            images = r.get('images') or r.get('image_urls') or []
+                            thumb = images[0] if isinstance(images, list) and images else f"https://picsum.photos/seed/{i}_{idx}/400/300"
+                            mapped.append({
+                                'index': i,
+                                'title': r.get('title', 'Untitled'),
+                                'url': u,
+                                'snippet': (r.get('content', '') or '')[:200],
+                                'favicon': f"https://www.google.com/s2/favicons?domain={dom}&sz=64" if dom else None,
+                                'thumbnail': thumb,
+                            })
+                        step['results'] = mapped
+
+                        # Also incrementally add to session.sources so UI can show live feed
+                        existing = session.get('sources', []) or []
+                        seen_urls = set(s.get('url') for s in existing if isinstance(s, dict))
+                        for j, r in enumerate(last_results, 1):
+                            url = r.get('url', '')
+                            if not url or url in seen_urls:
+                                continue
+                            num = len(existing) + 1
+                            src = {
+                                'id': f'source-{num}',
+                                'number': num,
+                                'title': r.get('title', 'Untitled'),
+                                'url': url,
+                                'domain': extract_domain(url),
+                                'snippet': (r.get('content', '') or '')[:200],
+                                'favicon': f"https://www.google.com/s2/favicons?domain={extract_domain(url)}&sz=64",
+                                'thumbnail': f"https://picsum.photos/seed/{num}/400/300",
+                            }
+                            existing.append(src)
+                            seen_urls.add(url)
+                        session['sources'] = existing
+                        # emit sources_delta
+                        session['events'].append({'type': 'sources_delta', 'added': mapped, 'index': idx, 'ts': datetime.now().isoformat()})
+
+                        # Optional: visit top result to extract on-page text and screenshots (Strands tool-driven)
+                        try:
+                            import os as _os2
+                            browse_enabled = _os2.getenv('RESEARCH_BROWSE_TOP', '1') in ('1','true','yes')
+                            if browse_enabled and last_results:
+                                top_url = last_results[0].get('url')
+                                if top_url:
+                                    # Track previously captured screenshots
+                                    prev_shots = get_captured_screenshots() or []
+                                    prev_count = len(prev_shots)
+                                    # Ask the coordinator agent to browse the page
+                                    browse_instruction = (
+                                        "SESSION_GOAL: " + query + "\n"
+                                        f"Use browse_and_capture on this URL to extract visible text: {top_url}"
+                                    )
+                                    async for _bevt in coordinator_agent.stream_async(browse_instruction):
+                                        # We don't need to stream these chunks to UI
+                                        pass
+                                    # Fetch any new screenshots
+                                    new_shots = get_captured_screenshots() or []
+                                    if len(new_shots) > prev_count:
+                                        latest = new_shots[-1]
+                                        # Attach OCR text to the matching source if possible
+                                        for s in session['sources']:
+                                            if s.get('url') == top_url:
+                                                s['content'] = (latest.get('ocr_text') or '')[:1500]
+                                                break
+                                        # Push a lightweight screenshot event for UI (if it chooses to render)
+                                        session.setdefault('events', []).append({
+                                            'type': 'screenshot',
+                                            'url': top_url,
+                                            'description': latest.get('description', ''),
+                                            'ts': datetime.now().isoformat()
+                                        })
+                        except Exception:
+                            # Browsing is best-effort; ignore failures silently
+                            pass
+                    except Exception:
+                        step['results'] = []
+                    step['status'] = 'completed'
+                    # emit tool_end (include query for matching)
+                    session['events'].append({'type': 'tool_end', 'tool': 'tavily_search', 'index': idx, 'query': q, 'summary': step.get('summary'), 'results_count': step.get('results_count'), 'ts': datetime.now().isoformat()})
+                    # Do NOT append research chunks to session['content']; keep thinking separate
+                    # Emit incremental content chunk for live view (summary + top results)
+                    try:
+                        lines = [f"### [Search #{idx}] {q}"]
+                        if step.get('summary'):
+                            lines.append(f"Summary: {step['summary']}")
+                        if step.get('results'):
+                            for r in step['results'][:3]:
+                                title = r.get('title', 'Untitled')
+                                url = r.get('url', '')
+                                snippet = r.get('snippet', '')
+                                lines.append(f"- [{title}]({url}) — {snippet}")
+                        chunk = "\n".join(lines)
+                        session['events'].append({'type': 'content_delta', 'final': False, 'chunk': chunk, 'ts': datetime.now().isoformat()})
+                    except Exception:
+                        pass
+
+                session['steps'][-1]['status'] = 'completed'
+                # emit phase_end(research)
+                session['events'].append({'type': 'phase_end', 'phase': 'research', 'ts': datetime.now().isoformat()})
+                session['steps'].append({
+                    'id': 'phase-3',
+                    'title': 'Synthesis',
+                    'description': 'Combining findings into final report',
+                    'status': 'active',
+                    'icon': 'synthesis'
+                })
+                # emit phase_start(synthesis)
+                session['events'].append({'type': 'phase_start', 'phase': 'synthesis', 'ts': datetime.now().isoformat()})
+
+                # ===== Phase 3: Synthesizer (streaming, same coordinator agent) =====
+                # Build a compact source summary for synthesis
+                all_results = get_all_search_results()
+                src_summary = []
+                for r in all_results[:20]:
+                    t = r.get('title', 'Untitled')
+                    u = r.get('url', '')
+                    c = (r.get('content', '') or '')[:200]
+                    src_summary.append(f"- {t} ({u}) :: {c}")
+                synth_prompt = (
+                    "SESSION_GOAL: " + query + "\n"
+                    "Synthesize findings into a structured research response with inline numeric citations [1], [2], etc., "
+                    "matching the order of the sources list provided. Include executive summary, current state, key patterns, data, perspectives, outlook, "
+                    "and actionable recommendations. Maintain continuity with prior conversation but DO NOT repeat previous answer text; focus on the new user intent (e.g., compare/contrast if asked).\n\n"
+                    "If visualization tools are available, do the following near the top of the response after the executive summary: \n"
+                    "1) If the 'diagram' tool exists, generate ONE Mermaid diagram that captures structure (e.g., competitive landscape, process, or timeline). Include the Mermaid block in the output.\n"
+                    "2) If the 'generate_image' tool exists and numeric comparisons are present, render ONE chart (bar/line) and embed it as a markdown image. If the tool returns a data URI, embed it as ![Chart](data:...).\n"
+                    "Keep the number of visuals to 1–2 to avoid clutter.\n\n"
+                    + "SOURCES (ordered):\n" + "\n".join(src_summary)
+                )
+                # Reset content before final synthesis to avoid leaking tool traces
+                session['content'] = ''
+                # Stream synthesis using a nested Agent for realtime updates
+                synth_buffer = []
+                try:
+                    # Reuse the same coordinator agent to keep one conversation
+                    async for sevt in coordinator_agent.stream_async(synth_prompt):
+                        if "data" in sevt:
+                            chunk = sevt["data"]
+                            if chunk:
+                                synth_buffer.append(chunk)
+                                # emit incremental content chunk
+                                session['events'].append({'type': 'content_delta', 'final': False, 'chunk': chunk, 'ts': datetime.now().isoformat()})
+                except Exception as e:
+                    # Fallback: if streaming fails, call non-streaming synthesis tool
+                    final_text_fallback = research_synthesis(sources_summary="\n".join(src_summary))
+                    synth_buffer.append(final_text_fallback or '')
+                final_text = ''.join(synth_buffer)
+                session['content'] = final_text
+                # Align session.sources order to match the SOURCES (ordered) list used in synthesis
+                try:
+                    ordered_results = all_results[:20]
+                    aligned_sources = []
+                    seen_urls = set()
+                    idx_num = 1
+                    for r in ordered_results:
+                        url = r.get('url', '')
+                        if not url or url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        aligned_sources.append({
+                            'id': f'source-{idx_num}',
+                            'number': idx_num,
+                            'title': r.get('title', 'Untitled'),
+                            'url': url,
+                            'domain': extract_domain(url),
+                            'snippet': (r.get('content', '') or '')[:200],
+                            'favicon': f"https://www.google.com/s2/favicons?domain={extract_domain(url)}&sz=64",
+                            'thumbnail': f"https://picsum.photos/seed/{idx_num}/400/300",
+                            'score': r.get('score', 0),
+                            'content': r.get('content', '')
+                        })
+                        idx_num += 1
+                    if aligned_sources:
+                        session['sources'] = aligned_sources
+                        session['events'].append({'type': 'sources_reordered', 'count': len(aligned_sources), 'ts': datetime.now().isoformat()})
+                except Exception:
+                    pass
+                # emit content_delta final (send a small completion marker if buffer already streamed)
+                session['events'].append({'type': 'content_delta', 'final': True, 'chunk': final_text[-2000:] if final_text else '', 'ts': datetime.now().isoformat()})
+
+                session['steps'][-1]['status'] = 'completed'
+                # emit phase_end(synthesis)
+                session['events'].append({'type': 'phase_end', 'phase': 'synthesis', 'ts': datetime.now().isoformat()})
+
+                # ===== Phase 4: Verification (optional, disable by default for UX/perf) =====
+                AUTO_VERIFY = os.getenv('RESEARCH_AUTO_VERIFY', '0') in ('1','true','yes')
+                if AUTO_VERIFY:
+                    session['steps'].append({
+                        'id': 'phase-4',
+                        'title': 'Verification',
+                        'description': 'Checking citations and flagging weak claims',
+                        'status': 'active',
+                        'icon': 'verify'
+                    })
+                    session['events'].append({'type': 'phase_start', 'phase': 'verify', 'ts': datetime.now().isoformat()})
+                    try:
+                        import json as _json
+                        verifier_raw = research_verifier(content=final_text or '', sources=session.get('sources', []))
+                        verification = _json.loads(verifier_raw) if isinstance(verifier_raw, str) else verifier_raw
+                    except Exception as _e:
+                        verification = {"weak_citations":[],"missing_citations":[],"notes":[f"verifier error: {_e}"],"flagged_urls":[]}
+                    session['verification'] = verification
+                    session['events'].append({'type': 'verify_result', 'data': verification, 'ts': datetime.now().isoformat()})
+                    session['steps'][-1]['status'] = 'completed'
+                    session['events'].append({'type': 'phase_end', 'phase': 'verify', 'ts': datetime.now().isoformat()})
+
+                # Add user query and assistant response to history
+                if 'messages' not in session:
+                    session['messages'] = []
+                
+                # Add user message if not already there
+                if query and (not session['messages'] or session['messages'][0].get('role') != 'user'):
+                    session['messages'].insert(0, {
+                        'role': 'user',
+                        'content': query,
+                        'timestamp': session.get('timestamp', datetime.now().isoformat()),
+                        'mode': 'scholar'
+                    })
+                
+                # Add final assistant message to history
+                if session.get('content'):
+                    session['messages'].append({
+                        'role': 'assistant',
+                        'content': session['content'],
+                        'timestamp': datetime.now().isoformat(),
+                        'sources': session.get('sources', []),
+                        'thoughts': session.get('thoughts', []),
+                        'mode': 'scholar'
+                    })
+                
+                session['status'] = 'completed'
+                session['progress'] = 100
+                return
+
+            # Fallback to legacy streaming pipeline if needed (session-managed for continuity)
+            research_agent = SESSION_SERVICE.create_agent_with_session(
+                session_id=session_id,
+                agent_name="coordinator",
                 tools=tools,
                 system_prompt="""You are an expert research assistant specializing in deep, comprehensive analysis with multi-step reasoning.
 
@@ -190,6 +611,8 @@ IMPORTANT RULES:
 - PROACTIVELY use handoff_to_user if available to clarify ambiguous queries
 - Ask the user for preferences on research direction BEFORE starting searches""" if require_approval else ""
                 )
+                ,
+                model_config={"model_id": "gpt-4o-mini", "max_tokens": 8000, "temperature": 0.7}
             )
             
             step1['status'] = 'completed'
@@ -206,6 +629,19 @@ IMPORTANT RULES:
             }
             session['steps'].append(step2)
             
+            # Ensure we use a session-managed agent for the research phase so context persists
+            # across turns in the same session (Strands standard session behavior).
+            research_agent = SESSION_SERVICE.create_agent_with_session(
+                session_id=session_id,
+                agent_name="coordinator",
+                tools=tools,
+                system_prompt=(
+                    "You are an expert research coordinator. Use available tools to plan, search, "
+                    "analyze, and synthesize. Maintain continuity with prior session context."
+                ),
+                model_config={"model_id": "gpt-4o-mini", "max_tokens": 8000, "temperature": 0.7}
+            )
+
             # Prepare the research prompt
             handoff_instruction = """0. FIRST CHECK: Is this query ambiguous or would benefit from user clarification? 
    - If yes, use handoff_to_user to ask for clarification BEFORE searching
@@ -359,6 +795,16 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
                         logger.debug(f"Tool event received: {tool_info}")
                         if isinstance(tool_info, dict):
                             tool_name = tool_info.get("name", "")
+                            total_tool_calls += 1
+                            tool_use_id = (
+                                tool_info.get("toolUseId")
+                                or tool_info.get("id")
+                                or f"{tool_name}:{len(tool_input_buffers)}"
+                            )
+
+                            # Initialize buffer entry
+                            if tool_use_id not in tool_input_buffers:
+                                tool_input_buffers[tool_use_id] = {"name": tool_name, "raw": "", "parsed": None}
                             
                             if tool_name == "handoff_to_user":
                                 # Handle human-in-the-loop interaction
@@ -415,38 +861,36 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
                                     return  # Exit the function completely to wait for user response
                             
                             elif tool_name == "use_llm_fixed":
-                                # Generate a unique ID for this tool use
-                                tool_use_id = tool_info.get("id", str(tool_info))
-                                
-                                # Skip if we've already processed this tool use
+                                # If already processed, ignore further deltas
                                 if tool_use_id in processed_tool_ids:
                                     continue
-                                
-                                processed_tool_ids.add(tool_use_id)
-                                
-                                # Handle deep analysis using use_llm_fixed
+
+                                # Accumulate input across streamed events
                                 tool_input = tool_info.get("input", {})
-                                
-                                # Extract analysis prompt  
+                                if isinstance(tool_input, str):
+                                    tool_input_buffers[tool_use_id]["raw"] += tool_input
+                                elif isinstance(tool_input, dict):
+                                    tool_input_buffers[tool_use_id]["parsed"] = tool_input
+
+                                # Try to parse when we seem to have complete JSON
                                 analysis_prompt = ""
-                                if isinstance(tool_input, dict):
-                                    analysis_prompt = tool_input.get("prompt", "")
-                                elif isinstance(tool_input, str):
+                                parsed_args = tool_input_buffers[tool_use_id]["parsed"]
+                                raw = tool_input_buffers[tool_use_id]["raw"].strip()
+                                if parsed_args is None and raw:
                                     try:
-                                        import json
-                                        # Clean up the input string
-                                        clean_input = tool_input.strip()
-                                        if clean_input.startswith('{') and clean_input.endswith('}'):
-                                            parsed = json.loads(clean_input)
-                                            if isinstance(parsed, dict):
-                                                analysis_prompt = parsed.get("prompt", "")
-                                        else:
-                                            analysis_prompt = tool_input
-                                    except:
-                                        analysis_prompt = tool_input if len(tool_input) < 200 else ""
-                                
-                                # Only add thinking step if we have a meaningful prompt
-                                if analysis_prompt and len(analysis_prompt) > 10 and not analysis_prompt.startswith('{'):
+                                        # Only attempt parse when raw looks like a full JSON object
+                                        if raw.startswith('{') and raw.endswith('}'):
+                                            parsed_args = json.loads(raw)
+                                            tool_input_buffers[tool_use_id]["parsed"] = parsed_args
+                                    except Exception:
+                                        parsed_args = None
+
+                                if isinstance(parsed_args, dict):
+                                    analysis_prompt = parsed_args.get("prompt", "")
+
+                                # Only once we have a meaningful prompt, mark processed and emit thinking step
+                                if analysis_prompt and len(analysis_prompt) > 10:
+                                    processed_tool_ids.add(tool_use_id)
                                     thinking_step = {
                                         'id': f'step-thinking-{len([s for s in session["steps"] if s.get("icon") == "brain"]) + 1}',
                                         'title': '🧠 Deep Analysis',
@@ -456,8 +900,6 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
                                     }
                                     session['steps'].append(thinking_step)
                                     session['progress'] = min(session['progress'] + 5, 85)
-                                    
-                                    # Add thought for deep analysis starting
                                     thoughts_buffer.append({
                                         'type': 'analyzing',
                                         'content': f'🧠 [Deep Agent] Starting analysis: {analysis_prompt[:200]}',
@@ -517,6 +959,19 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
                                         'timestamp': datetime.now().isoformat()
                                     })
                                     session['thoughts'] = thoughts_buffer[-20:]
+
+                                    # Guardrails: if too many tool calls already, stop to prevent loops
+                                    if total_tool_calls > 40:
+                                        thoughts_buffer.append({
+                                            'type': 'warning',
+                                            'content': '⚠️ Too many tool calls detected; pausing to avoid loops.',
+                                            'timestamp': datetime.now().isoformat()
+                                        })
+                                        session['thoughts'] = thoughts_buffer[-20:]
+                                        session['status'] = 'error'
+                                        session['error'] = 'Too many tool calls; likely rate limit or loop. Please refine query or try later.'
+                                        logger.warning("Aborting research due to excessive tool calls", total_tool_calls=total_tool_calls)
+                                        return
                         elif isinstance(tool_info, str):
                             # Handle string format
                             if "tavily_search" in tool_info:
@@ -559,6 +1014,30 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
                                     'timestamp': datetime.now().isoformat()
                                 })
                                 session['thoughts'] = thoughts_buffer[-20:]
+
+                                # Detect rate limit responses and stop if repeated
+                                # Try different keys where result text may be stored
+                                result_text = (
+                                    tool_result.get('result')
+                                    or tool_result.get('output')
+                                    or tool_result.get('content')
+                                    or ''
+                                )
+                                if isinstance(result_text, dict):
+                                    result_text = json.dumps(result_text)[:200]
+                                if isinstance(result_text, str) and ('429' in result_text or 'rate-limit' in result_text.lower()):
+                                    rate_limit_hits += 1
+                                    logger.warning("Tavily rate limit hit", count=rate_limit_hits)
+                                    if rate_limit_hits >= 3:
+                                        thoughts_buffer.append({
+                                            'type': 'warning',
+                                            'content': '⚠️ Web search rate-limited repeatedly. Pausing research — please try again shortly.',
+                                            'timestamp': datetime.now().isoformat()
+                                        })
+                                        session['thoughts'] = thoughts_buffer[-20:]
+                                        session['status'] = 'error'
+                                        session['error'] = 'Rate limited by search provider (429). Please wait and retry.'
+                                        return
                     
                     # Handle completion
                     elif "complete" in event:
@@ -625,6 +1104,30 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
             session['steps'].append(step3)
             
             # Complete
+            # Add user query and assistant response to history
+            if 'messages' not in session:
+                session['messages'] = []
+            
+            # Add user message if not already there
+            if query and (not session['messages'] or session['messages'][0].get('role') != 'user'):
+                session['messages'].insert(0, {
+                    'role': 'user',
+                    'content': query,
+                    'timestamp': session.get('timestamp', datetime.now().isoformat()),
+                    'mode': 'deep'
+                })
+            
+            # Add final assistant message to history
+            if session.get('content'):
+                session['messages'].append({
+                    'role': 'assistant',
+                    'content': session['content'],
+                    'timestamp': datetime.now().isoformat(),
+                    'sources': session.get('sources', []),
+                    'thoughts': session.get('thoughts', []),
+                    'mode': 'deep'
+                })
+            
             session['status'] = 'completed'
             session['progress'] = 100
             
@@ -655,22 +1158,54 @@ async def start_research(request: ResearchStartRequest, background_tasks: Backgr
     """Start a research session using Strands Agent with real tools"""
     session_id = request.session_id or str(uuid.uuid4())
     
-    # Initialize session
-    research_sessions[session_id] = {
-        'session_id': session_id,
-        'query': request.query,
-        'status': 'initializing',
-        'progress': 0,
-        'steps': [],
-        'content': '',
-        'sources': [],
-        'thoughts': [],  # Initialize thoughts array
-        'timestamp': datetime.now().isoformat(),
-        'error': None,
-        'requires_approval': False,
-        'approval_message': None
-    }
+    # Initialize or reuse session (preserve context on explicit same session_id)
+    if session_id in research_sessions:
+        session = research_sessions[session_id]
+        session['query'] = request.query
+        session['status'] = 'initializing'
+        session['progress'] = 0
+        session['timestamp'] = datetime.now().isoformat()
+        session.setdefault('events', []).append({'type':'phase_start','phase':'new_run','ts': datetime.now().isoformat()})
+        # Clear active content buffer for the new run; prior content remains in UI history
+        session['content'] = ''
+    else:
+        research_sessions[session_id] = {
+            'session_id': session_id,
+            'query': request.query,
+            'status': 'initializing',
+            'progress': 0,
+            'steps': [],
+            'events': [],
+            'content': '',
+            'sources': [],
+            'thoughts': [],  # Initialize thoughts array
+            'timestamp': datetime.now().isoformat(),
+            'error': None,
+            'requires_approval': False,
+            'approval_message': None,
+            'messages': [
+                {
+                    'role': 'user',
+                    'content': request.query,
+                    'timestamp': datetime.now().isoformat(),
+                    'mode': request.mode
+                }
+            ]
+        }
     
+    # Record task in shared state for continuity
+    try:
+        SHARED_STATE.append_task_history(session_id, request.query)
+        SHARED_STATE.set_current_goal(session_id, request.query)
+    except Exception:
+        pass
+    # Emit debug context snapshot
+    try:
+        ctx = SESSION_SERVICE.analyze_session_context(session_id)
+        research_sessions[session_id].setdefault('events', []).append({'type':'debug','subtype':'session_context','data':ctx,'ts': datetime.now().isoformat()})
+        logger.info(f"Session {session_id} context: messages={ctx.get('total_messages')} agents_used={ctx.get('agents_used')}")
+    except Exception:
+        pass
     # Start research in a thread (not using background_tasks to avoid event loop issues)
     perform_strands_research(session_id, request.query, request.require_approval)
     
@@ -682,28 +1217,244 @@ async def start_research(request: ResearchStartRequest, background_tasks: Backgr
         'message': 'Research started successfully'
     }
 
+@router.post("/continue-strands-real")
+async def continue_research(request: ResearchStartRequest):
+    """Continue an existing research session with additional user input.
+
+    Frontend uses this for Deep/Scholar continuation. This re-invokes the
+    research agent for the provided session_id and query while preserving the
+    existing session record. Results are exposed via the status endpoint.
+    """
+    if not request.session_id:
+        raise HTTPException(status_code=400, detail="session_id is required for continuation")
+    
+    session_id = request.session_id
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    # Reset/prepare minimal fields for a new pass while keeping history
+    session = research_sessions[session_id]
+    session['status'] = 'initializing'
+    session['progress'] = 0
+    session['timestamp'] = datetime.now().isoformat()
+    # Do not clear steps/sources to preserve history; frontend presents its own history
+    # Clear active content so the new response doesn't echo the previous one
+    session.setdefault('events', []).append({'type':'phase_start','phase':'new_run','ts': datetime.now().isoformat()})
+    session['error'] = None
+    session['content'] = ''
+    
+    # Append to task history and set goal
+    try:
+        SHARED_STATE.append_task_history(session_id, request.query)
+        SHARED_STATE.set_current_goal(session_id, request.query)
+    except Exception:
+        pass
+    # Emit debug context snapshot
+    try:
+        ctx = SESSION_SERVICE.analyze_session_context(session_id)
+        research_sessions[session_id].setdefault('events', []).append({'type':'debug','subtype':'session_context','data':ctx,'ts': datetime.now().isoformat()})
+        logger.info(f"[CONTINUE] Session {session_id} context: messages={ctx.get('total_messages')} agents_used={ctx.get('agents_used')}")
+    except Exception:
+        pass
+    # Kick off another research pass without approval by default unless specified
+    perform_strands_research(session_id, request.query, request.require_approval or False)
+
+    return {
+        'session_id': session_id,
+        'status': 'continued',
+        'message': 'Research continuation started successfully'
+    }
+
 @router.get("/status-strands-real/{session_id}")
 async def get_research_status(session_id: str):
     """Get current status of Strands research session"""
+    # Handle double session_ prefix issue
+    clean_session_id = session_id
+    if session_id.startswith("session_session_"):
+        clean_session_id = session_id.replace("session_session_", "session_")
+    
+    if clean_session_id not in research_sessions:
+        # Try to load from Strands persistent storage
+        try:
+            session_data = await SESSION_SERVICE.load_session_data(clean_session_id)
+            if session_data:
+                research_sessions[clean_session_id] = session_data
+                logger.info(f"Loaded session {clean_session_id} from persistent storage")
+            else:
+                logger.warning(f"Session {clean_session_id} not found in storage")
+                raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+        except Exception as e:
+            logger.error(f"Error loading session {clean_session_id}: {e}")
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    
+    session = research_sessions[clean_session_id]
+    
+    # Get message history if available
+    messages = session.get('messages', [])
+    if not messages:
+        # Try to load from Strands if not in memory
+        messages = SESSION_SERVICE.get_session_messages(clean_session_id)
+        if messages:
+            session['messages'] = messages
+    
+    # Build response with messages
+    response_dict = {
+        "session_id": session_id,  # Keep original for frontend consistency
+        "status": session['status'],
+        "progress": session['progress'],
+        "steps": session['steps'],
+        "content": session['content'],
+        "sources": session['sources'],
+        "thoughts": session.get('thoughts', []),
+        "timestamp": session['timestamp'],
+        "error": session.get('error'),
+        "requires_approval": session.get('requires_approval', False),
+        "approval_message": session.get('approval_message'),
+        "messages": messages
+    }
+    
+    return response_dict
+
+@router.delete("/clear-all-sessions")
+async def clear_all_sessions():
+    """Clear all research sessions from memory and disk"""
+    global research_sessions
+    
+    try:
+        # Clear in-memory sessions
+        research_sessions.clear()
+        
+        # Clear Strands sessions
+        import shutil
+        from pathlib import Path
+        
+        strands_path = Path("./strands_sessions")
+        if strands_path.exists():
+            for session_dir in strands_path.glob("session_*"):
+                if session_dir.is_dir():
+                    shutil.rmtree(session_dir)
+        
+        # Clear other session directories
+        sessions_path = Path("./sessions")
+        if sessions_path.exists():
+            for session_file in sessions_path.glob("*"):
+                if session_file.is_file():
+                    session_file.unlink()
+        
+        research_sessions_path = Path("./research_sessions")
+        if research_sessions_path.exists():
+            for session_file in research_sessions_path.glob("*"):
+                if session_file.is_file():
+                    session_file.unlink()
+        
+        logger.info("Cleared all sessions")
+        return {"message": "All sessions cleared successfully"}
+        
+    except Exception as e:
+        logger.error(f"Failed to clear sessions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear sessions: {str(e)}")
+
+@router.get("/stream-strands-real/{session_id}")
+async def stream_research(session_id: str):
+    """Server-Sent Events stream for research session.
+    Emits periodic JSON snapshots to drive live UI without polling.
+    """
     if session_id not in research_sessions:
-        logger.warning(f"Session {session_id} not found")
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-    
+
+    async def event_gen():
+        last_serialized = None
+        while True:
+            session = research_sessions.get(session_id)
+            if not session:
+                break
+            payload = {
+                'session_id': session_id,
+                'status': session.get('status'),
+                'progress': session.get('progress'),
+                'steps': session.get('steps', []),
+                'content': session.get('content', ''),
+                'sources': session.get('sources', []),
+                'thoughts': session.get('thoughts', []),
+                'timestamp': session.get('timestamp'),
+                'error': session.get('error')
+            }
+            import json
+            data_str = json.dumps(payload, ensure_ascii=False)
+            # Send only if changed or every 1s
+            if data_str != last_serialized:
+                yield f"data: {data_str}\n\n"
+                last_serialized = data_str
+            # Stop when session completes or errors
+            if session.get('status') in ('completed', 'error', 'cancelled'):
+                break
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(event_gen(), media_type='text/event-stream')
+
+@router.get("/stream-events-strands-real/{session_id}")
+async def stream_research_events(session_id: str):
+    """Typed SSE event stream for research session (phase/tool/content/sources).
+    Sends heartbeat events if no new events are available to keep the connection alive.
+    """
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    async def event_gen():
+        last_idx = 0
+        while True:
+            session = research_sessions.get(session_id)
+            if not session:
+                break
+            events = session.get('events', [])
+            # Flush any pending events
+            flushed = False
+            while last_idx < len(events):
+                import json
+                evt = events[last_idx]
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                last_idx += 1
+                flushed = True
+            if not flushed:
+                # Heartbeat to keep the stream alive
+                yield "data: {\"type\":\"heartbeat\"}\n\n"
+            # Stop when complete and nothing left to flush
+            if session.get('status') in ('completed', 'error', 'cancelled') and last_idx >= len(events):
+                break
+            await asyncio.sleep(1.0)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_gen(), media_type='text/event-stream', headers=headers)
+
+@router.post("/verify-strands-real/{session_id}")
+async def verify_research(session_id: str):
+    """Run verification on demand for an existing session (no streaming)."""
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
     session = research_sessions[session_id]
-    
-    return ResearchStatusResponse(
-        session_id=session_id,
-        status=session['status'],
-        progress=session['progress'],
-        steps=session['steps'],
-        content=session['content'],
-        sources=session['sources'],
-        thoughts=session.get('thoughts', []),
-        timestamp=session['timestamp'],
-        error=session.get('error'),
-        requires_approval=session.get('requires_approval', False),
-        approval_message=session.get('approval_message')
-    )
+    content = session.get('content', '') or ''
+    sources = session.get('sources', []) or []
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="No final content available to verify yet")
+
+    try:
+        import json as _json
+        verifier_raw = research_verifier(content=content, sources=sources)
+        verification = _json.loads(verifier_raw) if isinstance(verifier_raw, str) else verifier_raw
+    except Exception as e:
+        verification = {"weak_citations":[],"missing_citations":[],"notes":[f"verifier error: {e}"],"flagged_urls":[]}
+
+    session['verification'] = verification
+    # Also push an event for any live listeners
+    events = session.setdefault('events', [])
+    events.append({'type': 'verify_result', 'data': verification, 'ts': datetime.now().isoformat()})
+
+    return {"status": "ok", "verification": verification}
 
 @router.post("/approve/{session_id}")
 async def approve_research(session_id: str, approval: Dict[str, Any], background_tasks: BackgroundTasks):
@@ -722,14 +1473,15 @@ async def approve_research(session_id: str, approval: Dict[str, Any], background
         original_query = session.get('query', '')
         enhanced_query = f"{original_query}. Additional user request: {user_input}"
         
-        # Clear session for fresh restart
+        # Prepare session for continuation while preserving context
         session['query'] = enhanced_query
         session['approval_message'] = None
         session['status'] = 'running'
-        session['steps'] = []  # Clear old steps
-        session['content'] = ''  # Clear old content
-        session['sources'] = []  # Clear old sources
+        # Keep steps and sources for continuity; add a boundary event
+        session.setdefault('events', []).append({'type':'phase_start','phase':'new_run','ts': datetime.now().isoformat()})
         session['progress'] = 0
+        # Clear active content buffer to avoid echo
+        session['content'] = ''
         
         # Restart research with enhanced query (directly, not using background_tasks)
         perform_strands_research(session_id, enhanced_query, False)  # Don't ask for approval again
@@ -768,4 +1520,24 @@ async def health_check():
             'openai': bool(os.getenv('OPENAI_API_KEY')),
             'tavily': bool(os.getenv('TAVILY_API_KEY'))
         }
+    }
+
+@router.get("/session-debug-strands-real/{session_id}")
+async def session_debug(session_id: str):
+    """Return a quick debug snapshot to verify session reuse and context."""
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    sess = research_sessions[session_id]
+    try:
+        ctx = SESSION_SERVICE.analyze_session_context(session_id)
+    except Exception:
+        ctx = {"session_id": session_id, "error": "analyze_failed"}
+    return {
+        "session_id": session_id,
+        "status": sess.get('status'),
+        "steps_count": len(sess.get('steps', [])),
+        "sources_count": len(sess.get('sources', [])),
+        "events_count": len(sess.get('events', [])),
+        "content_len": len(sess.get('content', '') or ''),
+        "strands": ctx,
     }

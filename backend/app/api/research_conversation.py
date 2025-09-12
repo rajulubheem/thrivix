@@ -10,8 +10,7 @@ import logging
 from datetime import datetime
 from strands import Agent
 from strands.models.openai import OpenAIModel
-from strands.session.file_session_manager import FileSessionManager
-from strands.agent.conversation_manager import SlidingWindowConversationManager
+from app.services.strands_session_service import StrandsSessionService
 from app.tools.tavily_search_tool import tavily_search, get_all_search_results, clear_search_results
 from app.tools.use_llm_wrapper import use_llm_fixed
 from app.tools.simple_browser_tool import (
@@ -42,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Store active conversation sessions
 conversation_sessions: Dict[str, Dict[str, Any]] = {}
+SESSION_SERVICE = StrandsSessionService()
 
 # Directory for storing session data
 SESSIONS_DIR = Path("./research_sessions")
@@ -246,27 +246,13 @@ CRITICAL:
 - ALWAYS cite sources with [1], [2] format
 - Close browser session when done"""
 
-            # Always use FileSessionManager for persistence across server restarts
-            # Create session manager with unique session ID
-            session_manager = FileSessionManager(
+            # Create session-managed agent (shared session + conversation managers)
+            research_agent = SESSION_SERVICE.create_agent_with_session(
                 session_id=session_id,
-                storage_dir="./research_sessions"  # Store sessions locally
-            )
-            
-            # Create conversation manager to handle context
-            conversation_manager = SlidingWindowConversationManager(
-                window_size=50,  # Keep last 50 messages
-                should_truncate_results=True
-            )
-            
-            # Create agent with proper session management
-            # The FileSessionManager will automatically restore previous conversation
-            research_agent = Agent(
-                model=openai_model,
+                agent_name=f"conv_{session_mode}",
                 tools=tools,
                 system_prompt=system_prompt,
-                session_manager=session_manager,  # Use Strands' session management
-                conversation_manager=conversation_manager  # Use Strands' conversation management
+                model_config={"model_id": model_id, **model_params}
             )
             
             # The agent will automatically restore its state from the session if it exists

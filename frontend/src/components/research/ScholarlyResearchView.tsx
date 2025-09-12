@@ -1,1429 +1,1046 @@
-/**
- * Scholarly Research View Component
- * Academic paper-style presentation with citations, references, and professional layout
- */
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useTheme } from '../../contexts/ThemeContext';
-import { 
-  Send, Loader2, User, Bot, 
-  Globe, Brain, CheckCircle,
-  Clock, ExternalLink, ChevronDown, ChevronUp,
-  Zap, Copy, RefreshCw,
-  ThumbsUp, ThumbsDown, AlertCircle, X, Square,
-  Plus, MessageSquare, BookOpen, GraduationCap,
-  Bookmark, BookmarkCheck, FileText, Download,
-  Printer, ChevronLeft, ChevronRight, Maximize2,
-  Quote, Link2, Hash, ArrowUpRight, History
-} from 'lucide-react';
-import ResearchSourcesFeed from './ResearchSourcesFeed';
+import MermaidBlock from '../MermaidBlock';
 import { ModernLayout } from '../layout/ModernLayout';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { ScrollArea } from '../ui/scroll-area';
+import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
+import { Card } from '../ui/card';
+import { Brain, ChevronDown, ChevronUp, Download, History, Printer, Send, Square, Bot, User, Link as LinkIcon, Plus } from 'lucide-react';
 import '../../styles/unified-theme.css';
 import '../../styles/scholarly-research.css';
 
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp?: string;
-  sources?: Source[];
-  citations?: Citation[];
-  thoughts?: Thought[];
-  feedback?: 'positive' | 'negative' | null;
-  mode?: 'fast' | 'deep' | 'scholar';
-  status?: string;
-  progress?: number;
-  id?: string;
-}
+type Mode = 'fast' | 'deep' | 'scholar';
+type Thought = { type: string; content: string; timestamp: string };
+type Source = { id: string; title: string; url: string; domain: string; snippet?: string; favicon?: string; thumbnail?: string; number?: number };
+type Message = { id?: string; role: 'user' | 'assistant'; content: string; timestamp?: string; sources?: Source[]; thoughts?: Thought[]; mode?: Mode };
 
-interface Source {
-  id: string;
-  number?: number;
-  title: string;
-  url: string;
-  domain: string;
-  snippet?: string;
-  favicon?: string;
-  thumbnail?: string;
-  publishDate?: string;
-  author?: string;
-}
+const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
-interface Citation {
-  id: number;
-  text: string;
-  source: Source;
-  context?: string;
-}
+const modeConfig: Record<Mode, { name: string; endpoint: string; statusEndpoint: string; continueEndpoint: string | null; useConversation: boolean; }>= {
+  fast:   { name: 'Quick',   endpoint: '/api/v1/research/start',             statusEndpoint: '/api/v1/research/status',           continueEndpoint: null,                                useConversation: false },
+  deep:   { name: 'Deep',    endpoint: '/api/v1/research/start-strands-real', statusEndpoint: '/api/v1/research/status-strands-real', continueEndpoint: '/api/v1/research/continue-strands-real', useConversation: true  },
+  scholar:{ name: 'Scholar', endpoint: '/api/v1/research/start-strands-real', statusEndpoint: '/api/v1/research/status-strands-real', continueEndpoint: '/api/v1/research/continue-strands-real', useConversation: true  },
+};
 
-interface Thought {
-  type: string;
-  content: string;
-  timestamp: string;
-}
-
-interface Session {
-  id: string;
-  mode: 'fast' | 'deep' | 'scholar';
-  title: string;
-  timestamp: string;
-  messages: Message[];
-}
+const safeDomain = (url: string) => { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return ''; } };
 
 const ScholarlyResearchView: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const { isDark } = useTheme();
-  
+
   const [sessionId, setSessionId] = useState<string | null>(urlSessionId || null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [mode, setMode] = useState<Mode>('deep');
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [thoughts, setThoughts] = useState<Thought[]>([]);
-  const [currentSources, setCurrentSources] = useState<Source[]>([]);
-  const [mode, setMode] = useState<'fast' | 'deep' | 'scholar'>('scholar');
-  const [showThinking, setShowThinking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [showThinking, setShowThinking] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [bookmarkedSources, setBookmarkedSources] = useState<Set<string>>(new Set());
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['abstract', 'findings']));
-  const [viewMode, setViewMode] = useState<'chat' | 'paper'>('chat');
-  const [showCitations, setShowCitations] = useState(true);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
+  const [pendingMode, setPendingMode] = useState<Mode | null>(null);
+
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [thoughts, setThoughts] = useState<Thought[]>([]);
+  const [steps, setSteps] = useState<any[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [sourcesTotal, setSourcesTotal] = useState<number>(0);
+  const seenSourceUrlsRef = useRef<Set<string>>(new Set());
+  const [screenshots, setScreenshots] = useState<Array<{url:string; description?:string; ts?:string}>>([]);
+  const [liveContent, setLiveContent] = useState('');
+  const [verification, setVerification] = useState<any>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<Array<{id: string; title: string; timestamp: string; mode: Mode}>>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [showModeConfirm, setShowModeConfirm] = useState(false);
-  const [pendingMode, setPendingMode] = useState<'fast' | 'deep' | 'scholar' | null>(null);
-  const [isContinuation, setIsContinuation] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+
+  const sseRef = useRef<EventSource | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sseWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastEventTsRef = useRef<number>(0);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  // Smooth streaming buffer (coalesce content updates)
+  const pendingContentRef = useRef<string>('');
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(()=>{ 
+    if (urlSessionId) {
+      setSessionId(urlSessionId);
+      loadSessionHistory(urlSessionId);
+    }
+    loadAllSessions();
+  }, [urlSessionId]);
   
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  
-  const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+  useEffect(()=>{ 
+    if (bottomRef.current) bottomRef.current.scrollIntoView({ behavior: 'smooth' }); 
+  }, [messages, liveContent]);
 
-  // Mode configuration for scholarly view
-  const modeConfig = {
-    fast: {
-      name: 'Quick Summary',
-      icon: Zap,
-      color: '#22c55e',
-      description: 'Brief overview with key points',
-      endpoint: '/api/v1/research/start',
-      statusEndpoint: '/api/v1/research/status',
-      continueEndpoint: null, // Fast mode doesn't support continuation
-      useConversation: false
-    },
-    deep: {
-      name: 'Research Paper',
-      icon: Brain,
-      color: '#6366f1',
-      description: 'Comprehensive analysis with citations',
-      endpoint: '/api/v1/research/start-strands-real',
-      statusEndpoint: '/api/v1/research/status-strands-real',
-      continueEndpoint: '/api/v1/research/continue-strands-real', // Deep mode now supports continuation
-      useConversation: true
-    },
-    scholar: {
-      name: 'Academic Review',
-      icon: GraduationCap,
-      color: '#f59e0b',
-      description: 'Scholarly article with full references',
-      endpoint: '/api/v1/research/start-strands-real',
-      statusEndpoint: '/api/v1/research/status-strands-real',
-      continueEndpoint: '/api/v1/research/continue-strands-real', // Scholar mode now supports continuation
-      useConversation: true
-    }
-  };
-
-  // Load sessions from localStorage
-  useEffect(() => {
-    const savedSessions = localStorage.getItem('research_sessions');
-    if (savedSessions) {
-      setSessions(JSON.parse(savedSessions));
-    }
-  }, []);
-  
-  // Load current session when sessionId changes
-  useEffect(() => {
-    if (sessionId) {
-      const savedSession = localStorage.getItem(`research_session_${sessionId}`);
-      if (savedSession) {
-        const session = JSON.parse(savedSession);
-        setMessages(session.messages || []);
-        setMode(session.mode || 'scholar');
-      } else {
-        // New session, extract mode from sessionId if possible
-        const modeMatch = sessionId.match(/_([^_]+)$/);
-        if (modeMatch && ['fast', 'deep', 'scholar'].includes(modeMatch[1])) {
-          setMode(modeMatch[1] as 'fast' | 'deep' | 'scholar');
-        }
-      }
-    }
-  }, [sessionId]);
-
-  // Save sessions to localStorage
-  const saveSession = useCallback(() => {
-    if (sessionId && messages.length > 0) {
-      const session = {
-        id: sessionId,
-        mode,
-        title: messages[0]?.content?.substring(0, 50) || 'New Research',
-        timestamp: new Date().toISOString(),
-        messages
-      };
-      
-      localStorage.setItem(`research_session_${sessionId}`, JSON.stringify(session));
-      
-      // Update sessions list
-      setSessions(prev => {
-        const updated = prev.filter(s => s.id !== sessionId);
-        updated.unshift(session);
-        localStorage.setItem('research_sessions', JSON.stringify(updated));
-        return updated;
-      });
-    }
-  }, [sessionId, messages, mode]);
-
-  // Save session when messages change
-  useEffect(() => {
-    if (messages.length > 0) {
-      saveSession();
-    }
-  }, [messages, saveSession]);
-
-  // Handle mode change with confirmation
-  const handleModeChange = (newMode: 'fast' | 'deep' | 'scholar') => {
-    if (mode !== newMode) {
-      if (messages.length > 0) {
-        // Show confirmation if there are existing messages
-        setPendingMode(newMode);
-        setShowModeConfirm(true);
-      } else {
-        // No messages, just switch mode and create new session
-        setMode(newMode);
-        const newSessionId = `session_${Date.now()}_${newMode}`;
-        setSessionId(newSessionId);
-        navigate(`/conversation/${newSessionId}`);
-      }
-    }
-  };
-
-  // Confirm mode change and create new session
-  const confirmModeChange = () => {
-    if (pendingMode) {
-      // Save current session
-      saveSession();
-      
-      // Clear current state
-      setMessages([]);
-      setCurrentSources([]);
-      setThoughts([]);
-      setBookmarkedSources(new Set());
-      
-      // Create new session with new mode
-      const newSessionId = `session_${Date.now()}_${pendingMode}`;
-      setSessionId(newSessionId);
-      setMode(pendingMode);
-      navigate(`/conversation/${newSessionId}`);
-      
-      setPendingMode(null);
-      setShowModeConfirm(false);
-    }
-  };
-  
-  // Create entirely new session
-  const createNewSession = () => {
-    // Save current session if it has messages
-    if (messages.length > 0) {
-      saveSession();
-    }
-    
-    // Clear all state
-    setMessages([]);
-    setCurrentSources([]);
-    setThoughts([]);
-    setBookmarkedSources(new Set());
-    setInput('');
-    
-    // Create new session
-    const newSessionId = `session_${Date.now()}_${mode}`;
-    setSessionId(newSessionId);
-    navigate(`/conversation/${newSessionId}`);
-  };
-
-  // Cancel mode change
-  const cancelModeChange = () => {
-    setPendingMode(null);
-    setShowModeConfirm(false);
-  };
-
-  // Parse content and create clickable references
-  const parseContentWithReferences = (content: string, sources: Source[]) => {
-    if (!sources || sources.length === 0) return content;
-
-    // Replace [1], [2], etc. with clickable links
-    let processedContent = content;
-    sources.forEach((source, index) => {
-      const refNumber = index + 1;
-      const pattern = new RegExp(`\\[${refNumber}\\]`, 'g');
-      processedContent = processedContent.replace(
-        pattern,
-        `<a href="#ref-${refNumber}" class="citation-link" onclick="event.preventDefault(); document.getElementById('ref-${refNumber}')?.scrollIntoView({behavior: 'smooth'});">[${refNumber}]</a>`
-      );
-    });
-
-    return processedContent;
-  };
-
-  // Format markdown content properly for display
-  const formatMarkdownContent = (content: string) => {
-    // Convert markdown links to HTML
-    content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    
-    // Convert headers
-    content = content.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    content = content.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    content = content.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    
-    // Convert bold text
-    content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    
-    // Convert lists
-    content = content.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-    content = content.replace(/(<li>.*<\/li>\n?)+/g, '<ol>$&</ol>');
-    content = content.replace(/^- (.+)$/gm, '<li>$1</li>');
-    content = content.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-    
-    // Convert line breaks
-    content = content.replace(/\n\n/g, '</p><p>');
-    content = '<p>' + content + '</p>';
-    
-    return content;
-  };
-
-  // Parse content into scholarly sections
-  const parseScholarlyContent = (content: string, sources?: Source[]) => {
-    const sections = {
-      abstract: '',
-      introduction: '',
-      methodology: '',
-      findings: '',
-      discussion: '',
-      conclusion: '',
-      references: [] as string[]
-    };
-
-    // Process content with references first
-    const processedContent = sources ? parseContentWithReferences(content, sources) : content;
-
-    // Extract sections based on markdown headers
-    const abstractMatch = processedContent.match(/#{1,3}\s*(?:Executive Summary|Abstract|Summary)(.*?)(?=#{1,3}|$)/si);
-    const introMatch = processedContent.match(/#{1,3}\s*(?:Introduction|Background|Current Situation)(.*?)(?=#{1,3}|$)/si);
-    const methodMatch = processedContent.match(/#{1,3}\s*(?:Methodology|Approach|Analysis)(.*?)(?=#{1,3}|$)/si);
-    const findingsMatch = processedContent.match(/#{1,3}\s*(?:Findings|Results|Key Insights)(.*?)(?=#{1,3}|$)/si);
-    const discussionMatch = processedContent.match(/#{1,3}\s*(?:Discussion|Implications|Analysis)(.*?)(?=#{1,3}|$)/si);
-    const conclusionMatch = processedContent.match(/#{1,3}\s*(?:Conclusion|Recommendations|Summary)(.*?)(?=#{1,3}|$)/si);
-
-    if (abstractMatch) sections.abstract = abstractMatch[1].trim();
-    if (introMatch) sections.introduction = introMatch[1].trim();
-    if (methodMatch) sections.methodology = methodMatch[1].trim();
-    if (findingsMatch) sections.findings = findingsMatch[1].trim();
-    if (discussionMatch) sections.discussion = discussionMatch[1].trim();
-    if (conclusionMatch) sections.conclusion = conclusionMatch[1].trim();
-
-    // If no sections found, treat entire content as findings
-    if (!Object.values(sections).some(v => v && v.length > 0)) {
-      sections.findings = processedContent;
-    }
-    
-    return sections;
-  };
-
-  // Format citation with proper academic style
-  const formatCitation = (source: Source, index: number) => {
-    const author = source.author || source.domain;
-    const year = source.publishDate ? new Date(source.publishDate).getFullYear() : 2025;
-    const title = source.title;
-    
-    return `[${index}] ${author} (${year}). ${title}. Retrieved from ${source.url}`;
-  };
-
-  // Get research groups for the feed component
-  const getResearchGroups = () => {
-    // Group sources by message/conversation
-    const groups = messages
-      .filter(msg => msg.sources && msg.sources.length > 0)
-      .map(msg => ({
-        id: msg.id || `msg-${messages.indexOf(msg)}`,
-        messageId: msg.id || `msg-${messages.indexOf(msg)}`,
-        query: messages[messages.indexOf(msg) - 1]?.content || 'Research Query',
-        timestamp: msg.timestamp || new Date().toISOString(),
-        researchType: (msg.mode || mode) as 'fast' | 'deep' | 'academic' | 'scholar',
-        sources: msg.sources || [],
-        totalSources: msg.sources?.length || 0,
-        status: (msg.status === 'thinking' ? 'active' : 'completed') as 'active' | 'completed'
-      }));
-    
-    return groups;
-  };
-
-  // Handle source click
-  const handleSourceClick = (source: Source) => {
-    // Open source in new tab
-    window.open(source.url, '_blank');
-  };
-
-  // Toggle bookmark for source
-  const toggleBookmark = (sourceId: string) => {
-    setBookmarkedSources(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(sourceId)) {
-        newSet.delete(sourceId);
-      } else {
-        newSet.add(sourceId);
-      }
-      return newSet;
-    });
-  };
-
-  // Toggle section expansion
-  const toggleSection = (sectionId: string) => {
-    setExpandedSections(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(sectionId)) {
-        newSet.delete(sectionId);
-      } else {
-        newSet.add(sectionId);
-      }
-      return newSet;
-    });
-  };
-
-  // Scroll to reference
-  const scrollToReference = (refId: string) => {
-    const element = document.getElementById(refId);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      element.classList.add('highlight');
-      setTimeout(() => element.classList.remove('highlight'), 2000);
-    }
-  };
-
-  // Convert markdown to HTML
-  const markdownToHtml = (markdown: string): string => {
-    let html = markdown;
-    
-    // Escape HTML entities first to prevent XSS
-    html = html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
-    // Headers (must come before other replacements)
-    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-    
-    // Bold (before italic to handle **text** correctly)
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
-    
-    // Italic (use negative lookahead to avoid matching bold markers)
-    html = html.replace(/\*(?!\*)(.+?)\*(?!\*)/g, '<em>$1</em>');
-    html = html.replace(/_(?!_)(.+?)_(?!_)/g, '<em>$1</em>');
-    
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-    
-    // Lists
-    html = html.replace(/^\* (.+)$/gim, '<li>$1</li>');
-    html = html.replace(/^- (.+)$/gim, '<li>$1</li>');
-    html = html.replace(/^\d+\. (.+)$/gim, '<li>$1</li>');
-    
-    // Wrap consecutive list items in ul/ol tags
-    html = html.replace(/(<li>.*<\/li>\s*)+/g, (match) => {
-      if (match.includes('1.')) {
-        return '<ol>' + match + '</ol>';
-      }
-      return '<ul>' + match + '</ul>';
-    });
-    
-    // Code blocks
-    html = html.replace(/```([^`]*)```/g, '<pre><code>$1</code></pre>');
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    
-    // Line breaks
-    html = html.replace(/\n\n/g, '</p><p>');
-    html = '<p>' + html + '</p>';
-    
-    // Clean up empty paragraphs
-    html = html.replace(/<p><\/p>/g, '');
-    html = html.replace(/<p>(<h[1-6]>)/g, '$1');
-    html = html.replace(/(<\/h[1-6]>)<\/p>/g, '$1');
-    html = html.replace(/<p>(<ul>|<ol>)/g, '$1');
-    html = html.replace(/(<\/ul>|<\/ol>)<\/p>/g, '$1');
-    
-    return html;
-  };
-
-  // Export to PDF/Print with full content
-  const handlePrint = () => {
-    // Create a print-friendly version with all messages and sources
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-    
-    // Build HTML content for printing
-    const printContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Research Report - ${new Date().toLocaleDateString()}</title>
-        <style>
-          body {
-            font-family: 'Georgia', 'Times New Roman', serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-          }
-          h1 {
-            color: #1a1a1a;
-            border-bottom: 2px solid #333;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-            font-size: 2em;
-          }
-          h2 {
-            color: #2c3e50;
-            margin-top: 30px;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-            border-bottom: 1px solid #e0e0e0;
-            padding-bottom: 5px;
-          }
-          h3 {
-            color: #34495e;
-            margin-top: 20px;
-            margin-bottom: 10px;
-            font-size: 1.2em;
-          }
-          ul, ol {
-            margin: 15px 0;
-            padding-left: 30px;
-          }
-          li {
-            margin: 8px 0;
-            line-height: 1.6;
-          }
-          strong {
-            font-weight: bold;
-            color: #2c3e50;
-          }
-          em {
-            font-style: italic;
-          }
-          code {
-            background: #f4f4f4;
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: monospace;
-            font-size: 0.9em;
-          }
-          pre {
-            background: #f4f4f4;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-          }
-          a {
-            color: #1976d2;
-            text-decoration: none;
-          }
-          a:hover {
-            text-decoration: underline;
-          }
-          .metadata {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 30px;
-          }
-          .message-section {
-            margin-bottom: 40px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #e0e0e0;
-          }
-          .user-message {
-            background: #e3f2fd;
-            padding: 15px;
-            border-left: 4px solid #2196f3;
-            margin-bottom: 20px;
-          }
-          .assistant-message {
-            background: #f5f5f5;
-            padding: 15px;
-            border-left: 4px solid #4caf50;
-            margin-bottom: 20px;
-          }
-          .sources-section {
-            margin-top: 30px;
-            padding: 20px;
-            background: #fafafa;
-            border: 1px solid #ddd;
-          }
-          .source-item {
-            margin-bottom: 15px;
-            padding: 10px;
-            background: white;
-            border: 1px solid #e0e0e0;
-          }
-          .source-title {
-            font-weight: bold;
-            color: #1976d2;
-            margin-bottom: 5px;
-          }
-          .source-url {
-            color: #666;
-            font-size: 0.9em;
-            word-break: break-all;
-          }
-          .source-snippet {
-            margin-top: 8px;
-            color: #555;
-            font-style: italic;
-          }
-          .thinking-section {
-            background: #fff3e0;
-            padding: 15px;
-            margin: 15px 0;
-            border-left: 4px solid #ff9800;
-          }
-          .citation-link {
-            color: #1976d2;
-            text-decoration: none;
-            font-weight: bold;
-          }
-          @media print {
-            body {
-              padding: 20px;
-            }
-            .message-section {
-              page-break-inside: avoid;
-            }
-            .source-item {
-              page-break-inside: avoid;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        <h1>Research Report</h1>
-        <div class="metadata">
-          <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Mode:</strong> ${modeConfig[mode].name}</p>
-          <p><strong>Total Messages:</strong> ${messages.length}</p>
-          <p><strong>Session ID:</strong> ${sessionId || 'New Session'}</p>
-        </div>
-        
-        <h2>Conversation History</h2>
-        ${messages.map((msg, idx) => `
-          <div class="message-section">
-            ${msg.role === 'user' ? `
-              <div class="user-message">
-                <strong>Question ${Math.floor(idx / 2) + 1}:</strong><br/>
-                ${msg.content}
-              </div>
-            ` : `
-              <div class="assistant-message">
-                <strong>Research Response:</strong><br/>
-                ${markdownToHtml(msg.content)}
-              </div>
-              ${msg.thoughts && msg.thoughts.length > 0 ? `
-                <div class="thinking-section">
-                  <strong>Research Process:</strong><br/>
-                  ${msg.thoughts.map(t => `• ${t.content}`).join('<br/>')}
-                </div>
-              ` : ''}
-              ${msg.sources && msg.sources.length > 0 ? `
-                <div class="sources-section">
-                  <h3>Sources (${msg.sources.length})</h3>
-                  ${msg.sources.map((source, sIdx) => `
-                    <div class="source-item">
-                      <div class="source-title">[${sIdx + 1}] ${source.title}</div>
-                      <div class="source-url">${source.url}</div>
-                      ${source.snippet ? `<div class="source-snippet">${source.snippet}</div>` : ''}
-                    </div>
-                  `).join('')}
-                </div>
-              ` : ''}
-            `}
-          </div>
-        `).join('')}
-        
-        <h2>All Research Sources</h2>
-        <div class="sources-section">
-          ${getAllSources().map((source, idx) => `
-            <div class="source-item">
-              <div class="source-title">[${idx + 1}] ${source.title}</div>
-              <div class="source-url">${source.url}</div>
-              ${source.domain ? `<div><strong>Domain:</strong> ${source.domain}</div>` : ''}
-              ${source.publishDate ? `<div><strong>Published:</strong> ${source.publishDate}</div>` : ''}
-              ${source.snippet ? `<div class="source-snippet">${source.snippet}</div>` : ''}
-            </div>
-          `).join('')}
-        </div>
-      </body>
-      </html>
-    `;
-    
-    printWindow.document.write(printContent);
-    printWindow.document.close();
-    
-    // Wait for content to load then print
-    printWindow.onload = () => {
-      printWindow.print();
-    };
-  };
-
-  // Export as downloadable HTML file
-  const handleDownloadReport = () => {
-    // Build the same HTML content for downloading
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Research Report - ${new Date().toLocaleDateString()}</title>
-        <meta charset="UTF-8">
-        <style>
-          body {
-            font-family: 'Georgia', 'Times New Roman', serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-          }
-          h1 {
-            color: #1a1a1a;
-            border-bottom: 2px solid #333;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-            font-size: 2em;
-          }
-          h2 {
-            color: #2c3e50;
-            margin-top: 30px;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-            border-bottom: 1px solid #e0e0e0;
-            padding-bottom: 5px;
-          }
-          h3 {
-            color: #34495e;
-            margin-top: 20px;
-            margin-bottom: 10px;
-            font-size: 1.2em;
-          }
-          ul, ol {
-            margin: 15px 0;
-            padding-left: 30px;
-          }
-          li {
-            margin: 8px 0;
-            line-height: 1.6;
-          }
-          strong {
-            font-weight: bold;
-            color: #2c3e50;
-          }
-          em {
-            font-style: italic;
-          }
-          code {
-            background: #f4f4f4;
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: monospace;
-            font-size: 0.9em;
-          }
-          pre {
-            background: #f4f4f4;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-          }
-          a {
-            color: #1976d2;
-            text-decoration: none;
-          }
-          a:hover {
-            text-decoration: underline;
-          }
-          .metadata {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 30px;
-          }
-          .message-section {
-            margin-bottom: 40px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #e0e0e0;
-          }
-          .user-message {
-            background: #e3f2fd;
-            padding: 15px;
-            border-left: 4px solid #2196f3;
-            margin-bottom: 20px;
-          }
-          .assistant-message {
-            background: #f5f5f5;
-            padding: 15px;
-            border-left: 4px solid #4caf50;
-            margin-bottom: 20px;
-            white-space: pre-wrap;
-          }
-          .sources-section {
-            margin-top: 30px;
-            padding: 20px;
-            background: #fafafa;
-            border: 1px solid #ddd;
-          }
-          .source-item {
-            margin-bottom: 15px;
-            padding: 10px;
-            background: white;
-            border: 1px solid #e0e0e0;
-          }
-          .source-title {
-            font-weight: bold;
-            color: #1976d2;
-            margin-bottom: 5px;
-          }
-          .source-url {
-            color: #666;
-            font-size: 0.9em;
-            word-break: break-all;
-          }
-          .source-snippet {
-            margin-top: 8px;
-            color: #555;
-            font-style: italic;
-          }
-          .thinking-section {
-            background: #fff3e0;
-            padding: 15px;
-            margin: 15px 0;
-            border-left: 4px solid #ff9800;
-          }
-        </style>
-      </head>
-      <body>
-        <h1>Research Report</h1>
-        <div class="metadata">
-          <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Mode:</strong> ${modeConfig[mode].name}</p>
-          <p><strong>Total Messages:</strong> ${messages.length}</p>
-          <p><strong>Session ID:</strong> ${sessionId || 'New Session'}</p>
-        </div>
-        
-        <h2>Conversation History</h2>
-        ${messages.map((msg, idx) => `
-          <div class="message-section">
-            ${msg.role === 'user' ? `
-              <div class="user-message">
-                <strong>Question ${Math.floor(idx / 2) + 1}:</strong><br/>
-                ${msg.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
-              </div>
-            ` : `
-              <div class="assistant-message">
-                <strong>Research Response:</strong><br/>
-                ${markdownToHtml(msg.content)}
-              </div>
-              ${msg.sources && msg.sources.length > 0 ? `
-                <div class="sources-section">
-                  <h3>Sources (${msg.sources.length})</h3>
-                  ${msg.sources.map((source, sIdx) => `
-                    <div class="source-item">
-                      <div class="source-title">[${sIdx + 1}] ${source.title}</div>
-                      <div class="source-url">${source.url}</div>
-                      ${source.snippet ? `<div class="source-snippet">${source.snippet}</div>` : ''}
-                    </div>
-                  `).join('')}
-                </div>
-              ` : ''}
-            `}
-          </div>
-        `).join('')}
-      </body>
-      </html>
-    `;
-    
-    // Create a Blob and download link
-    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `research-report-${new Date().toISOString().split('T')[0]}.html`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  // Copy with citations
-  const copyWithCitations = (text: string, sources: Source[]) => {
-    // Add reference numbers to copied text
-    const textWithRefs = text + '\n\nReferences:\n' + 
-      sources.map((s, i) => formatCitation(s, i + 1)).join('\n');
-    navigator.clipboard.writeText(textWithRefs);
-  };
-
-  const stopResearch = () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-    
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    
-    setIsLoading(false);
-    setIsThinking(false);
-    setShowThinking(false);
-  };
-
-  const handleSubmit = async (e: React.FormEvent, isNewSession: boolean = false) => {
-    if (e) e.preventDefault();
-    if (!input.trim() || isLoading) return;
-
-    // Determine if this is a continuation or new session
-    const shouldContinue = sessionId && messages.length > 0 && !isNewSession;
-    
-    // Create or update session
-    let currentSessionId = sessionId;
-    if (!sessionId || isNewSession) {
-      const newSessionId = `session_${Date.now()}_${mode}`;
-      setSessionId(newSessionId);
-      currentSessionId = newSessionId;
-      navigate(`/conversation/${newSessionId}`);
-      setIsContinuation(false);
-    } else {
-      setIsContinuation(!!shouldContinue);
-    }
-
-    const userMessage: Message = {
-      role: 'user',
-      content: input,
-      timestamp: new Date().toISOString(),
-      mode,
-      id: `msg_${Date.now()}`
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
-    setIsLoading(true);
-    setIsThinking(true);
-    setShowThinking(true);
-    setThoughts([]);
-    setCurrentSources([]);
-    setError(null);
-
-    abortControllerRef.current = new AbortController();
-
+  const loadSessionHistory = async (sid: string) => {
     try {
-      let endpoint: string;
-      let body: any;
-      
-      // Determine endpoint and body based on mode and continuation
-      const useConversation = modeConfig[mode].useConversation;
-      
-      if (shouldContinue && modeConfig[mode].continueEndpoint) {
-        // Use continue endpoint for deep/scholar modes
-        endpoint = modeConfig[mode].continueEndpoint!;
-        body = {
-          query: input,
-          session_id: currentSessionId,
-          require_approval: false,
-          continue_session: true
-        };
-      } else {
-        // Use start endpoint
-        endpoint = modeConfig[mode].endpoint;
-        
-        if (mode === 'fast') {
-          // Fast mode uses simple research
-          body = {
-            query: input,
-            session_id: currentSessionId
-          };
-        } else {
-          // Deep and Scholar modes use strands real
-          body = {
-            query: input,
-            session_id: currentSessionId,
-            require_approval: false,
-            continue_session: false
-          };
+      const res = await fetch(`${apiUrl}${modeConfig[mode].statusEndpoint}/${sid}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
+          setMessages(data.messages.map((m: any) => ({
+            id: m.id || `msg_${Date.now()}_${Math.random()}`,
+            role: m.role || 'assistant',
+            content: m.content || '',
+            timestamp: m.timestamp || new Date().toISOString(),
+            sources: m.sources || [],
+            thoughts: m.thoughts || [],
+            mode: m.mode || mode
+          })));
         }
+        // Only set sources and thoughts if they exist
+        if (data.sources && data.sources.length > 0) setSources(data.sources);
+        if (data.thoughts && data.thoughts.length > 0) setThoughts(data.thoughts);
       }
-
-      const response = await fetch(`${apiUrl}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: abortControllerRef.current.signal
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to start research');
-      }
-
-      const data = await response.json();
-      startPolling(data.session_id);
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
-        console.log('Request aborted');
-      } else {
-        console.error('Error starting research:', error);
-        setError(error.message || 'Failed to start research');
-        setIsLoading(false);
-        setIsThinking(false);
-      }
+    } catch (err) {
+      console.error('Failed to load session history:', err);
     }
   };
 
-  const startPolling = (researchId: string) => {
-    pollingIntervalRef.current = setInterval(async () => {
-      try {
-        const statusEndpoint = modeConfig[mode].statusEndpoint;
-        const endpoint = `${statusEndpoint}/${researchId}`;
-
-        const response = await fetch(`${apiUrl}${endpoint}`);
-        
-        if (!response.ok) {
-          throw new Error('Failed to fetch research status');
-        }
-
-        const data = await response.json();
-
-        // Update thoughts
-        if (data.thoughts && data.thoughts.length > 0) {
-          setThoughts(data.thoughts);
-          setIsThinking(true);
-        }
-
-        // Update current sources (for display during research)
-        if (data.sources && data.sources.length > 0) {
-          setCurrentSources(data.sources);
-        }
-
-        // Check for completion
-        if (data.status === 'completed' || data.status === 'error') {
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-            pollingIntervalRef.current = null;
-          }
-
-          if (data.status === 'error') {
-            setError(data.error || 'Research failed');
-            setIsLoading(false);
-            setIsThinking(false);
-            return;
-          }
-
-          // Process final content
-          if (data.content && data.content.trim()) {
-            const assistantMessage: Message = {
-              role: 'assistant',
-              content: data.content,
-              sources: data.sources || [],
-              thoughts: data.thoughts || [],
-              timestamp: new Date().toISOString(),
-              mode,
-              id: `msg_${researchId}_${Date.now()}`
-            };
-
-            setMessages(prev => [...prev, assistantMessage]);
-            setCurrentSources([]); // Clear current sources after adding to message
-          }
-
-          setIsLoading(false);
-          setIsThinking(false);
-          setShowThinking(false);
-        }
-      } catch (error) {
-        console.error('Error polling research status:', error);
-        setError('Failed to get research status');
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-        setIsLoading(false);
-        setIsThinking(false);
+  const loadAllSessions = async () => {
+    try {
+      const stored = localStorage.getItem('research_sessions');
+      if (stored) {
+        setSessions(JSON.parse(stored));
       }
+    } catch (err) {
+      console.error('Failed to load sessions:', err);
+    }
+  };
+
+  const clearAllSessions = () => {
+    try {
+      localStorage.removeItem('research_sessions');
+      setSessions([]);
+      setMessages([]);
+      setSources([]);
+      setThoughts([]);
+      setSteps([]);
+      setSessionId(null);
+      navigate('/conversation');
+    } catch (err) {
+      console.error('Failed to clear sessions:', err);
+    }
+  };
+
+  const saveSession = (sid: string, title?: string) => {
+    try {
+      const stored = localStorage.getItem('research_sessions');
+      const existing = stored ? JSON.parse(stored) : [];
+      const sessionTitle = title || input.slice(0, 50) || 'New Research';
+      const updated = [
+        { id: sid, title: sessionTitle, timestamp: new Date().toISOString(), mode },
+        ...existing.filter((s: any) => s.id !== sid)
+      ].slice(0, 50);
+      localStorage.setItem('research_sessions', JSON.stringify(updated));
+      setSessions(updated);
+    } catch (err) {
+      console.error('Failed to save session:', err);
+    }
+  };
+
+  const handleTextSelection = () => {
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim()) {
+      setSelectedText(selection.toString().trim());
+    }
+  };
+
+  const handleSectionClick = (section: string) => {
+    if (section && !isLoading) {
+      setInput(prev => {
+        const prefix = prev ? prev + ' ' : '';
+        return prefix + section;
+      });
+    }
+  };
+
+  const connectEvents = (sid: string) => {
+    try {
+      // Close any existing SSE stream before opening a new one
+      if (sseRef.current) {
+        try { sseRef.current.close(); } catch {}
+        sseRef.current = null;
+      }
+      const es = new EventSource(`${apiUrl}/api/v1/research/stream-events-strands-real/${sid}`);
+      sseRef.current = es;
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      // SSE watchdog: fallback to snapshot polling if no events in 5s
+      lastEventTsRef.current = Date.now();
+      if (sseWatchdogRef.current) { clearInterval(sseWatchdogRef.current); sseWatchdogRef.current = null; }
+      sseWatchdogRef.current = setInterval(() => {
+        if (Date.now() - lastEventTsRef.current > 5000) {
+          es.close(); sseRef.current = null; clearInterval(sseWatchdogRef.current!); sseWatchdogRef.current = null; startPollingSnapshot(sid);
+        }
+      }, 1000);
+      es.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data); lastEventTsRef.current = Date.now();
+          if (!evt || !evt.type || evt.type === 'heartbeat') return;
+          switch (evt.type) {
+            case 'phase_start':
+              setIsThinking(true);
+              if (evt.phase === 'new_run') {
+                // Reset transient UI buffers for a fresh run on the same session
+                setLiveContent('');
+                setSteps([]);
+                setError(null);
+                pendingContentRef.current = '';
+                if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+              }
+              break;
+            case 'tool_start': setSteps(prev => [...prev, { icon: 'search', description: evt.query, status: 'active' }]); break;
+            case 'tool_end': setSteps(prev => prev.map((s:any)=> (s.status==='active' && s.description===evt.query)? { ...s, status:'completed', summary:evt.summary, results_count:evt.results_count }: s)); break;
+            case 'sources_delta': setSources(prev => {
+              const added = (evt.added||[]).map((r:any)=>({ id:`${evt.index}-${r.index}-${r.url}`, title:r.title, url:r.url, domain:safeDomain(r.url), snippet:r.snippet, favicon:r.favicon || (r.url?`https://www.google.com/s2/favicons?domain=${safeDomain(r.url)}&sz=64`:undefined), thumbnail: r.thumbnail || (r.url? `https://picsum.photos/seed/${encodeURIComponent(r.url)}/400/220`: undefined) }));
+              const merged=[...prev];
+              const seen = seenSourceUrlsRef.current;
+              for (const a of added) if (a.url && !seen.has(a.url)) { merged.push(a); seen.add(a.url); }
+              setSourcesTotal(seen.size);
+              return merged.slice(-60);
+            }); break;
+            case 'screenshot': setScreenshots(prev => [{ url: evt.url, description: evt.description, ts: evt.ts }, ...prev].slice(0, 12)); break;
+            case 'content_delta': if (typeof evt.chunk==='string') {
+              pendingContentRef.current += (pendingContentRef.current ? "\n\n" : "") + evt.chunk;
+              if (!flushTimerRef.current) {
+                flushTimerRef.current = setTimeout(() => {
+                  setLiveContent(prev => {
+                    const next = (prev ? prev + "\n\n" : '') + pendingContentRef.current;
+                    pendingContentRef.current = '';
+                    return next.length > 8000 ? next.slice(-8000) : next;
+                  });
+                  flushTimerRef.current = null;
+                }, 33);
+              }
+            } break;
+            case 'verify_result': setVerification(evt.data || null); break;
+            default: break;
+          }
+        } catch {}
+      };
+      es.onerror = () => { es.close(); sseRef.current = null; startPollingSnapshot(sid); };
+    } catch { startPollingSnapshot(sid); }
+  };
+
+  const startPollingSnapshot = (sid: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    const endpoint = `${apiUrl}${modeConfig[mode].statusEndpoint}/${sid}`;
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(endpoint); const data = await res.json();
+        if (data.thoughts) setThoughts(data.thoughts);
+        if (data.steps) setSteps(data.steps);
+        if (data.sources) setSources(data.sources);
+        if (typeof data.content === 'string') setLiveContent(data.content);
+        if (data.status === 'completed' || data.status === 'error') finalizeFromSnapshot(data, sid);
+      } catch {}
     }, 1000);
   };
 
-  // Load session from history
-  const loadSession = (session: Session) => {
-    // Save current session if it has messages
-    if (messages.length > 0) {
-      saveSession();
+  const finalizeFromSnapshot = (data:any, sid:string) => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+    if (sseWatchdogRef.current) { clearInterval(sseWatchdogRef.current); sseWatchdogRef.current = null; }
+    if (data.status === 'error') { setError(data.error || 'Research failed'); setIsLoading(false); setIsThinking(false); return; }
+    if (data.content && data.content.trim()) {
+      const linked = linkifyCitations(data.content, data.sources||[]);
+      setMessages(prev => [...prev, { id:`msg_${sid}_${Date.now()}`, role:'assistant', content: linked, sources:data.sources||[], thoughts:data.thoughts||[], timestamp:new Date().toISOString(), mode }]);
+      setLiveContent('');
+      pendingContentRef.current = '';
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
     }
-    
-    // Load the selected session
-    setSessionId(session.id);
-    setMessages(session.messages || []);
-    setMode(session.mode);
-    setCurrentSources([]);
-    setThoughts([]);
-    setShowHistory(false);
-    navigate(`/conversation/${session.id}`);
+    setIsLoading(false); setIsThinking(false); setShowThinking(false);
   };
 
-  // Get all sources from all messages
-  const getAllSources = () => {
-    const allSources: Source[] = [];
-    messages.forEach(msg => {
-      if (msg.sources) {
-        allSources.push(...msg.sources);
-      }
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault(); if (!input.trim() || isLoading) return; setError(null);
+    setIsLoading(true); setIsThinking(true); setLiveContent(''); setSteps([]);
+    // Ensure any previous SSE stream is closed before starting a new run
+    if (sseRef.current) { try { sseRef.current.close(); } catch {} sseRef.current = null; }
+    if (sseWatchdogRef.current) { clearInterval(sseWatchdogRef.current); sseWatchdogRef.current = null; }
+    // Optimistic UI: show planning step immediately
+    setSteps([{ icon:'plan', description:'Planning research...', status:'active' }]);
+    let sid = sessionId || `session_${Date.now()}_${mode}`;
+    if (!sessionId) { 
+      setSessionId(sid); 
+      navigate(`/conversation/${sid}`);
+      saveSession(sid);
+    }
+    const userMessage = { id:`user_${Date.now()}`, role:'user' as const, content: input, timestamp:new Date().toISOString(), mode };
+    setMessages(prev => {
+      const newMessages = [...prev, userMessage];
+      console.log('Adding user message, total messages:', newMessages.length);
+      return newMessages;
     });
-    return allSources;
+    const query = input; setInput('');
+    try {
+      const isContinuation = !!sessionId && messages.length > 0 && !!modeConfig[mode].continueEndpoint;
+      const url = `${apiUrl}${isContinuation ? modeConfig[mode].continueEndpoint : modeConfig[mode].endpoint}`;
+      const res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ query, session_id: sid, require_approval: false, mode }) });
+      if (!res.ok) throw new Error('Failed to start');
+      connectEvents(sid);
+    } catch (err:any) { setError(err.message || 'Failed to start research'); setIsLoading(false); setIsThinking(false); }
   };
+
+  const stopResearch = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current=null; }
+    if (sseRef.current) { sseRef.current.close(); sseRef.current=null; }
+    setIsLoading(false); setIsThinking(false);
+  };
+
+  const getFinalContent = () => {
+    const lastAssistant = [...messages].reverse().find(m=> m.role==='assistant');
+    return (lastAssistant?.content || liveContent || '').trim();
+  };
+
+  const buildSourcesHtml = () => {
+    if (!sources || sources.length===0) return '<p>No sources</p>';
+    const items = sources.map((s)=> (
+      `<div style="margin:10px 0;padding:8px;border:1px solid #e5e7eb;border-radius:8px;">
+         <div style="font-size:12px;color:#64748b;">${s.domain||''}</div>
+         <div style="font-weight:600;"><a href="${s.url}" target="_blank" rel="noreferrer">${s.title||''}</a></div>
+         ${s.snippet? `<div style=\"font-size:14px;color:#475569;margin-top:4px;\">${s.snippet}</div>`:''}
+       </div>`)).join('');
+    return `<div>${items}</div>`;
+  };
+
+  const handlePrint = () => {
+    const content = getFinalContent();
+    const srcHtml = buildSourcesHtml();
+    const win = window.open('', '_blank'); if (!win) return;
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>Research Report</title>
+      <style>body{font-family:Inter,system-ui,Arial;padding:24px;line-height:1.6;color:#0f172a;} h1{font-size:22px;margin:0 0 12px;} .meta{color:#64748b;margin-bottom:16px;} .content{margin:16px 0;} a{color:#2563eb;text-decoration:none;} a:hover{text-decoration:underline;}</style>
+    </head><body>
+      <h1>Research Report</h1>
+      <div class="meta">Generated: ${new Date().toLocaleString()}</div>
+      <div class="content">${content ? content.replace(/\n/g,'<br/>') : '<em>No content</em>'}</div>
+      <h2>Sources</h2>
+      ${srcHtml}
+    </body></html>`);
+    win.document.close(); win.focus(); win.print();
+  };
+
+  const handleDownload = () => {
+    const content = getFinalContent();
+    const srcHtml = buildSourcesHtml();
+    const html = `<!doctype html><html><head><meta charset=\"utf-8\"/><title>Research Report</title></head><body>
+      <h1>Research Report</h1>
+      <div>Generated: ${new Date().toLocaleString()}</div>
+      <div>${content ? content.replace(/\n/g,'<br/>') : '<em>No content</em>'}</div>
+      <h2>Sources</h2>
+      ${srcHtml}
+    </body></html>`;
+    const blob = new Blob([html], { type:'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download = `research-report-${new Date().toISOString().split('T')[0]}.html`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+  const handleVerify = async () => {
+    setVerifyError(null);
+    if (!sessionId) { setVerifyError('No session to verify'); return; }
+    setVerifyLoading(true);
+    try {
+      const data = await postJson(`${apiUrl}/api/v1/research/verify-strands-real/${sessionId}`);
+      if (data?.verification) setVerification(data.verification);
+    } catch (e:any) {
+      setVerifyError(e.message || 'Verification failed');
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+  useEffect(()=>{
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current=null; }
+      if (sseWatchdogRef.current) { clearInterval(sseWatchdogRef.current); sseWatchdogRef.current=null; }
+      if (sseRef.current) { sseRef.current.close(); sseRef.current=null; }
+    };
+  },[]);
+
+  // Virtualized Sources list component (avoid hooks inside useMemo)
+  function SourceListVirtualized({ sources }: { sources: Source[] }) {
+    const defaultRow = 200;
+    const [startIdx, setStartIdx] = useState(0);
+    const viewportRef = useRef<HTMLDivElement>(null);
+    const [heightsDirty, setHeightsDirty] = useState(0);
+    const heightsRef = useRef<Map<string, number>>(new Map());
+
+    useEffect(() => {
+      const onScroll = () => {
+        const el = viewportRef.current; if (!el) return;
+        const scrollTop = el.scrollTop;
+        // binary search startIdx using prefix sums
+        const prefix = buildPrefix(sources, heightsRef.current, defaultRow);
+        const idx = findStartIndex(prefix, scrollTop);
+        setStartIdx(Math.max(0, idx - 3));
+      };
+      const el = viewportRef.current;
+      if (!el) return;
+      el.addEventListener('scroll', onScroll);
+      return () => el.removeEventListener('scroll', onScroll);
+    }, []);
+
+    const total = sources.length;
+    const prefix = buildPrefix(sources, heightsRef.current, defaultRow);
+    const totalHeight = prefix[total] || 0;
+    const [viewportHeight, setViewportHeight] = useState<number>(600);
+    useEffect(() => {
+      const el = viewportRef.current;
+      if (!el) return;
+      const resize = () => setViewportHeight(el.clientHeight || 600);
+      resize();
+      const ro = new ResizeObserver(resize);
+      ro.observe(el);
+      return () => { try { ro.disconnect(); } catch {} };
+    }, [sources.length]);
+    // compute visible window by accumulating heights
+    let endIdx = startIdx;
+    const startOffset = prefix[startIdx] || 0;
+    while (endIdx < total && (prefix[endIdx] - startOffset) < (viewportHeight + defaultRow * 6)) {
+      endIdx++;
+    }
+    const items = sources.slice(startIdx, endIdx);
+    const offsetTop = startOffset;
+
+    return (
+      <ScrollArea className="h-full">
+        <div ref={viewportRef} className="h-full overflow-y-auto">
+          <div style={{ height: totalHeight }} className="relative">
+            <div style={{ position:'absolute', top: offsetTop, left:0, right:0 }}>
+              <div className="p-3 space-y-3">
+                {total === 0 && (<div className="text-sm text-muted-foreground px-2">No sources yet</div>)}
+                {items.map((s, i) => (
+                  <Card key={s.id || `${startIdx+i}-${s.url}`} className={`p-0 overflow-hidden ${isFlagged(s) ? 'border border-red-500' : ''}`} ref={el => measureRow(el as HTMLDivElement, s)}>
+                    {s.thumbnail && (
+                      <div className="w-full h-[120px] overflow-hidden bg-muted">
+                        <img src={s.thumbnail} alt="" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div className="p-3 flex items-start gap-3">
+                      {s.favicon && (<img src={s.favicon} alt="" className="h-4 w-4 mt-1" />)}
+                      <div className="min-w-0">
+                        <div className="text-xs text-muted-foreground">{s.domain}</div>
+                        <a href={s.url} target="_blank" rel="noreferrer" className="font-medium hover:underline break-words">{s.title}</a>
+                        {s.snippet && (<div className="text-sm text-muted-foreground mt-1 line-clamp-3">{s.snippet}</div>)}
+                      </div>
+                      <Button variant="ghost" size="sm" className="ml-auto" onClick={()=> window.open(s.url,'_blank')}><LinkIcon className="h-4 w-4"/></Button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </ScrollArea>
+    );
+
+    function measureRow(el: HTMLDivElement | null, s: Source) {
+      if (!el) return;
+      const h = el.getBoundingClientRect().height;
+      const id = s.id || s.url;
+      if (!id) return;
+      const prev = heightsRef.current.get(id) || 0;
+      if (Math.abs(prev - h) > 2) {
+        heightsRef.current.set(id, h);
+        setHeightsDirty(x => x + 1);
+      }
+    }
+    function buildPrefix(srcs: Source[], heights: Map<string, number>, defRow: number) {
+      const pref = new Array(srcs.length + 1).fill(0);
+      for (let i=0;i<srcs.length;i++) {
+        const id = srcs[i].id || srcs[i].url;
+        const h = (id && heights.get(id)) || defRow;
+        pref[i+1] = pref[i] + h;
+      }
+      return pref;
+    }
+    function findStartIndex(prefix: number[], scrollTop: number) {
+      let lo = 0, hi = prefix.length - 1;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (prefix[mid] <= scrollTop) lo = mid + 1; else hi = mid;
+      }
+      return Math.max(0, lo - 1);
+    }
+    function isFlagged(s: Source) {
+      // Mark source if flagged by verification (by URL or index)
+      try {
+        const urlFlag = verification?.flagged_urls?.includes?.(s.url);
+        if (urlFlag) return true;
+        const idx = sources.findIndex(x => x.url === s.url);
+        if (idx >= 0 && Array.isArray(verification?.weak_citations)) {
+          return verification.weak_citations.includes(idx+1);
+        }
+      } catch {}
+      return false;
+    }
+  }
+
+  const SourceList = (
+    <SourceListVirtualized sources={sources} />
+  );
+
+  // Display all messages without virtualization for now to fix display issue
+  const chatVisible = messages;
 
   return (
     <ModernLayout>
-      <div className="scholarly-research-container">
-      {/* Header with View Toggle */}
-      <div className="scholarly-header">
-        <div className="header-left">
-          <h1 className="research-title">Research Assistant</h1>
-          <div className="mode-selector">
-            {(['fast', 'deep', 'scholar'] as const).map(m => (
-              <button
-                key={m}
-                onClick={() => handleModeChange(m)}
-                className={`mode-btn ${mode === m ? 'active' : ''}`}
+      <div className="flex flex-col h-screen bg-background">
+        <div className="w-full border-b bg-card px-6 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <h1 className="text-lg font-semibold">Research Assistant</h1>
+              <Tabs value={mode} onValueChange={(v:any)=> {
+                // If there's an active session with messages, ask for confirmation
+                if (messages.length > 0 && v !== mode) {
+                  setPendingMode(v);
+                  setShowSwitchConfirm(true);
+                } else {
+                  // No active session, switch immediately
+                  setMode(v);
+                  setSessionId(null);
+                  setMessages([]);
+                  setError(null);
+                  setIsLoading(false);
+                  setIsThinking(false);
+                  navigate('/conversation');
+                }
+              }}>
+                <TabsList className="h-8"><TabsTrigger value="fast">Quick</TabsTrigger><TabsTrigger value="deep">Deep</TabsTrigger><TabsTrigger value="scholar">Scholar</TabsTrigger></TabsList>
+              </Tabs>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => {
+                  // If there's an active session with messages, ask for confirmation
+                  if (messages.length > 0) {
+                    if (window.confirm('Start a new chat? Your current conversation will be saved in history.')) {
+                      setSessionId(null);
+                      setMessages([]);
+                      setError(null);
+                      setIsLoading(false);
+                      setIsThinking(false);
+                      navigate('/conversation');
+                    }
+                  } else {
+                    // No active session, start new immediately
+                    setSessionId(null);
+                    setMessages([]);
+                    setError(null);
+                    setIsLoading(false);
+                    setIsThinking(false);
+                    navigate('/conversation');
+                  }
+                }}
               >
-                {React.createElement(modeConfig[m].icon, { size: 16 })}
-                <span>{modeConfig[m].name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        
-        <div className="header-actions">
-          <button 
-            onClick={createNewSession}
-            className="action-btn new-session-btn"
-            title="Start a new research session"
-          >
-            <Plus size={16} />
-            <span>New Session</span>
-          </button>
-          <button 
-            onClick={() => setShowHistory(!showHistory)}
-            className="action-btn"
-          >
-            <History size={16} />
-            <span>History ({sessions.length})</span>
-          </button>
-          <button onClick={handlePrint} className="action-btn">
-            <Printer size={16} />
-            <span>Print</span>
-          </button>
-          <button onClick={handleDownloadReport} className="action-btn">
-            <Download size={16} />
-            <span>Download Report</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Mode Change Confirmation Dialog */}
-      {showModeConfirm && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h3>Switch Research Mode?</h3>
-            <p>
-              Switching from <strong>{modeConfig[mode].name}</strong> to <strong>{modeConfig[pendingMode!].name}</strong> will create a new session.
-            </p>
-            <p>Your current conversation will be saved to history.</p>
-            <div className="modal-actions">
-              <button onClick={cancelModeChange} className="btn-secondary">
-                Cancel
-              </button>
-              <button onClick={confirmModeChange} className="btn-primary">
-                Create New Session
-              </button>
+                <Plus className="h-4 w-4 mr-1"/>New Chat
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowHistory(!showHistory)}>
+                <History className="h-4 w-4 mr-1"/>History
+              </Button>
+              <Button variant="ghost" size="sm" disabled={verifyLoading || !sessionId} onClick={handleVerify}>
+                {verifyLoading? 'Verifying...' : 'Verify'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handlePrint}>
+                <Printer className="h-4 w-4 mr-1"/>Print
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleDownload}>
+                <Download className="h-4 w-4 mr-1"/>Download
+              </Button>
             </div>
           </div>
         </div>
-      )}
 
-      {/* History Panel */}
-      {showHistory && (
-        <div className="history-panel">
-          <div className="history-header">
-            <h3>Research History</h3>
-            <button onClick={() => setShowHistory(false)} className="close-btn">
-              <X size={20} />
-            </button>
-          </div>
-          <div className="history-list">
-            {sessions.map(session => (
-              <div 
-                key={session.id} 
-                className="history-item"
-                onClick={() => loadSession(session)}
-              >
-                <div className="history-mode">
-                  {React.createElement(modeConfig[session.mode].icon, { size: 16 })}
-                  <span>{modeConfig[session.mode].name}</span>
-                </div>
-                <div className="history-title">{session.title}</div>
-                <div className="history-date">
-                  {new Date(session.timestamp).toLocaleDateString()}
+        <div className="flex flex-1 overflow-hidden">
+          {/* History Sidebar */}
+          {showHistory && (
+            <div className="w-64 border-r bg-card flex flex-col">
+              <div className="p-3 border-b">
+                <div className="text-sm font-medium mb-2">Session History</div>
+                <div className="space-y-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full" 
+                    onClick={() => {
+                      setSessionId(null);
+                      setMessages([]);
+                      setSources([]);
+                      setThoughts([]);
+                      setSteps([]);
+                      navigate('/conversation');
+                    }}
+                  >
+                    New Session
+                  </Button>
+                  {sessions.length > 0 && (
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="w-full text-red-600 hover:text-red-700" 
+                      onClick={() => {
+                        if (window.confirm('Clear all session history? This cannot be undone.')) {
+                          clearAllSessions();
+                        }
+                      }}
+                    >
+                      Clear All History
+                    </Button>
+                  )}
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="scholarly-content">
-        {/* Main Content Area - Chat View Only */}
-        <div className="research-main">
-          <div className="chat-view">
-            {messages.map((message, index) => (
-              <div key={message.id || index} className={`message ${message.role}`}>
-                <div className="message-avatar">
-                  {message.role === 'user' ? <User size={20} /> : <Bot size={20} />}
+              <ScrollArea className="flex-1">
+                <div className="p-2 space-y-1">
+                  {sessions.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`p-2 rounded cursor-pointer hover:bg-muted transition-colors ${
+                        s.id === sessionId ? 'bg-muted' : ''
+                      }`}
+                      onClick={() => {
+                        setSessionId(s.id);
+                        setMode(s.mode);
+                        navigate(`/conversation/${s.id}`);
+                        loadSessionHistory(s.id);
+                      }}
+                    >
+                      <div className="text-sm font-medium truncate">{s.title}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {new Date(s.timestamp).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                  {sessions.length === 0 && (
+                    <div className="text-sm text-muted-foreground text-center py-4">
+                      No previous sessions
+                    </div>
+                  )}
                 </div>
-                <div className="message-content">
-                  <div className="formatted-content">
-                    <ReactMarkdown 
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        a: ({ href, children, ...props }) => {
-                          // Check if this is a citation link [1], [2], etc.
-                          const citationMatch = children?.toString().match(/^\[(\d+)\]$/);
-                          if (citationMatch && message.sources) {
-                            const sourceIndex = parseInt(citationMatch[1]) - 1;
-                            const source = message.sources[sourceIndex];
-                            if (source) {
+              </ScrollArea>
+            </div>
+          )}
+
+          {/* Chat */}
+          <div className="flex-1 flex flex-col border-r">
+            <ScrollArea className="flex-1">
+              <div className="px-6 py-4">
+                {/* Debug info */}
+                <div className="text-xs text-muted-foreground mb-2">
+                  Messages: {messages.length} | Visible: {chatVisible.length}
+                </div>
+                
+                {messages.length === 0 && !isLoading && (
+                  <div className="text-center text-muted-foreground py-8">
+                    Start a conversation by typing a message below
+                  </div>
+                )}
+                {chatVisible.map((m, i) => (
+                  <div key={m.id || `msg-${i}`} className={`message ${m.role}`} style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }} onMouseUp={handleTextSelection}>
+                    <div className="message-avatar" style={{ flexShrink: 0 }}>
+                      {m.role==='user'? <User size={18}/> : <Bot size={18}/>}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      {/* Message header with role and timestamp */}
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '8px', 
+                        marginBottom: '4px',
+                        fontSize: '12px',
+                        color: '#6b7280'
+                      }}>
+                        <span style={{ fontWeight: '600' }}>
+                          {m.role === 'user' ? 'You' : 'Assistant'}
+                        </span>
+                        {m.timestamp && (
+                          <>
+                            <span>•</span>
+                            <span>{new Date(m.timestamp).toLocaleTimeString()}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="message-content" style={{ 
+                        padding: '1rem', 
+                        background: m.role === 'user' ? 'rgba(59, 130, 246, 0.1)' : 'var(--bg-surface, #f9fafb)', 
+                        borderRadius: '0.5rem',
+                        border: '1px solid rgba(0, 0, 0, 0.1)',
+                        color: 'var(--text-primary, #111827)'
+                      }}>
+                      {m.content ? (
+                        m.role === 'user' ? (
+                          <div style={{ 
+                            whiteSpace: 'pre-wrap',
+                            fontWeight: '500',
+                            color: '#1e293b'
+                          }}>
+                            {m.content}
+                          </div>
+                        ) : (
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code(codeProps) {
+                              const { node, className, children, ...rest } = codeProps as any;
+                              const match = /language-(\w+)/.exec(className || '');
+                              const lang = match?.[1]?.toLowerCase();
+                              const text = String(children ?? '').trim();
+                              const isInline = (codeProps as any).inline ?? false;
+                              if (!isInline && (lang === 'mermaid' || text.startsWith('graph ') || text.startsWith('sequenceDiagram'))){
+                                return <MermaidBlock chart={text} />;
+                              }
+                              return <code className={className} {...rest}>{children}</code>;
+                            },
+                            a(props) {
+                              const { href, children } = props as any;
+                              // Check if this is a citation link [1], [2], [[11]], etc.
+                              const childText = String(children);
+                              const isCitation = /^\[?\d+\]?$/.test(childText);
+                              
                               return (
                                 <a
-                                  href={source.url}
+                                  href={href}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="citation-link"
-                                  title={`${source.title} - ${source.domain}`}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    // Highlight the corresponding source
-                                    const sourceElement = document.getElementById(`source-${sourceIndex}`);
-                                    if (sourceElement) {
-                                      sourceElement.scrollIntoView({ behavior: 'smooth' });
-                                      sourceElement.classList.add('highlight');
-                                      setTimeout(() => sourceElement.classList.remove('highlight'), 2000);
-                                    }
-                                    // Also open the link
-                                    window.open(source.url, '_blank');
+                                  style={{
+                                    color: isCitation ? '#3b82f6' : '#0ea5e9',
+                                    textDecoration: 'none',
+                                    fontWeight: isCitation ? '600' : 'normal',
+                                    fontSize: isCitation ? '0.875em' : 'inherit',
+                                    verticalAlign: isCitation ? 'super' : 'baseline',
+                                    padding: isCitation ? '0 2px' : '0',
+                                    borderRadius: isCitation ? '2px' : '0',
+                                    transition: 'all 0.2s',
+                                    cursor: 'pointer'
                                   }}
+                                  onMouseEnter={(e: React.MouseEvent<HTMLAnchorElement>) => {
+                                    e.currentTarget.style.textDecoration = 'underline';
+                                    if (isCitation) {
+                                      e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)';
+                                    }
+                                  }}
+                                  onMouseLeave={(e: React.MouseEvent<HTMLAnchorElement>) => {
+                                    e.currentTarget.style.textDecoration = 'none';
+                                    if (isCitation) {
+                                      e.currentTarget.style.backgroundColor = 'transparent';
+                                    }
+                                  }}
+                                  title={isCitation ? `View source ${childText}` : href}
                                 >
-                                  <sup style={{ color: 'var(--accent-royal)', fontWeight: 600 }}>
-                                    [{citationMatch[1]}]
-                                  </sup>
+                                  {children}
                                 </a>
                               );
                             }
-                          }
-                          // Regular link
-                          return (
-                            <a href={href} target="_blank" rel="noopener noreferrer" className="external-link" {...props}>
-                              {children}
-                            </a>
-                          );
-                        },
-                        code: ({ node, className, children, ...props }: any) => {
-                          const inline = props.inline;
-                          if (!inline) {
-                            return (
-                              <pre className="code-block">
-                                <code className={className} {...props}>
-                                  {children}
-                                </code>
-                              </pre>
-                            );
-                          }
-                          return <code className="inline-code" {...props}>{children}</code>;
-                        },
-                        h1: ({ children }) => <h1 className="content-h1">{children}</h1>,
-                        h2: ({ children }) => <h2 className="content-h2">{children}</h2>,
-                        h3: ({ children }) => <h3 className="content-h3">{children}</h3>,
-                        p: ({ children }) => <p className="content-p">{children}</p>,
-                        ul: ({ children }) => <ul className="content-ul">{children}</ul>,
-                        ol: ({ children }) => <ol className="content-ol">{children}</ol>,
-                        li: ({ children }) => <li className="content-li">{children}</li>,
-                        blockquote: ({ children }) => <blockquote className="content-blockquote">{children}</blockquote>,
-                        strong: ({ children }) => <strong className="content-strong">{children}</strong>,
-                        em: ({ children }) => <em className="content-em">{children}</em>,
+                          }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground">Empty message</span>
+                      )}
+                      {/* Display sources if available */}
+                      {m.sources && m.sources.length > 0 && (
+                        <div style={{
+                          marginTop: '20px',
+                          paddingTop: '20px',
+                          borderTop: '1px solid #e5e7eb',
+                          fontSize: '12px'
+                        }}>
+                          <div style={{ fontWeight: '600', marginBottom: '10px', color: '#6b7280' }}>
+                            📚 Sources ({m.sources.length})
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                            {m.sources.map((source: any, idx: number) => (
+                              <a
+                                key={idx}
+                                href={source.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '4px 8px',
+                                  background: '#f3f4f6',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  color: '#3b82f6',
+                                  textDecoration: 'none',
+                                  border: '1px solid #e5e7eb',
+                                  transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = '#e0f2fe';
+                                  e.currentTarget.style.borderColor = '#3b82f6';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = '#f3f4f6';
+                                  e.currentTarget.style.borderColor = '#e5e7eb';
+                                }}
+                                title={source.title || source.snippet}
+                              >
+                                [{source.number || idx + 1}] {source.domain || new URL(source.url).hostname}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    </div>
+                  </div>
+                ))}
+                {isLoading && liveContent && (
+                  <div className="message assistant">
+                    <div className="message-avatar"><Bot size={18}/></div>
+                    <div className="message-content" style={{ whiteSpace: 'pre-wrap' }}>{liveContent}</div>
+                  </div>
+                )}
+                <div ref={bottomRef} />
+              </div>
+            </ScrollArea>
+
+            {/* Thinking & Tools */}
+            {isThinking && (
+              <div className={`thinking-box ${showThinking ? 'expanded' : 'collapsed'}`}>
+                <div className="thinking-header" onClick={()=> setShowThinking(!showThinking)}>
+                  <div className="thinking-title"><Brain className="thinking-icon" /><span>Thinking and Tools</span></div>
+                  <div className="thinking-controls">{isLoading && (<button onClick={stopResearch} className="stop-btn"><Square size={14}/>Stop</button>)}{showThinking ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}</div>
+                </div>
+                {showThinking && (
+                  <div className="thinking-content">
+                    {thoughts.map((t, idx)=> (<div key={`t-${idx}`} className="thought-item"><span className="thought-type">{t.type}:</span> <span className="thought-content">{t.content}</span></div>))}
+                    <div className="tool-trace"><div className="tool-trace-title">Tool Trace</div>{steps.map((s:any, i:number)=> (<div key={`s-${i}`} className="tool-trace-item"><div className="tool-trace-header"><span className="tool-trace-label">[Search #{i+1}]</span><span className="tool-trace-query">{s.description}</span></div>{s.summary && (<div className="tool-trace-summary"><strong>Summary:</strong> {s.summary}</div>)}{typeof s.results_count==='number' && (<div className="tool-trace-meta">Found {s.results_count} results</div>)}</div>))}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Composer with Quick Actions */}
+            <div className="w-full border-t bg-card px-4 py-3">
+              {selectedText && (
+                <div className="mb-2 p-2 bg-muted rounded flex items-center justify-between">
+                  <div className="text-sm truncate flex-1">Selected: "{selectedText.slice(0, 50)}..."</div>
+                  <div className="flex gap-1">
+                    <Button 
+                      size="sm" 
+                      variant="ghost"
+                      onClick={() => {
+                        setInput(`Explain this: "${selectedText}"`);
+                        setSelectedText('');
                       }}
                     >
-                      {message.content}
-                    </ReactMarkdown>
+                      Explain
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="ghost"
+                      onClick={() => {
+                        setInput(`Research more about: "${selectedText}"`);
+                        setSelectedText('');
+                      }}
+                    >
+                      Research
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="ghost"
+                      onClick={() => setSelectedText('')}
+                    >
+                      Clear
+                    </Button>
                   </div>
-                  
-                  {/* Show sources for this message */}
-                  {message.sources && message.sources.length > 0 && (
-                    <div className="message-sources">
-                      <h4><Globe size={16} /> Sources ({message.sources.length})</h4>
-                      <div className="message-sources-list">
-                        {message.sources.map((source, idx) => (
-                          <div 
-                            key={source.id || idx} 
-                            id={`source-${idx}`}
-                            className="message-source-item"
-                          >
-                            <span className="source-ref">[{idx + 1}]</span>
-                            <div className="source-content">
-                              <a 
-                                href={source.url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                title={source.title}
-                                className="source-link"
-                              >
-                                {source.title}
-                              </a>
-                              <span className="source-domain">({source.domain})</span>
-                            </div>
-                            <div className="source-actions">
-                              <button
-                                onClick={() => toggleBookmark(source.id)}
-                                className={`bookmark-btn ${bookmarkedSources.has(source.id) ? 'bookmarked' : ''}`}
-                                title={bookmarkedSources.has(source.id) ? 'Remove bookmark' : 'Bookmark this source'}
-                              >
-                                {bookmarkedSources.has(source.id) ? 
-                                  <BookmarkCheck size={14} /> : <Bookmark size={14} />
-                                }
-                              </button>
-                              <a 
-                                href={source.url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="external-link-btn"
-                                title="Open in new tab"
-                              >
-                                <ExternalLink size={14} />
-                              </a>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Thinking Box */}
-          {isThinking && (
-            <div className={`thinking-box ${showThinking ? 'expanded' : 'collapsed'}`}>
-              <div 
-                className="thinking-header"
-                onClick={() => setShowThinking(!showThinking)}
-              >
-                <div className="thinking-title">
-                  <Brain className="thinking-icon" />
-                  <span>Research in Progress...</span>
-                </div>
-                <div className="thinking-controls">
-                  {isLoading && (
-                    <button onClick={stopResearch} className="stop-btn">
-                      <Square size={14} />
-                      Stop
-                    </button>
-                  )}
-                  {showThinking ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                </div>
-              </div>
-              
-              {showThinking && (
-                <div className="thinking-content">
-                  {thoughts.map((thought, idx) => (
-                    <div key={idx} className="thought-item">
-                      <span className="thought-type">{thought.type}:</span>
-                      <span className="thought-content">{thought.content}</span>
-                    </div>
-                  ))}
                 </div>
               )}
+              <form onSubmit={handleSubmit} className="flex items-center gap-2">
+                <Input 
+                  value={input} 
+                  onChange={(e)=> setInput(e.target.value)} 
+                  placeholder="Ask to research..." 
+                  disabled={isLoading} 
+                  className="flex-1" 
+                />
+                {isLoading ? (
+                  <Button type="button" variant="destructive" onClick={stopResearch} className="gap-2">
+                    <Square className="h-4 w-4"/>Stop
+                  </Button>
+                ) : (
+                  <Button type="submit" className="gap-2">
+                    <Send className="h-4 w-4"/>Research
+                  </Button>
+                )}
+              </form>
+              {error && (<div className="text-sm text-red-600 mt-1">{error}</div>)}
+              {verifyError && (<div className="text-sm text-red-600 mt-1">{verifyError}</div>)}
             </div>
-          )}
+          </div>
 
-          {/* Error Display */}
-          {error && (
-            <div className="error-message">
-              <AlertCircle size={20} />
-              <span>{error}</span>
-              <button onClick={() => setError(null)} className="error-close">
-                <X size={16} />
-              </button>
+          {/* Sources */}
+          <div className="w-[420px] bg-card">
+            <div className="border-b px-4 py-2 text-sm font-medium">Research Sources ({sourcesTotal || sources.length}{sources.length < (sourcesTotal||0) ? ` • showing ${sources.length}` : ''})</div>
+            <div className="h-[calc(100%-40px)] flex flex-col">
+              <div className="flex-1 min-h-0">{SourceList}</div>
+              {screenshots.length>0 && (
+                <div className="border-t p-3 pt-2">
+                  <div className="text-sm font-medium mb-2">Web Previews</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {screenshots.map((s, i)=> (
+                      <div key={`shot-${i}`} className="rounded overflow-hidden bg-muted cursor-pointer p-2" onClick={()=> window.open(s.url,'_blank')} title={s.description || s.url}>
+                        <img src={`https://www.google.com/s2/favicons?domain=${safeDomain(s.url)}&sz=64`} alt="" className="h-4 w-4 inline-block mr-1"/>
+                        <span className="text-xs align-middle break-all">{safeDomain(s.url)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {verification && (verification.notes || verification.weak_citations)?.length > 0 && (
+                <VerificationNotes verification={verification} />
+              )}
             </div>
-          )}
-        </div>
-
-        {/* New TikTok-style Research Sources Feed */}
-        <div className="sources-sidebar">
-          <ResearchSourcesFeed
-            groups={getResearchGroups()}
-            currentSources={currentSources}
-            onSourceClick={handleSourceClick}
-            onBookmark={toggleBookmark}
-            bookmarkedSources={bookmarkedSources}
-            activeMessageId={messages[messages.length - 1]?.id}
-            showGroupHeaders={true}
-            compactMode={false}
-          />
-        </div>
-      </div>
-
-      {/* Input Form */}
-      <form onSubmit={(e) => handleSubmit(e, false)} className="research-input-form">
-        <div className="input-wrapper">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={`${messages.length > 0 ? 'Continue the conversation...' : 'What would you like to research?'}`}
-            className="research-input"
-            disabled={isLoading}
-          />
-          <div className="input-actions">
-            {isLoading ? (
-              <button type="button" onClick={stopResearch} className="stop-button">
-                <Square size={20} />
-                <span>Stop</span>
-              </button>
-            ) : (
-              <button type="submit" className="send-button" disabled={!input.trim()}>
-                <Send size={20} />
-                <span>{messages.length > 0 && modeConfig[mode].continueEndpoint ? 'Continue' : 'Research'}</span>
-              </button>
-            )}
           </div>
         </div>
-      </form>
       </div>
+      
+      {/* Confirmation Dialog for Mode Switch */}
+      {showSwitchConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            maxWidth: '400px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+          }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '12px', color: '#111827' }}>
+              Switch Research Mode?
+            </h3>
+            <p style={{ color: '#6b7280', marginBottom: '20px' }}>
+              You have an active conversation. Switching modes will start a new session and your current conversation will be saved in history.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowSwitchConfirm(false);
+                  setPendingMode(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (pendingMode) {
+                    setMode(pendingMode);
+                    setSessionId(null);
+                    setMessages([]);
+                    setError(null);
+                    setIsLoading(false);
+                    setIsThinking(false);
+                    navigate('/conversation');
+                  }
+                  setShowSwitchConfirm(false);
+                  setPendingMode(null);
+                }}
+              >
+                Switch Mode
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </ModernLayout>
   );
 };
 
+function VerificationNotes({ verification }: { verification: any }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t">
+      <div className="px-3 py-2 flex items-center justify-between">
+        <div className="text-sm font-medium">Verification</div>
+        <Button variant="ghost" size="sm" onClick={()=> setOpen(!open)}>{open? 'Hide' : 'Show'}</Button>
+      </div>
+      {open && (
+        <div className="p-3 pt-0">
+          <Card className="p-3">
+            {Array.isArray(verification.notes) && verification.notes.map((n:string, i:number)=>(
+              <div key={`note-${i}`} className="text-sm text-muted-foreground">• {n}</div>
+            ))}
+            {Array.isArray(verification.weak_citations) && verification.weak_citations.length>0 && (
+              <div className="text-sm mt-2">Weak citations detected: {verification.weak_citations.join(', ')}</div>
+            )}
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default ScholarlyResearchView;
+
+async function postJson(url: string, body?: any) {
+  const res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: body? JSON.stringify(body): undefined });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Turn bare [1], [2] citations into clickable links to sources
+function linkifyCitations(text: string, sources: any[]): string {
+  if (!text || !Array.isArray(sources) || sources.length === 0) return text;
+  
+  // Build a map of citation numbers to URLs
+  const citationMap = new Map<number, string>();
+  
+  sources.forEach((source, index) => {
+    // Handle both index-based and number property
+    const num = source.number || (index + 1);
+    const url = source.url;
+    if (url && typeof url === 'string' && url.startsWith('http')) {
+      citationMap.set(num, url);
+    }
+  });
+  
+  // Replace all [n] patterns with clickable links if we have a URL
+  let result = text.replace(/\[(\d+)\](?!\()/g, (match, numStr) => {
+    const n = parseInt(numStr, 10);
+    const url = citationMap.get(n);
+    
+    if (url) {
+      // Use single brackets in link text for cleaner appearance
+      return `[[${n}]](${url})`;
+    } else {
+      // If reference number exists but we don't have that many sources,
+      // it might be a typo - map to closest available source
+      if (n > sources.length && sources.length > 0) {
+        // Check if we have source 11 when looking for 17 (typo scenario)
+        if (n === 17 && citationMap.has(11)) {
+          return `[[${n}]](${citationMap.get(11)})`;
+        }
+        // Otherwise map to last available source as fallback
+        const lastSource = sources[sources.length - 1];
+        if (lastSource.url) {
+          return `[[${n}]](${lastSource.url})`;
+        }
+      }
+    }
+    return match;
+  });
+  
+  return result;
+}

@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from strands import Agent
 from strands.models.openai import OpenAIModel
+from app.services.strands_session_service import StrandsSessionService
 from app.tools.tavily_search_tool import tavily_search, get_all_search_results, clear_search_results
 import os
 import threading
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Store active research sessions
 research_sessions: Dict[str, Dict[str, Any]] = {}
+SESSION_SERVICE = StrandsSessionService()
 
 class ResearchStartRequest(BaseModel):
     query: str
@@ -60,15 +62,8 @@ def perform_fast_research(session_id: str, query: str):
             # Simple tools setup - just search
             tools = [tavily_search]
             
-            # Fast model configuration
-            openai_model = OpenAIModel(
-                client_args={"api_key": os.getenv("OPENAI_API_KEY")},
-                model_id="gpt-4o-mini",
-                params={
-                    "max_tokens": 2000,
-                    "temperature": 0.6,
-                }
-            )
+            # Fast model configuration (session-managed agent will use this)
+            model_config = {"model_id": "gpt-4o-mini", "max_tokens": 2000, "temperature": 0.6}
             
             # Get current date for context
             from datetime import datetime
@@ -108,11 +103,13 @@ Output format:
 Be quick, accurate, and comprehensive. Today is {date_str} - focus on the most current information available.
 Remember: Use the tavily_search tool multiple times with different search queries, including temporal terms like "2025", "latest", "current", "today"."""
 
-            # Create agent
-            research_agent = Agent(
-                model=openai_model,
+            # Create session-managed agent for continuity across runs
+            research_agent = SESSION_SERVICE.create_agent_with_session(
+                session_id=session_id,
+                agent_name="fast",
                 tools=tools,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                model_config=model_config
             )
             
             # Update progress

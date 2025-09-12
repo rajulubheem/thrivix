@@ -107,7 +107,7 @@ class StrandsSessionService:
         
         # Create shared conversation manager with proper window size
         conversation_manager = SlidingWindowConversationManager(
-            window_size=50,  # Increased for better context retention
+            window_size=150,  # Keep a larger rolling window to avoid losing user intent
             should_truncate_results=True
         )
         self.conversation_managers[session_id] = conversation_manager
@@ -121,6 +121,7 @@ class StrandsSessionService:
         system_prompt: str = None,
         tools: List = None,
         model_config: Dict[str, Any] = None,
+        callback_handler: Any = None,
         force_new: bool = False
     ) -> Agent:
         """Get existing agent or create new one - PROPERLY sharing session and conversation managers"""
@@ -168,7 +169,8 @@ class StrandsSessionService:
                 conversation_manager=conversation_manager,  # SHARED conversation manager
                 system_prompt=system_prompt or f"You are {agent_name}, a helpful AI assistant.",
                 tools=tools or [],
-                model=model
+                model=model,
+                callback_handler=callback_handler
                 # DO NOT pass messages - session manager handles this automatically
             )
             
@@ -184,6 +186,27 @@ class StrandsSessionService:
         except Exception as e:
             logger.error(f"Failed to create agent with session: {e}")
             raise
+
+    # Backwards-compatible alias used by some endpoints
+    def create_agent_with_session(
+        self,
+        session_id: str,
+        agent_name: str = "default",
+        system_prompt: str = None,
+        tools: List = None,
+        model_config: Dict[str, Any] = None,
+        callback_handler: Any = None,
+        force_new: bool = False,
+    ) -> Agent:
+        return self.get_or_create_agent(
+            session_id=session_id,
+            agent_name=agent_name,
+            system_prompt=system_prompt,
+            tools=tools,
+            model_config=model_config,
+            callback_handler=callback_handler,
+            force_new=force_new,
+        )
     
     def get_all_agents(self, session_id: str) -> Dict[str, Agent]:
         """Get all agents for a session"""
@@ -411,6 +434,104 @@ class StrandsSessionService:
                 "agents_used": 0,
                 "has_context": False
             }
+
+    def get_session_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get message history from session"""
+        try:
+            # Try multiple approaches to get messages
+            
+            # 1. Check context in metadata
+            context = self.get_context(session_id)
+            if context and 'messages' in context:
+                logger.info(f"Retrieved {len(context['messages'])} messages from context for session {session_id}")
+                return context['messages']
+            
+            # 2. Check agent conversation logs
+            agents_dir = self.storage_dir / f"session_{session_id}" / "agents"
+            if agents_dir.exists():
+                # Look for coordinator agent first
+                coordinator_log = agents_dir / "coordinator" / "conversation.json"
+                if coordinator_log.exists():
+                    with open(coordinator_log, 'r') as f:
+                        conversation = json.load(f)
+                        messages = []
+                        for msg in conversation.get('messages', []):
+                            messages.append({
+                                'role': msg.get('role', 'user'),
+                                'content': msg.get('content', ''),
+                                'timestamp': msg.get('timestamp', datetime.now().isoformat()),
+                                'sources': msg.get('sources', []),
+                                'thoughts': msg.get('thoughts', [])
+                            })
+                        if messages:
+                            logger.info(f"Retrieved {len(messages)} messages from coordinator log for session {session_id}")
+                            return messages
+                
+                # Try any agent's conversation log
+                for agent_dir in agents_dir.iterdir():
+                    if agent_dir.is_dir():
+                        conv_log = agent_dir / "conversation.json"
+                        if conv_log.exists():
+                            with open(conv_log, 'r') as f:
+                                conversation = json.load(f)
+                                messages = []
+                                for msg in conversation.get('messages', []):
+                                    messages.append({
+                                        'role': msg.get('role', 'user'),
+                                        'content': msg.get('content', ''),
+                                        'timestamp': msg.get('timestamp', datetime.now().isoformat()),
+                                        'sources': msg.get('sources', []),
+                                        'thoughts': msg.get('thoughts', [])
+                                    })
+                                if messages:
+                                    logger.info(f"Retrieved {len(messages)} messages from {agent_dir.name} log for session {session_id}")
+                                    return messages
+            
+            logger.info(f"No messages found for session {session_id}")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Failed to get session messages: {e}")
+            return []
+    
+    async def load_session_data(self, session_id: str) -> Dict[str, Any]:
+        """Load complete session data from storage"""
+        try:
+            session_data = {
+                'session_id': session_id,
+                'status': 'completed',
+                'progress': 100,
+                'steps': [],
+                'content': '',
+                'sources': [],
+                'thoughts': [],
+                'timestamp': datetime.now().isoformat(),
+                'messages': []
+            }
+            
+            # Load messages
+            messages = self.get_session_messages(session_id)
+            if messages:
+                session_data['messages'] = messages
+                # Extract content from last assistant message
+                for msg in reversed(messages):
+                    if msg.get('role') == 'assistant':
+                        session_data['content'] = msg.get('content', '')
+                        session_data['sources'] = msg.get('sources', [])
+                        session_data['thoughts'] = msg.get('thoughts', [])
+                        break
+            
+            # Load context
+            context = self.get_context(session_id)
+            if context:
+                session_data.update(context)
+            
+            logger.info(f"Loaded session data for {session_id}")
+            return session_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load session data: {e}")
+            return None
 
 # Global instance
 _strands_session_service = None

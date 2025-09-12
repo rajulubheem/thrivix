@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from strands import Agent
 # from strands_tools import web_search, calculator  # These tools don't exist in strands_tools
+from app.services.strands_session_service import StrandsSessionService
 import os
 
 router = APIRouter(prefix="/research", tags=["research-strands"])
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Store active research sessions
 research_sessions: Dict[str, Dict[str, Any]] = {}
+SESSION_SERVICE = StrandsSessionService()
 
 class ResearchStartRequest(BaseModel):
     query: str
@@ -52,16 +54,20 @@ async def perform_strands_research(session_id: str, query: str):
         session['steps'].append(step1)
         await asyncio.sleep(0.5)
         
-        # Create Strands research agent with web search tool
-        research_agent = Agent(
-            tools=[web_search],
-            system_prompt="""You are an expert research assistant. When given a query:
+        # Define system prompt for both agents
+        system_prompt = """You are an expert research assistant. When given a query:
 1. Use the web_search tool to find relevant information
 2. Analyze and synthesize the results
 3. Provide a comprehensive, well-structured answer with citations
 4. Include specific facts, data, and insights from sources
 5. Format your response in clear markdown with sections""",
-            callback_handler=None  # No console output
+        
+        # Create session-managed agents (tools left empty as web_search isn't available here)
+        research_agent = SESSION_SERVICE.create_agent_with_session(
+            session_id=session_id,
+            agent_name="researcher",
+            tools=[],
+            system_prompt=system_prompt
         )
         
         step1['status'] = 'completed'
@@ -90,10 +96,12 @@ async def perform_strands_research(session_id: str, query: str):
                     # Update step when web search is being used
                     step2['description'] = f"Searching for: {tool_info.get('input', {}).get('query', query)}"
         
-        # Create agent with callback for streaming
-        streaming_agent = Agent(
-            tools=[],  # No tools for now - web_search not available
-            system_prompt=research_agent._system_prompt,
+        # Create session-managed agent with callback for streaming
+        streaming_agent = SESSION_SERVICE.create_agent_with_session(
+            session_id=session_id,
+            agent_name="streaming",
+            tools=[],
+            system_prompt=system_prompt,
             callback_handler=research_callback
         )
         
