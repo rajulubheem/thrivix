@@ -24,6 +24,7 @@ from app.tools.use_llm_wrapper import use_llm_fixed, use_llm_with_model
 import os
 import json
 import threading
+from duckduckgo_search import DDGS
 
 router = APIRouter(prefix="/research", tags=["research-strands-real"])
 logger = logging.getLogger(__name__)
@@ -32,6 +33,21 @@ logger = logging.getLogger(__name__)
 research_sessions: Dict[str, Dict[str, Any]] = {}
 SESSION_SERVICE = StrandsSessionService()
 SHARED_STATE = SharedStateService()
+
+def fallback_search_ddg(query: str, max_results: int = 5):
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+            out = []
+            for r in results:
+                out.append({
+                    'title': r.get('title') or r.get('source') or 'Untitled',
+                    'url': r.get('href') or r.get('url') or '',
+                    'content': r.get('body') or r.get('snippet') or ''
+                })
+            return out
+    except Exception:
+        return []
 
 def _load_optional_strands_tools() -> List:
     """Best-effort import of useful strands_tools for deep research.
@@ -65,11 +81,171 @@ def _load_optional_strands_tools() -> List:
         pass
     return loaded
 
+def _extract_company_ticker_year(query: str) -> Dict[str, Optional[str]]:
+    """Lightweight entity extraction: company, ticker, year from the user query.
+    Tries LLM JSON output first; falls back to simple heuristics.
+    """
+    result = {"company": None, "ticker": None, "year": None}
+    try:
+        sys = (
+            "Extract company name, stock ticker (if present), and dominant year from the text. "
+            "Output STRICT JSON: {\"company\":string|null, \"ticker\":string|null, \"year\":string|null}. "
+            "Ticker should be UPPER CASE letters 1-5, no suffixes."
+        )
+        raw = use_llm_fixed(prompt=query, system_prompt=sys)
+        import json as _json
+        data = None
+        try:
+            data = _json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for k in ("company","ticker","year"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    result[k] = v.strip()
+    except Exception:
+        pass
+    # Heuristics fallback
+    try:
+        import re
+        # Ticker in parentheses like Tesla (TSLA) or standalone upper-case token
+        m = re.search(r"\(([A-Z]{1,5})\)", query)
+        if m and not result["ticker"]:
+            result["ticker"] = m.group(1)
+        if not result["year"]:
+            m2 = re.search(r"\b(20\d{2})\b", query)
+            if m2:
+                result["year"] = m2.group(1)
+        # Company guess: take leading proper noun phrase before '(' or 'stock' words
+        if not result["company"]:
+            candidate = re.split(r"\(|\bstock\b|\bticker\b|\bshares\b", query, flags=re.I)[0].strip()
+            result["company"] = candidate[:80] if candidate else None
+    except Exception:
+        pass
+    return result
+
+def _detect_coverage_gaps(sources: List[Dict[str, Any]]) -> Dict[str, bool]:
+    """Detect whether key coverage areas are present in sources by URL/title heuristics."""
+    flags = {
+        'sec_filings': False,
+        'investor_update': False,
+        'earnings_release': False,
+        'call_transcript': False,
+        'analyst_ratings': False,
+        'price_targets': False,
+        'guidance': False,
+        'peer_comparison': False,
+        'macro_trends': False,
+        'valuation': False,
+    }
+    for s in sources or []:
+        url = (s.get('url') or '').lower()
+        title = (s.get('title') or '').lower()
+        text = title + ' ' + (s.get('snippet') or '').lower()
+        if 'sec.gov' in url or '10-q' in text or '10-k' in text or '8-k' in text:
+            flags['sec_filings'] = True
+        if 'investor relations' in text or '/ir' in url or '/investor' in url:
+            flags['investor_update'] = True
+        if 'earnings' in text and ('release' in text or 'results' in text):
+            flags['earnings_release'] = True
+        if 'transcript' in text or 'earnings call' in text:
+            flags['call_transcript'] = True
+        if 'analyst' in text and ('ratings' in text or 'recommendations' in text):
+            flags['analyst_ratings'] = True
+        if 'price target' in text or 'target price' in text:
+            flags['price_targets'] = True
+        if 'guidance' in text or 'outlook' in text:
+            flags['guidance'] = True
+        if 'vs.' in text or 'competitor' in text or 'peers' in text:
+            flags['peer_comparison'] = True
+        if 'market trends' in text or 'macro' in text or 'sector' in text:
+            flags['macro_trends'] = True
+        if 'p/e' in text or 'valuation' in text or 'multiple' in text:
+            flags['valuation'] = True
+    return flags
+
+def _build_gap_queries(entity: Dict[str, Optional[str]], gaps: Dict[str, bool]) -> List[str]:
+    """Build targeted queries to fill missing coverage areas."""
+    company = (entity.get('company') or '').strip()
+    ticker = (entity.get('ticker') or '').strip()
+    year = (entity.get('year') or '').strip() or str(datetime.now().year)
+    tag = f"{company} {ticker}".strip()
+    tag = tag if tag else company or ticker or ''
+    q = []
+    if not tag:
+        return q
+    if not gaps.get('sec_filings'):
+        q.append(f"{tag} site:sec.gov 10-Q {year}")
+    if not gaps.get('investor_update'):
+        q.append(f"{company} investor relations update {year}")
+    if not gaps.get('earnings_release'):
+        q.append(f"{tag} earnings release {year}")
+    if not gaps.get('call_transcript'):
+        q.append(f"{tag} earnings call transcript {year}")
+    if not gaps.get('analyst_ratings'):
+        q.append(f"{ticker or company} analyst ratings {year}")
+    if not gaps.get('price_targets'):
+        q.append(f"{ticker or company} price targets {year}")
+    if not gaps.get('guidance'):
+        q.append(f"{company} guidance {year}")
+    if not gaps.get('peer_comparison'):
+        q.append(f"{company} competitors peer comparison {year}")
+    if not gaps.get('macro_trends'):
+        q.append(f"{company} industry macro trends {year}")
+    if not gaps.get('valuation'):
+        q.append(f"{ticker or company} valuation multiples P/E EV/EBITDA {year}")
+    # Deduplicate and cap
+    dedup = []
+    seen = set()
+    for item in q:
+        if item not in seen:
+            dedup.append(item)
+            seen.add(item)
+    return dedup[:8]
+
+def _build_domain_angles_queries(entity: Dict[str, Optional[str]]) -> List[str]:
+    """Domain-agnostic angles to deepen research when the user intent is broader than financials.
+    Covers product/tech, roadmap, supply chain, regulatory, partnerships, market sizing, customers, and risks.
+    """
+    company = (entity.get('company') or '').strip()
+    ticker = (entity.get('ticker') or '').strip()
+    year = (entity.get('year') or '').strip() or str(datetime.now().year)
+    tag = f"{company} {ticker}".strip() or company or ticker or ''
+    if not tag:
+        return []
+    queries = [
+        f"{tag} technology roadmap {year}",
+        f"{company or ticker} product pipeline milestones {year}",
+        f"{company or ticker} partnerships contracts {year}",
+        f"{company or ticker} regulatory approvals compliance {year}",
+        f"{company or ticker} supply chain risks suppliers {year}",
+        f"{company or ticker} hiring headcount engineering openings {year}",
+        f"{company or ticker} patents publications {year}",
+        f"{company or ticker} market sizing TAM SAM SOM {year}",
+        f"{company or ticker} customer segments use cases {year}",
+        f"{company or ticker} unit economics cost structure {year}",
+        f"{company or ticker} competitive matrix {year}",
+        f"{company or ticker} risks opportunities outlook {year}",
+    ]
+    # Dedup
+    out = []
+    seen = set()
+    for q in queries:
+        if q not in seen:
+            out.append(q)
+            seen.add(q)
+    return out
+
 class ResearchStartRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
     require_approval: Optional[bool] = False
     mode: Optional[str] = 'deep'
+    focus: Optional[str] = None
+    tone: Optional[str] = None
+    model_provider: Optional[str] = None
+    model_id: Optional[str] = None
 
 class ResearchStatusResponse(BaseModel):
     session_id: str
@@ -102,6 +278,13 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
     
     async def _async_research_impl():
         session = research_sessions[session_id]
+        # Capture run-local indices to assemble a per-run trace
+        try:
+            prev_events_idx = len(session.setdefault('events', []))
+            prev_steps_idx = len(session.setdefault('steps', []))
+        except Exception:
+            prev_events_idx = 0
+            prev_steps_idx = 0
         
         try:
             session['status'] = 'running'
@@ -168,15 +351,27 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 # Create a single session-managed coordinator agent that will be reused
                 # across planning, research coordination, and synthesis. This ensures
                 # a single conversation log and consistent agent_id (session_id).
+                # Stamp current date for recency guidance
+                _today = datetime.now().strftime('%Y-%m-%d')
+                # Adopt model selection from session (if provided via start/continue)
+                sel_provider = (session.get('model_provider') or 'openai').lower()
+                sel_model = session.get('model_id') or 'gpt-4o-mini'
                 coordinator_agent = SESSION_SERVICE.create_agent_with_session(
                     session_id=session_id,
                     agent_name="coordinator",
                     tools=tools,
                     system_prompt=(
-                        "You are an expert research coordinator. Maintain continuity with prior session "
-                        "context. Plan, search with tools, and synthesize findings with citations."
+                        "You are an expert research coordinator. Today is " + _today + ". "
+                        "Use tools (search/browse) for any facts after your training cutoff. "
+                        "Maintain continuity with prior session context. Plan, search with tools, and synthesize findings with citations. "
+                        "Never fabricate current data; prefer primary sources (SEC, IR, transcripts) and include citations."
                     ),
-                    model_config={"model_id": "gpt-4o-mini", "max_tokens": 8000, "temperature": 0.7}
+                    model_config={
+                        "provider": sel_provider,
+                        "model_id": sel_model,
+                        "max_tokens": 8000,
+                        "temperature": 0.7
+                    }
                 )
                 # ===== Phase 1: Planner (no web tools) =====
                 session.setdefault('events', [])
@@ -197,18 +392,30 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                     'timestamp': datetime.now().isoformat()
                 })
 
-                plan_prompt = (
-                    "SESSION_GOAL: " + query + "\n"
-                    "Create a bounded web search plan for the user query. "
-                    "Output STRICT JSON with fields: queries (array of strings, max 10), goals (array), stop_condition (string). "
-                    "Focus on diverse angles and recency. Use prior conversation context implicitly; DO NOT repeat or quote prior answer text."
-                    f"\n\nUSER_QUERY: {query}\n\nJSON_ONLY:"
-                )
+                user_focus = (session.get('focus') or '').strip()
+                user_tone = (session.get('tone') or '').strip()
+                _plan_parts = [
+                    f"SESSION_GOAL: {query}\n",
+                    "Create a bounded web search plan for the user query. ",
+                    "Output STRICT JSON with fields: queries (array of strings, max 10), goals (array), stop_condition (string). ",
+                    "Focus on diverse angles and recency. Use prior conversation context implicitly; DO NOT repeat or quote prior answer text.",
+                ]
+                if user_focus:
+                    _plan_parts.append(f"\nFOCUS: {user_focus}")
+                if user_tone:
+                    _plan_parts.append(f"\nTONE: {user_tone}")
+                _plan_parts.append(f"\n\nUSER_QUERY: {query}\n\nJSON_ONLY:")
+                plan_prompt = ''.join(_plan_parts)
                 # Use the session-managed coordinator agent for planning so the
                 # plan becomes part of the conversation context
                 plan_text_chunks = []
                 try:
                     async for pevt in coordinator_agent.stream_async(plan_prompt):
+                        # Allow cancellation during planning
+                        if research_sessions.get(session_id, {}).get('cancel'):
+                            session['status'] = 'cancelled'
+                            session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'planning', 'ts': datetime.now().isoformat()})
+                            return
                         if "data" in pevt:
                             plan_text_chunks.append(pevt["data"])
                 except Exception as _pe:
@@ -239,7 +446,20 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 import os as _os
                 plan = _extract_json_block(plan_text) or {"queries": [], "goals": [], "stop_condition": "budget"}
                 _max_calls = int(_os.getenv("TAVILY_MAX_CALLS_PER_RUN", 12))
-                queries = [q for q in plan.get('queries', []) if isinstance(q, str)][: _max_calls]
+                base_queries = [q for q in plan.get('queries', []) if isinstance(q, str)]
+                # Enrich with domain-agnostic angles when space allows
+                entity = _extract_company_ticker_year(query)
+                angles = _build_domain_angles_queries(entity)
+                # Merge while preserving order and cap by _max_calls
+                merged = []
+                seen = set()
+                for q in base_queries + angles:
+                    if isinstance(q, str) and q.strip() and q not in seen:
+                        merged.append(q.strip())
+                        seen.add(q.strip())
+                    if len(merged) >= _max_calls:
+                        break
+                queries = merged
 
                 session['steps'][-1]['status'] = 'completed'
                 # emit phase_end(planning)
@@ -254,8 +474,19 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 # emit phase_start(research)
                 session['events'].append({'type': 'phase_start', 'phase': 'research', 'count': len(queries), 'ts': datetime.now().isoformat()})
 
+                # Helper to honor cancellation
+                def _cancelled() -> bool:
+                    try:
+                        return bool(session.get('cancel'))
+                    except Exception:
+                        return False
+
                 # ===== Phase 2: Researcher (agent-driven tool usage for each planned query) =====
                 for idx, q in enumerate(queries, 1):
+                    if _cancelled():
+                        session['status'] = 'cancelled'
+                        session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'research', 'ts': datetime.now().isoformat()})
+                        return
                     session['thoughts'].append({
                         'type': 'searching',
                         'content': f'🔎 [Planned Search #{idx}] {q}',
@@ -277,7 +508,12 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                         f"Use tavily_search on this query and then provide a concise 1-2 sentence summary.\n\nQUERY: {q}"
                     )
                     try:
+                        found = False
                         async for _evt in coordinator_agent.stream_async(instruction):
+                            if _cancelled():
+                                session['status'] = 'cancelled'
+                                session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'research', 'ts': datetime.now().isoformat()})
+                                return
                             # The tavily_search tool populates global results we read below
                             if isinstance(_evt, dict) and 'tool_result' in _evt:
                                 # Try to parse a brief summary if available
@@ -287,12 +523,17 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                                     if isinstance(out_text, str):
                                         # Heuristic: first line as summary
                                         step['summary'] = (out_text.splitlines() or [''])[0][:200]
+                                found = True
+                                break
                     except Exception as _e:
                         logger.warning(f"Agent-driven search failed for '{q}': {_e}")
 
                     # Attach structured results for this specific search
                     try:
                         last_results = get_last_search_results() or []
+                        if not last_results:
+                            # Fallback: use DDG if Tavily returned nothing
+                            last_results = fallback_search_ddg(q, max_results=5)
                         mapped = []
                         for i, r in enumerate(last_results, 1):
                             u = r.get('url', '')
@@ -310,8 +551,8 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                             })
                         step['results'] = mapped
 
-                        # Also incrementally add to session.sources so UI can show live feed
-                        existing = session.get('sources', []) or []
+                        # Also incrementally add to session.sources_all so UI can show live feed
+                        existing = session.get('sources_all', []) or []
                         seen_urls = set(s.get('url') for s in existing if isinstance(s, dict))
                         for j, r in enumerate(last_results, 1):
                             url = r.get('url', '')
@@ -330,7 +571,7 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                             }
                             existing.append(src)
                             seen_urls.add(url)
-                        session['sources'] = existing
+                        session['sources_all'] = existing
                         # emit sources_delta
                         session['events'].append({'type': 'sources_delta', 'added': mapped, 'index': idx, 'ts': datetime.now().isoformat()})
 
@@ -349,9 +590,15 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                                         "SESSION_GOAL: " + query + "\n"
                                         f"Use browse_and_capture on this URL to extract visible text: {top_url}"
                                     )
+                                    # Trigger one browse action then continue
+                                    _did_browse = False
                                     async for _bevt in coordinator_agent.stream_async(browse_instruction):
-                                        # We don't need to stream these chunks to UI
-                                        pass
+                                        if _cancelled():
+                                            session['status'] = 'cancelled'
+                                            session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'research', 'ts': datetime.now().isoformat()})
+                                            return
+                                        _did_browse = True
+                                        break
                                     # Fetch any new screenshots
                                     new_shots = get_captured_screenshots() or []
                                     if len(new_shots) > prev_count:
@@ -373,6 +620,11 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                             pass
                     except Exception:
                         step['results'] = []
+                    # Record results_count for trace
+                    try:
+                        step['results_count'] = len(step.get('results') or [])
+                    except Exception:
+                        step['results_count'] = None
                     step['status'] = 'completed'
                     # emit tool_end (include query for matching)
                     session['events'].append({'type': 'tool_end', 'tool': 'tavily_search', 'index': idx, 'query': q, 'summary': step.get('summary'), 'results_count': step.get('results_count'), 'ts': datetime.now().isoformat()})
@@ -393,6 +645,125 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                     except Exception:
                         pass
 
+                # After planned searches, perform targeted gap-filling if needed
+                try:
+                    # Analyze coverage
+                    baseline_sources = session.get('sources', []) or []
+                    coverage = _detect_coverage_gaps(baseline_sources)
+                    entity = _extract_company_ticker_year(query)
+                    gap_queries = _build_gap_queries(entity, coverage)
+                    # Respect overall search budget: use only remaining slots
+                    try:
+                        total_budget = int(os.getenv('TAVILY_MAX_CALLS_PER_RUN', 12))
+                    except Exception:
+                        total_budget = 12
+                    remaining = max(0, total_budget - len(queries))
+                    gap_cap = int(os.getenv('TAVILY_GAP_MAX', 6))
+                    # Remove duplicates that already exist in the planned query list
+                    planned_set = set(queries)
+                    gap_queries = [g for g in gap_queries if g not in planned_set][: min(remaining, gap_cap)]
+                    if gap_queries:
+                        # Mark gap-fill phase
+                        session['steps'].append({
+                            'id': 'phase-2b',
+                            'title': 'Gap fill searches',
+                            'description': f'Running {len(gap_queries)} targeted queries',
+                            'status': 'active',
+                            'icon': 'search'
+                        })
+                        session['events'].append({'type': 'phase_start', 'phase': 'gap_fill', 'count': len(gap_queries), 'ts': datetime.now().isoformat()})
+                        for gidx, gq in enumerate(gap_queries, 1):
+                            if _cancelled():
+                                session['status'] = 'cancelled'
+                                session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'gap_fill', 'ts': datetime.now().isoformat()})
+                                return
+                            session['thoughts'].append({
+                                'type': 'searching',
+                                'content': f'🔎 [Gap Search #{gidx}] {gq}',
+                                'timestamp': datetime.now().isoformat()
+                            })
+                            step = {
+                                'id': f'gap-search-{gidx}',
+                                'title': f'Gap Search #{gidx}',
+                                'description': gq,
+                                'status': 'active',
+                                'icon': 'search'
+                            }
+                            session['steps'].append(step)
+                            session['events'].append({'type': 'tool_start', 'tool': 'tavily_search', 'query': gq, 'index': gidx, 'ts': datetime.now().isoformat()})
+                            # Execute with agent to keep consistent tool usage
+                            instruction = (
+                                "SESSION_GOAL: " + query + "\n"
+                                f"Use tavily_search on this gap query and provide a concise summary.\n\nQUERY: {gq}"
+                            )
+                            try:
+                                async for _evt in coordinator_agent.stream_async(instruction):
+                                    if _cancelled():
+                                        session['status'] = 'cancelled'
+                                        session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'gap_fill', 'ts': datetime.now().isoformat()})
+                                        return
+                                    if isinstance(_evt, dict) and 'tool_result' in _evt:
+                                        tr = _evt.get('tool_result') or {}
+                                        if isinstance(tr, dict):
+                                            out_text = tr.get('result') or tr.get('output') or tr.get('content') or ''
+                                            if isinstance(out_text, str):
+                                                step['summary'] = (out_text.splitlines() or [''])[0][:200]
+                                        break
+                            except Exception:
+                                pass
+                            # Attach results
+                            last_results = get_last_search_results() or []
+                            if not last_results:
+                                last_results = fallback_search_ddg(gq, max_results=5)
+                            mapped = []
+                            for i, r in enumerate(last_results, 1):
+                                u = r.get('url', '')
+                                dom = extract_domain(u)
+                                images = r.get('images') or r.get('image_urls') or []
+                                thumb = images[0] if isinstance(images, list) and images else f"https://picsum.photos/seed/g{gidx}_{i}/400/300"
+                                mapped.append({
+                                    'index': i,
+                                    'title': r.get('title', 'Untitled'),
+                                    'url': u,
+                                    'snippet': (r.get('content', '') or '')[:200],
+                                    'favicon': f"https://www.google.com/s2/favicons?domain={dom}&sz=64" if dom else None,
+                                    'thumbnail': thumb,
+                                })
+                            step['results'] = mapped
+                            # Merge into sources live
+                            existing = session.get('sources_all', []) or []
+                            seen_urls = set(s.get('url') for s in existing if isinstance(s, dict))
+                            for r in last_results:
+                                url = r.get('url', '')
+                                if not url or url in seen_urls:
+                                    continue
+                                num = len(existing) + 1
+                                src = {
+                                    'id': f'source-{num}',
+                                    'number': num,
+                                    'title': r.get('title', 'Untitled'),
+                                    'url': url,
+                                    'domain': extract_domain(url),
+                                    'snippet': (r.get('content', '') or '')[:200],
+                                    'favicon': f"https://www.google.com/s2/favicons?domain={extract_domain(url)}&sz=64",
+                                    'thumbnail': f"https://picsum.photos/seed/{num}/400/300",
+                                }
+                                existing.append(src)
+                                seen_urls.add(url)
+                            session['sources_all'] = existing
+                            # Close the gap step
+                            try:
+                                step['results_count'] = len(step.get('results') or [])
+                            except Exception:
+                                step['results_count'] = None
+                            step['status'] = 'completed'
+                            session['events'].append({'type': 'tool_end', 'tool': 'tavily_search', 'index': gidx, 'query': gq, 'summary': step.get('summary'), 'results_count': step.get('results_count'), 'ts': datetime.now().isoformat()})
+                        # Close gap-fill phase
+                        session['steps'][-1]['status'] = 'completed'
+                        session['events'].append({'type': 'phase_end', 'phase': 'gap_fill', 'ts': datetime.now().isoformat()})
+                except Exception:
+                    pass
+
                 session['steps'][-1]['status'] = 'completed'
                 # emit phase_end(research)
                 session['events'].append({'type': 'phase_end', 'phase': 'research', 'ts': datetime.now().isoformat()})
@@ -407,25 +778,45 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 session['events'].append({'type': 'phase_start', 'phase': 'synthesis', 'ts': datetime.now().isoformat()})
 
                 # ===== Phase 3: Synthesizer (streaming, same coordinator agent) =====
+                if _cancelled():
+                    session['status'] = 'cancelled'
+                    session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'synthesis', 'ts': datetime.now().isoformat()})
+                    return
                 # Build a compact source summary for synthesis
-                all_results = get_all_search_results()
+                all_results = get_all_search_results() or []
                 src_summary = []
-                for r in all_results[:20]:
-                    t = r.get('title', 'Untitled')
-                    u = r.get('url', '')
-                    c = (r.get('content', '') or '')[:200]
-                    src_summary.append(f"- {t} ({u}) :: {c}")
-                synth_prompt = (
-                    "SESSION_GOAL: " + query + "\n"
-                    "Synthesize findings into a structured research response with inline numeric citations [1], [2], etc., "
-                    "matching the order of the sources list provided. Include executive summary, current state, key patterns, data, perspectives, outlook, "
-                    "and actionable recommendations. Maintain continuity with prior conversation but DO NOT repeat previous answer text; focus on the new user intent (e.g., compare/contrast if asked).\n\n"
-                    "If visualization tools are available, do the following near the top of the response after the executive summary: \n"
-                    "1) If the 'diagram' tool exists, generate ONE Mermaid diagram that captures structure (e.g., competitive landscape, process, or timeline). Include the Mermaid block in the output.\n"
-                    "2) If the 'generate_image' tool exists and numeric comparisons are present, render ONE chart (bar/line) and embed it as a markdown image. If the tool returns a data URI, embed it as ![Chart](data:...).\n"
-                    "Keep the number of visuals to 1–2 to avoid clutter.\n\n"
-                    + "SOURCES (ordered):\n" + "\n".join(src_summary)
-                )
+                base_list = all_results[:30]
+                # Fallback: if Tavily returned nothing, use session.sources accumulated from fallback DDG
+                if not base_list:
+                    for s in (session.get('sources') or [])[:20]:
+                        src_summary.append(f"- {s.get('title','Untitled')} ({s.get('url','')}) :: {(s.get('content','') or s.get('snippet','') or '')[:200]}")
+                else:
+                    for r in base_list:
+                        t = r.get('title', 'Untitled')
+                        u = r.get('url', '')
+                        c = (r.get('content', '') or '')[:200]
+                        src_summary.append(f"- {t} ({u}) :: {c}")
+                _synth_parts = [
+                    f"SESSION_GOAL: {query}\n",
+                    "Synthesize findings into a structured research response with inline numeric citations [1], [2], etc., matching the order of the sources list provided. ",
+                    "Include these sections: 1) Executive Summary, 2) Financials & Earnings (EPS, revenue, margins, growth, segment highlights; include latest quarter and Y/Y deltas), ",
+                    "3) Filings & Transcripts (list key SEC forms and latest call transcript with links), 4) Analyst & Price Targets, 5) Market/Macro & Competitive Landscape, 6) Risks & Opportunities, 7) Outlook & Scenarios, 8) Actionable Takeaways. ",
+                    "If the topic is product/engineering (e.g., satellites or R&D), adapt sections to: 2) Product/Tech Overview, 3) Architecture & Dependencies, 4) Roadmap & Milestones (timeline), 5) Supply Chain & Manufacturing Plan, 6) Regulatory/Compliance, 7) Partnerships & Contracts, 8) Economics (CapEx/Opex; unit economics if available), 9) Risks & Mitigations, 10) Outlook & Scenarios, 11) Next Actions. ",
+                    "Maintain continuity with prior conversation but DO NOT repeat previous answer text; focus on updated user intent. Keep claims grounded in the sources.\n\n",
+                ]
+                if user_focus:
+                    _synth_parts.append(f"FOCUS: {user_focus}\n")
+                if user_tone:
+                    _synth_parts.append(f"TONE: {user_tone}\n")
+                _synth_parts.extend([
+                    "If visualization tools are available, do the following near the top of the response after the executive summary: \n",
+                    "1) If the 'diagram' tool exists, generate ONE Mermaid diagram that captures structure (e.g., competitive landscape, process, or timeline). Include the Mermaid block in the output.\n",
+                    "2) If the 'generate_image' tool exists and numeric comparisons are present, render ONE chart (bar/line) and embed it as a markdown image. If the tool returns a data URI, embed it as ![Chart](data:...).\n",
+                    "Keep the number of visuals to 1–2 to avoid clutter.\n\n",
+                    "SOURCES (ordered):\n",
+                    "\n".join(src_summary)
+                ])
+                synth_prompt = ''.join(_synth_parts)
                 # Reset content before final synthesis to avoid leaking tool traces
                 session['content'] = ''
                 # Stream synthesis using a nested Agent for realtime updates
@@ -433,6 +824,10 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 try:
                     # Reuse the same coordinator agent to keep one conversation
                     async for sevt in coordinator_agent.stream_async(synth_prompt):
+                        if _cancelled():
+                            session['status'] = 'cancelled'
+                            session.setdefault('events', []).append({'type': 'cancelled', 'phase': 'synthesis', 'ts': datetime.now().isoformat()})
+                            return
                         if "data" in sevt:
                             chunk = sevt["data"]
                             if chunk:
@@ -447,7 +842,15 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                 session['content'] = final_text
                 # Align session.sources order to match the SOURCES (ordered) list used in synthesis
                 try:
-                    ordered_results = all_results[:20]
+                    ordered_results = all_results[:30]
+                    if not ordered_results:
+                        # Build ordered_results from session.sources when Tavily list is empty
+                        fallback_pool = (session.get('sources_all') or session.get('sources') or [])
+                        ordered_results = [{
+                            'title': s.get('title','Untitled'),
+                            'url': s.get('url',''),
+                            'content': s.get('content') or s.get('snippet') or ''
+                        } for s in fallback_pool[:30]]
                     aligned_sources = []
                     seen_urls = set()
                     idx_num = 1
@@ -470,6 +873,7 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                         })
                         idx_num += 1
                     if aligned_sources:
+                        # Keep aligned citations separate, but do not drop full list
                         session['sources'] = aligned_sources
                         session['events'].append({'type': 'sources_reordered', 'count': len(aligned_sources), 'ts': datetime.now().isoformat()})
                 except Exception:
@@ -516,6 +920,37 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                         'mode': 'scholar'
                     })
                 
+                # Build per-run trace for Thinking & Tools UI
+                trace = {}
+                try:
+                    run_events = session.get('events', [])[prev_events_idx:]
+                    steps_added = session.get('steps', [])[prev_steps_idx:]
+                    tool_calls = []
+                    current = {}
+                    for evt in run_events:
+                        if not isinstance(evt, dict):
+                            continue
+                        if evt.get('type') == 'tool_start':
+                            current = {
+                                'tool': evt.get('tool'),
+                                'query': evt.get('query'),
+                                'index': evt.get('index')
+                            }
+                        elif evt.get('type') == 'tool_end':
+                            if current:
+                                current['summary'] = evt.get('summary')
+                                current['results_count'] = evt.get('results_count')
+                                tool_calls.append(current)
+                                current = {}
+                    trace = {
+                        'events': run_events[-200:],
+                        'steps': steps_added,
+                        'tool_calls': tool_calls,
+                        'sources': session.get('sources', [])[:50]
+                    }
+                except Exception:
+                    trace = {}
+
                 # Add final assistant message to history
                 if session.get('content'):
                     session['messages'].append({
@@ -524,6 +959,7 @@ def perform_strands_research(session_id: str, query: str, require_approval: bool
                         'timestamp': datetime.now().isoformat(),
                         'sources': session.get('sources', []),
                         'thoughts': session.get('thoughts', []),
+                        'trace': trace,
                         'mode': 'scholar'
                     })
                 
@@ -1104,6 +1540,38 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
             session['steps'].append(step3)
             
             # Complete
+            # Build per-run trace (events, steps added, tool calls, sources snapshot)
+            trace = {}
+            try:
+                run_events = session.get('events', [])[prev_events_idx:]
+                steps_added = session.get('steps', [])[prev_steps_idx:]
+                # Extract simple tool_calls list
+                tool_calls = []
+                current = {}
+                for evt in run_events:
+                    if not isinstance(evt, dict):
+                        continue
+                    if evt.get('type') == 'tool_start':
+                        current = {
+                            'tool': evt.get('tool'),
+                            'query': evt.get('query'),
+                            'index': evt.get('index')
+                        }
+                    elif evt.get('type') == 'tool_end':
+                        if current:
+                            current['summary'] = evt.get('summary')
+                            current['results_count'] = evt.get('results_count')
+                            tool_calls.append(current)
+                            current = {}
+                trace = {
+                    'events': run_events[-200:],  # cap to avoid huge payloads
+                    'steps': steps_added,
+                    'tool_calls': tool_calls,
+                    'sources': session.get('sources', [])[:50]
+                }
+            except Exception:
+                trace = {}
+
             # Add user query and assistant response to history
             if 'messages' not in session:
                 session['messages'] = []
@@ -1125,6 +1593,7 @@ START NOW with Step 1 - Call use_llm_fixed FIRST for deep analysis of: {query}""
                     'timestamp': datetime.now().isoformat(),
                     'sources': session.get('sources', []),
                     'thoughts': session.get('thoughts', []),
+                    'trace': trace,
                     'mode': 'deep'
                 })
             
@@ -1164,10 +1633,19 @@ async def start_research(request: ResearchStartRequest, background_tasks: Backgr
         session['query'] = request.query
         session['status'] = 'initializing'
         session['progress'] = 0
+        session['cancel'] = False
         session['timestamp'] = datetime.now().isoformat()
         session.setdefault('events', []).append({'type':'phase_start','phase':'new_run','ts': datetime.now().isoformat()})
         # Clear active content buffer for the new run; prior content remains in UI history
         session['content'] = ''
+        if request.focus:
+            session['focus'] = request.focus
+        if request.tone:
+            session['tone'] = request.tone
+        if request.model_provider:
+            session['model_provider'] = request.model_provider
+        if request.model_id:
+            session['model_id'] = request.model_id
     else:
         research_sessions[session_id] = {
             'session_id': session_id,
@@ -1178,11 +1656,15 @@ async def start_research(request: ResearchStartRequest, background_tasks: Backgr
             'events': [],
             'content': '',
             'sources': [],
+            'sources_all': [],
             'thoughts': [],  # Initialize thoughts array
             'timestamp': datetime.now().isoformat(),
             'error': None,
             'requires_approval': False,
             'approval_message': None,
+            'cancel': False,
+            'model_provider': request.model_provider or 'openai',
+            'model_id': request.model_id or 'gpt-4o-mini',
             'messages': [
                 {
                     'role': 'user',
@@ -1190,7 +1672,9 @@ async def start_research(request: ResearchStartRequest, background_tasks: Backgr
                     'timestamp': datetime.now().isoformat(),
                     'mode': request.mode
                 }
-            ]
+            ],
+            'focus': request.focus,
+            'tone': request.tone
         }
     
     # Record task in shared state for continuity
@@ -1236,7 +1720,10 @@ async def continue_research(request: ResearchStartRequest):
     session = research_sessions[session_id]
     session['status'] = 'initializing'
     session['progress'] = 0
+    session['cancel'] = False
     session['timestamp'] = datetime.now().isoformat()
+    # Reset full sources accumulator for a new pass
+    session['sources_all'] = session.get('sources_all') or []
     # Do not clear steps/sources to preserve history; frontend presents its own history
     # Clear active content so the new response doesn't echo the previous one
     session.setdefault('events', []).append({'type':'phase_start','phase':'new_run','ts': datetime.now().isoformat()})
@@ -1256,8 +1743,28 @@ async def continue_research(request: ResearchStartRequest):
         logger.info(f"[CONTINUE] Session {session_id} context: messages={ctx.get('total_messages')} agents_used={ctx.get('agents_used')}")
     except Exception:
         pass
+    # Adopt model selection if provided
+    if request.model_provider:
+        session['model_provider'] = request.model_provider
+    if request.model_id:
+        session['model_id'] = request.model_id
+
+    # Build an effective follow-up query to preserve topic when the user sends a short follow-up
+    prev_goal = (session.get('query') or '').strip()
+    user_q = (request.query or '').strip()
+    effective_query = user_q
+    try:
+        # Heuristic: short follow-ups or those lacking topic words should bind to previous goal
+        if prev_goal and (len(user_q) < 40 or user_q.lower() in ["compare", "what about", "more", "continue", "next", "follow up", "follow-up"]):
+            effective_query = f"Follow-up to prior topic: {prev_goal}. Specifically: {user_q}"
+    except Exception:
+        effective_query = user_q or prev_goal or ''
+
+    # Update session visible query for continuity
+    session['query'] = effective_query or user_q or prev_goal
+    
     # Kick off another research pass without approval by default unless specified
-    perform_strands_research(session_id, request.query, request.require_approval or False)
+    perform_strands_research(session_id, effective_query, request.require_approval or False)
 
     return {
         'session_id': session_id,
@@ -1305,6 +1812,7 @@ async def get_research_status(session_id: str):
         "steps": session['steps'],
         "content": session['content'],
         "sources": session['sources'],
+        "sources_all": session.get('sources_all', []),
         "thoughts": session.get('thoughts', []),
         "timestamp": session['timestamp'],
         "error": session.get('error'),
@@ -1375,6 +1883,7 @@ async def stream_research(session_id: str):
                 'steps': session.get('steps', []),
                 'content': session.get('content', ''),
                 'sources': session.get('sources', []),
+                'sources_all': session.get('sources_all', []),
                 'thoughts': session.get('thoughts', []),
                 'timestamp': session.get('timestamp'),
                 'error': session.get('error')
@@ -1518,9 +2027,306 @@ async def health_check():
         'tools_available': tools_available,
         'api_keys_configured': {
             'openai': bool(os.getenv('OPENAI_API_KEY')),
-            'tavily': bool(os.getenv('TAVILY_API_KEY'))
+            'tavily': bool(os.getenv('TAVILY_API_KEY')),
+            'anthropic': bool(os.getenv('ANTHROPIC_API_KEY')),
+            'aws': bool(os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY') and os.getenv('AWS_REGION'))
         }
     }
+
+@router.get("/model-config")
+async def model_config():
+    """Return recommended model lists per provider, reading optional JSON config.
+
+    If a `MODEL_CONFIG_JSON` env var points to a file, we will load it.
+    Otherwise returns sensible defaults for OpenAI, Anthropic, and AWS Bedrock.
+    """
+    import json as _json
+    import os as _os
+    default_cfg = {
+        'openai': {
+            'name': 'OpenAI',
+            'models': [
+                # Featured / Frontier
+                'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+                'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+                # Specialized
+                'o3-deep-research', 'o4-mini-deep-research', 'o3-pro', 'o3', 'o4-mini',
+                # Realtime & audio
+                'gpt-realtime', 'gpt-audio',
+                # 4o family
+                'gpt-4o', 'gpt-4o-mini', 'gpt-4o-mini-tts', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe',
+                'gpt-4o-search-preview', 'gpt-4o-mini-search-preview', 'gpt-4o-realtime-preview', 'gpt-4o-mini-realtime-preview', 'gpt-4o-mini-audio-preview', 'gpt-4o-audio-preview',
+                # Images
+                'gpt-image-1', 'dall-e-3',
+                # Moderation / OSS / legacy useful ones
+                'omni-moderation-latest', 'gpt-oss-120b', 'gpt-oss-20b',
+                # Embeddings
+                'text-embedding-3-large', 'text-embedding-3-small'
+            ]
+        },
+        'anthropic': {
+            'name': 'Anthropic',
+            'models': [
+                'claude-opus-4-1-20250805',
+                'claude-opus-4-20250514',
+                'claude-sonnet-4-20250514',
+                'claude-3-7-sonnet-20250219',
+                'claude-3-5-haiku-20241022',
+                'claude-3-haiku-20240307'
+            ]
+        },
+        'bedrock': {
+            'name': 'AWS Bedrock',
+            'models': [
+                # Latest Anthropic Claude on Bedrock (verify availability per region)
+                'anthropic.claude-opus-4-1-20250805-v1:0',
+                'anthropic.claude-opus-4-20250514-v1:0',
+                'anthropic.claude-sonnet-4-20250514-v1:0',
+                'anthropic.claude-3-7-sonnet-20250219-v1:0',
+                'anthropic.claude-3-5-haiku-20241022-v1:0',
+                'anthropic.claude-3-5-sonnet-20241022-v2:0',
+                'anthropic.claude-3-opus-20240229-v1:0',
+                'anthropic.claude-3-haiku-20240307-v1:0'
+            ]
+        }
+    }
+    path = _os.getenv('MODEL_CONFIG_JSON')
+    cfg = default_cfg
+    if path and _os.path.exists(path):
+        try:
+            with open(path, 'r') as f:
+                cfg = _json.load(f)
+        except Exception:
+            cfg = default_cfg
+    # Merge optional local override file
+    override_path = './model_config.override.json'
+    if _os.path.exists(override_path):
+        try:
+            with open(override_path, 'r') as f:
+                override = _json.load(f)
+                for k,v in (override or {}).items():
+                    cfg[k] = v
+        except Exception:
+            pass
+    return {
+        'providers': cfg,
+        'api_keys_configured': {
+            'openai': bool(os.getenv('OPENAI_API_KEY')),
+            'anthropic': bool(os.getenv('ANTHROPIC_API_KEY')),
+            'aws': bool(os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY') and os.getenv('AWS_REGION'))
+        }
+    }
+
+@router.post("/model-config")
+async def save_model_config(payload: Dict[str, Any]):
+    """Persist model config override to a writable file model_config.override.json.
+    Expected body: { providers: { provider: { name: string, models: string[] } } }
+    """
+    try:
+        providers = payload.get('providers') or {}
+        if not isinstance(providers, dict):
+            raise HTTPException(status_code=400, detail='providers must be an object')
+        import json as _json
+        with open('./model_config.override.json', 'w') as f:
+            _json.dump(providers, f, indent=2)
+        return { 'status': 'ok' }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/model-test")
+async def model_test(req: Dict[str, Any]):
+    """Quick readiness test for provider+model.
+    For OpenAI: runs a minimal request through a transient agent.
+    For Anthropic/Bedrock: validates env credentials and returns readiness.
+    """
+    provider = (req.get('provider') or 'openai').lower()
+    model_id = req.get('model_id') or 'gpt-4o-mini'
+    try:
+        if provider == 'openai':
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
+            key_ok = bool(os.getenv('OPENAI_API_KEY'))
+            if not key_ok:
+                return { 'ok': False, 'provider': provider, 'model_id': model_id, 'reason': 'OPENAI_API_KEY missing' }
+            model = OpenAIModel(model_id=model_id, params={ 'temperature': 0.1, 'max_tokens': 64 })
+            agent = Agent(model=model, system_prompt='You are a ping utility.')
+            text = agent('Respond with OK only.')
+            ok = isinstance(text, str) and ('OK' in text.upper())
+            return { 'ok': ok, 'provider': provider, 'model_id': model_id, 'response_preview': (text[:80] if isinstance(text,str) else str(text)) }
+        elif provider == 'anthropic':
+            ready = bool(os.getenv('ANTHROPIC_API_KEY'))
+            return { 'ok': ready, 'provider': provider, 'model_id': model_id, 'note': 'Runtime ping not implemented in this build' }
+        elif provider == 'bedrock':
+            ready = bool(os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY') and os.getenv('AWS_REGION'))
+            if not ready:
+                return { 'ok': False, 'provider': provider, 'model_id': model_id, 'reason': 'AWS credentials/region missing' }
+            # Attempt a lightweight invoke if boto3 is available
+            try:
+                import json as _json
+                import boto3
+                client = boto3.client('bedrock-runtime', region_name=os.getenv('AWS_REGION'))
+                # Minimal Anthropic prompt for Claude on Bedrock
+                body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 16,
+                    "messages": [ { "role": "user", "content": [ { "type":"text", "text": "Reply with OK" } ] } ]
+                }
+                resp = client.invoke_model(modelId=model_id, body=_json.dumps(body))
+                payload = _json.loads(resp.get('body').read().decode('utf-8')) if hasattr(resp.get('body'),'read') else {}
+                # Try different shapes for text
+                out = ''
+                if isinstance(payload, dict):
+                    if 'output_text' in payload:
+                        out = payload.get('output_text','')
+                    elif 'content' in payload and isinstance(payload['content'], list) and payload['content']:
+                        part = payload['content'][0]
+                        if isinstance(part, dict) and 'text' in part:
+                            out = part['text']
+                ok = 'OK' in (out or '').upper()
+                return { 'ok': ok, 'provider': provider, 'model_id': model_id, 'response_preview': (out[:120] if isinstance(out,str) else str(out)) }
+            except ModuleNotFoundError:
+                return { 'ok': ready, 'provider': provider, 'model_id': model_id, 'note': 'boto3 not installed; cannot ping runtime' }
+            except Exception as e:
+                return { 'ok': False, 'provider': provider, 'model_id': model_id, 'error': str(e) }
+        else:
+            return { 'ok': False, 'provider': provider, 'model_id': model_id, 'reason': 'Unknown provider' }
+    except Exception as e:
+        return { 'ok': False, 'provider': provider, 'model_id': model_id, 'error': str(e) }
+
+@router.post("/browse-playlist-strands-real/{session_id}")
+async def browse_playlist(session_id: str, payload: Dict[str, Any]):
+    """Server-driven browsing of a list of URLs using Playwright-based tool.
+    Emits session events so the UI can show previews. Avoids browser popup policies.
+    Body: { urls: string[], dwell_seconds?: int }
+    """
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    urls: List[str] = payload.get('urls') or []
+    dwell = int(payload.get('dwell_seconds') or 8)
+    top_n = int(payload.get('top_n') or 0)
+    urls = [u for u in urls if isinstance(u, str) and u.startswith('http')]
+    if top_n and top_n > 0:
+        urls = urls[:top_n]
+    if not urls:
+        raise HTTPException(status_code=400, detail="No valid URLs provided")
+
+    session = research_sessions[session_id]
+    session.setdefault('events', []).append({'type': 'browse_start', 'total': len(urls), 'ts': datetime.now().isoformat()})
+
+    def _runner():
+        try:
+            total = len(urls)
+            for i, url in enumerate(urls, 1):
+                session['events'].append({'type': 'browse_visit', 'index': i, 'total': total, 'url': url, 'ts': datetime.now().isoformat()})
+                try:
+                    # Use our reliable Playwright-based tool
+                    _ = browse_and_capture(url)
+                    # Emit a lightweight screenshot event (image itself already accessible via prior logic)
+                    session['events'].append({'type': 'screenshot', 'url': url, 'description': f'Visited {url}', 'ts': datetime.now().isoformat()})
+                    # AI skim using latest OCR text
+                    try:
+                        shots = get_captured_screenshots() or []
+                        latest = shots[-1] if shots else {}
+                        ocr_text = (latest.get('ocr_text') or '')[:2000]
+                        if ocr_text:
+                            skim_prompt = (
+                                "You are an efficient research assistant. Read the page text and output STRICT JSON with: "
+                                "{\"bullets\":[{\"type\":\"key_claim\",\"text\":string},{\"type\":\"evidence\",\"text\":string},{\"type\":\"uncertainty\",\"text\":string}],\"tags\":[string]} "
+                                "Bullets must be short (<=160 chars). Tags include topic or date cues."
+                            )
+                            raw = use_llm_fixed(prompt=f"PAGE_TEXT:\n{ocr_text}", system_prompt=skim_prompt)
+                            import json as _json
+                            data = None
+                            try:
+                                data = _json.loads(raw) if isinstance(raw, str) else raw
+                            except Exception:
+                                data = None
+                            if isinstance(data, dict):
+                                session['events'].append({'type': 'skim_result', 'url': url, 'data': data, 'ts': datetime.now().isoformat()})
+                    except Exception:
+                        pass
+                except Exception as _e:
+                    session['events'].append({'type': 'browse_error', 'url': url, 'error': str(_e), 'ts': datetime.now().isoformat()})
+                # Dwell between pages
+                try:
+                    import time as _time
+                    # Allow cancellation
+                    for _ in range(max(1, dwell)):
+                        if session.get('browse_cancel'):
+                            raise KeyboardInterrupt('cancelled')
+                        _time.sleep(1)
+                except Exception:
+                    pass
+            session['events'].append({'type': 'browse_done', 'count': total, 'ts': datetime.now().isoformat()})
+        except Exception as e:
+            if isinstance(e, KeyboardInterrupt):
+                session['events'].append({'type': 'browse_cancelled', 'ts': datetime.now().isoformat()})
+            else:
+                session['events'].append({'type': 'browse_error', 'error': str(e), 'ts': datetime.now().isoformat()})
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return { 'status': 'started', 'count': len(urls), 'dwell_seconds': dwell }
+
+@router.post("/browse-cancel-strands-real/{session_id}")
+async def browse_cancel(session_id: str):
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    research_sessions[session_id]['browse_cancel'] = True
+    return { 'status': 'ok' }
+
+@router.post("/cancel-strands-real/{session_id}")
+async def cancel_research(session_id: str):
+    """Signal cancellation to the running research. Cooperative; returns immediately."""
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    sess = research_sessions[session_id]
+    sess['cancel'] = True
+    sess.setdefault('events', []).append({'type': 'cancel_requested', 'ts': datetime.now().isoformat()})
+    return { 'status': 'ok', 'message': 'Cancellation requested' }
+
+@router.post("/check-links-strands-real/{session_id}")
+async def check_links(session_id: str):
+    """Check all source links for validity and emit link_status events."""
+    if session_id not in research_sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    session = research_sessions[session_id]
+    sources = session.get('sources') or []
+    if not sources:
+        return { 'checked': 0 }
+    import requests as _req
+    ok = 0
+    total = 0
+    for s in sources:
+        url = s.get('url')
+        if not url:
+            continue
+        total += 1
+        status_code = None
+        is_ok = False
+        try:
+            resp = _req.head(url, allow_redirects=True, timeout=5)
+            status_code = resp.status_code
+            is_ok = 200 <= status_code < 400
+            if not is_ok:
+                # Try GET fallback
+                resp = _req.get(url, allow_redirects=True, timeout=8)
+                status_code = resp.status_code
+                is_ok = 200 <= status_code < 400
+        except Exception:
+            is_ok = False
+        if is_ok:
+            ok += 1
+        session.setdefault('events', []).append({
+            'type': 'link_status',
+            'url': url,
+            'ok': bool(is_ok),
+            'status_code': status_code,
+            'ts': datetime.now().isoformat()
+        })
+    return { 'checked': total, 'ok': ok }
 
 @router.get("/session-debug-strands-real/{session_id}")
 async def session_debug(session_id: str):

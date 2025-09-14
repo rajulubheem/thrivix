@@ -42,7 +42,8 @@ function loadMermaid(): Promise<any> {
       resolve(window.mermaid);
     } else {
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+      // Pin to a stable version to reduce syntax/runtime surprises
+      script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.4/dist/mermaid.min.js';
       script.async = true;
       script.onload = () => {
         try {
@@ -83,6 +84,9 @@ function loadMermaid(): Promise<any> {
 export default function MermaidBlock({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [svgContent, setSvgContent] = useState<string>('');
+  const [errorMsg, setErrorMsg] = useState<string>('');
+  const [zoom, setZoom] = useState<number>(1);
+  const [expanded, setExpanded] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -258,27 +262,33 @@ export default function MermaidBlock({ chart }: { chart: string }) {
         overflow: 'hidden'
       }}
     >
-      <div ref={ref} style={{ 
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'auto',
-        padding: '10px',
-        maxHeight: '400px'
-      }}>
-        {/* Mermaid chart will be rendered here */}
+      {/* Diagram viewport with zoom */}
+      <div 
+        style={{ display:'flex', justifyContent:'center', alignItems:'center', overflow:'auto', maxHeight: expanded ? '720px' : '460px', padding:'8px' }}
+      >
+        <div ref={ref} style={{ transform: `scale(${zoom})`, transformOrigin:'top left', width:'100%' }} />
       </div>
       
-      {/* Action buttons */}
+      {/* Action row */}
       <div style={{ 
         display: 'flex',
-        gap: '8px',
-        marginTop: '12px',
-        paddingTop: '12px',
+        gap: '10px',
+        marginTop: '8px',
+        padding: '8px 10px',
         borderTop: '1px solid #e0f2fe',
-        justifyContent: 'center'
+        alignItems: 'center',
+        justifyContent: 'space-between'
       }}>
+        <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+          <span style={{fontSize:'12px', color:'#6b7280'}}>Diagram</span>
+          {errorMsg && <span style={{fontSize:'11px', color:'#b91c1c'}}>Syntax error detected</span>}
+        </div>
+        <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+          <div style={{display:'flex', alignItems:'center', gap:'6px'}}>
+            <span style={{fontSize:'11px', color:'#6b7280'}}>Zoom</span>
+            <input type="range" min={0.6} max={1.6} step={0.1} value={zoom} onChange={e=> setZoom(Number((e.target as any).value))} />
+            <button onClick={()=> setZoom(1)} style={{fontSize:'11px', border:'1px solid #d1d5db', padding:'2px 6px', borderRadius:4, background:'#fff'}}>Reset</button>
+          </div>
         <button
           onClick={handleOpenNewTab}
           style={{
@@ -310,7 +320,6 @@ export default function MermaidBlock({ chart }: { chart: string }) {
           </svg>
           Open in New Tab
         </button>
-        
         <button
           className="copy-btn"
           onClick={handleCopyCode}
@@ -344,8 +353,17 @@ export default function MermaidBlock({ chart }: { chart: string }) {
           </svg>
           Copy Code
         </button>
+        <button
+          onClick={()=> setExpanded(v=>!v)}
+          style={{
+            background: '#eef2ff', color:'#3730a3', border:'1px solid #c7d2fe', borderRadius:4,
+            padding:'4px 10px', cursor:'pointer', fontSize:'12px', fontWeight:500
+          }}
+        >
+          {expanded ? 'Collapse' : 'Expand'}
+        </button>
+        </div>
       </div>
     </div>
   );
 }
-
