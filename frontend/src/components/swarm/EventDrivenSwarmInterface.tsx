@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Bot,
   User,
@@ -28,6 +28,17 @@ import {
   StopCircle,
   PauseCircle,
   RefreshCw,
+  Plus,
+  Trash2,
+  Edit2,
+  Save,
+  X,
+  History,
+  FileText,
+  Database,
+  Wrench,
+  List,
+  Grid3x3,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
@@ -40,7 +51,10 @@ import ReactMarkdown from "react-markdown";
 import HumanInTheLoopPanel from "./HumanInTheLoopPanel";
 import ActiveAgentsPanel, { DetailedAgentState } from "./ActiveAgentsPanel";
 import AgentMonitor from "./AgentMonitor";
-import { ModernLayout } from "../layout/ModernLayout";
+import { ScrollArea } from "../ui/scroll-area";
+import { motion, AnimatePresence } from "framer-motion";
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface SwarmEvent {
   id: string;
@@ -75,6 +89,23 @@ interface Message {
   timestamp: Date;
   type: "message" | "handoff" | "system";
   streaming?: boolean;
+}
+
+// Local session persistence types (similar to CleanSwarmChat)
+interface PersistedMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  agent?: string;
+  timestamp: string;
+}
+
+interface SessionData {
+  id: string;
+  title: string;
+  messages: PersistedMessage[];
+  timestamp: string;
+  lastMessage?: string;
 }
 
 interface AgentState {
@@ -135,6 +166,31 @@ export const EventDrivenSwarmInterface: React.FC = () => {
   const [autoScroll, setAutoScroll] = useState(true);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isExecutingRef = useRef<boolean>(false);
+  // Subagent timeline mapping
+  type SubTimelineItem = { id: string; parent: string; agent: string; type: 'start'|'token'|'done'; preview?: string; ts: number };
+  const subAgentParentRef = useRef<Map<string, string>>(new Map());
+  const [subTimeline, setSubTimeline] = useState<SubTimelineItem[]>([]);
+
+  // Sidebar + history state
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionHistory, setSessionHistory] = useState<SessionData[]>([]);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState<string>("");
+
+  // Tools sidebar state
+  const [rightPanelTab, setRightPanelTab] = useState<'tools' | 'monitor'>('tools');
+  const [availableTools, setAvailableTools] = useState<string[]>([]);
+  const [toolDetails, setToolDetails] = useState<Record<string, { description?: string; category?: string }>>({});
+  const [toolsLoading, setToolsLoading] = useState(false);
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  const [restrictToSelected, setRestrictToSelected] = useState(false);
+  const [toolSearch, setToolSearch] = useState('');
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [showToolsHub, setShowToolsHub] = useState(false);
+  const [showSettingsHub, setShowSettingsHub] = useState(false);
+  const [toolsViewMode, setToolsViewMode] = useState<'grid'|'list'>('grid');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   // Swarm configuration controls
   const [showConfig, setShowConfig] = useState(false);
@@ -211,6 +267,126 @@ export const EventDrivenSwarmInterface: React.FC = () => {
         break;
     }
   };
+
+  // Fetch available tools from backend (once)
+  useEffect(() => {
+    (async () => {
+      try {
+        setToolsLoading(true);
+        let res = await fetch('/api/v1/tool-registry/available-tools');
+        if (!res.ok) res = await fetch('/api/v1/tool-registry/available');
+        if (res.ok) {
+          const data = await res.json();
+
+          let names: string[] = [];
+          const details: Record<string, { description?: string; category?: string }> = {};
+
+          if (Array.isArray(data?.tools)) {
+            // tools is an array: could be strings or objects
+            for (const item of data.tools) {
+              if (typeof item === 'string') {
+                names.push(item);
+              } else if (item && typeof item === 'object') {
+                const name = item.name || item.id || item.tool || '';
+                if (name) {
+                  names.push(name);
+                  details[name] = { description: item.description, category: item.category };
+                }
+              }
+            }
+          } else if (data?.tools && typeof data.tools === 'object') {
+            // tools is a map { name: { description, category, ... } }
+            names = Object.keys(data.tools);
+            for (const key of names) {
+              const meta = data.tools[key] || {};
+              details[key] = { description: meta.description, category: meta.category };
+            }
+          } else if (Array.isArray(data)) {
+            // endpoint returns array directly
+            names = data.map((x: any) => (typeof x === 'string' ? x : (x?.name || x?.id))).filter(Boolean);
+          }
+
+          if (names.length) setAvailableTools(names.sort());
+          setToolDetails(details);
+          // Load persisted tool selections
+          try {
+            const rawSel = localStorage.getItem('event_swarm_selected_tools');
+            if (rawSel) setSelectedTools(new Set(JSON.parse(rawSel)));
+            const rest = localStorage.getItem('event_swarm_restrict_tools');
+            if (rest) setRestrictToSelected(rest === 'true');
+          } catch {}
+        }
+      } catch {}
+      finally { setToolsLoading(false); }
+    })();
+  }, []);
+
+  const toggleTool = (name: string) => {
+    setSelectedTools(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      try { localStorage.setItem('event_swarm_selected_tools', JSON.stringify(Array.from(next))); } catch {}
+      return next;
+    });
+  };
+
+  const selectAllTools = () => setSelectedTools(new Set(availableTools));
+  const clearAllTools = () => setSelectedTools(new Set());
+
+  // Simple grouping heuristic for tools
+  const groupFor = (tool: string): string => {
+    const n = (tool || '').toLowerCase();
+    if (/(search|web|browser|crawl|tavily)/.test(n)) return 'Research';
+    if (/(file|fs|write|read|repo|project)/.test(n)) return 'Files';
+    if (/(python|repl|code|exec|run|shell)/.test(n)) return 'Code';
+    if (/(data|csv|json|sql|db)/.test(n)) return 'Data';
+    if (/(git|github|pr|commit)/.test(n)) return 'Git';
+    if (/(workflow|swarm|agent|graph)/.test(n)) return 'Orchestration';
+    return 'Other';
+  };
+
+  const groupedTools = availableTools.reduce((acc: Record<string, string[]>, t) => {
+    const cat = toolDetails[t]?.category;
+    const backend = (cat || '').toLowerCase();
+    const mapped = backend ? ({
+      'file_operations': 'Files',
+      'web': 'Research',
+      'web_search': 'Research',
+      'code_execution': 'Code',
+      'utilities': 'Utility',
+      'utility': 'Utility',
+      'reasoning': 'Reasoning',
+      'advanced': 'Advanced',
+      'memory': 'Data',
+      'media': 'Media',
+      'planning': 'Planning',
+      'unknown': 'Other',
+    } as Record<string,string>)[backend] : undefined;
+    const g = mapped || groupFor(t);
+    (acc[g] ||= []).push(t);
+    return acc;
+  }, {} as Record<string, string[]>);
+
+  const categoryOrder = ['Research','Code','Files','Data','Utility','Planning','Reasoning','Advanced','Media','Git','Orchestration','Other'];
+  const orderedCategories = Object.keys(groupedTools).sort((a,b) => {
+    const ai = categoryOrder.indexOf(a);
+    const bi = categoryOrder.indexOf(b);
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+
+  useEffect(() => {
+    if (availableTools.length && expandedCategories.size === 0) {
+      setExpandedCategories(new Set(Object.keys(groupedTools)));
+    }
+  }, [availableTools, groupedTools, expandedCategories.size]);
+
+  // Persist restrict toggle
+  useEffect(() => {
+    try { localStorage.setItem('event_swarm_restrict_tools', restrictToSelected ? 'true' : 'false'); } catch {}
+  }, [restrictToSelected]);
 
   const handleAgentSpawned = (agentData: any) => {
     const agentName = agentData.agent_id || agentData.name || agentData.agent;
@@ -336,7 +512,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     setAgents(new Map());
     setHumanQuestions([]);
     setHumanApprovals([]);
-    setMessages([]);
+    // Do NOT clear existing chat history when continuing; append to it
     setAutoScroll(true); // Reset scroll state on new execution
 
     try {
@@ -361,6 +537,10 @@ export const EventDrivenSwarmInterface: React.FC = () => {
               max_agent_runtime: maxAgentRuntime,
               enable_human_loop: enableHumanLoop,
             },
+            tool_preferences: {
+              selected_tools: Array.from(selectedTools),
+              restrict_to_selected: restrictToSelected,
+            }
           },
         }),
       });
@@ -374,6 +554,20 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
       console.log("📡 Started event-driven swarm with session:", sessionId);
       setExecutionId(sessionId);
+      setSessionId(sessionId);
+      // Initialize history and persist first user task message
+      persistNewSession(sessionId, task);
+      // Push initial user message into chat view
+      setMessages(prev => ([
+        ...prev,
+        {
+          id: `user-${Date.now()}`,
+          agent: 'user',
+          content: task,
+          timestamp: new Date(),
+          type: 'message',
+        },
+      ]));
 
       // Now start polling for updates
       pollForUpdates(sessionId);
@@ -475,7 +669,8 @@ export const EventDrivenSwarmInterface: React.FC = () => {
         if (
           data.status === "complete" ||
           data.status === "completed" ||
-          data.status === "failed"
+          data.status === "failed" ||
+          data.status === "error"
         ) {
           console.log(`Execution finished with status: ${data.status}`);
 
@@ -493,6 +688,8 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             timestamp: Date.now(),
             severity: data.status === "complete" || data.status === "completed" ? 'success' : 'error',
           });
+          // Save session snapshot in history
+          if (sessionId) saveCurrentSessionSnapshot(sessionId);
           break;
         }
 
@@ -535,6 +732,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             timestamp: Date.now(),
             severity: 'error',
           });
+          if (sessionId) saveCurrentSessionSnapshot(sessionId);
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait before retry
@@ -555,6 +753,14 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       case "agent_start":
         if (chunk.agent) {
           handleAgentStarted({ agent_id: chunk.agent, role: chunk.agent });
+          // Record parent for nested timeline
+          if (chunk.parent) {
+            try { subAgentParentRef.current.set(String(chunk.agent), String(chunk.parent)); } catch {}
+            setSubTimeline(prev => [
+              ...prev,
+              ({ id: `sub-${Date.now()}-${String(chunk.agent)}`, parent: String(chunk.parent), agent: String(chunk.agent), type: 'start' as const, ts: Date.now() } as SubTimelineItem)
+            ].slice(-500));
+          }
           handleSwarmEvent({
             id: Date.now().toString(),
             type: "agent.started",
@@ -865,6 +1071,17 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             return updated;
           });
 
+          // Subagent token into timeline if mapped
+          try {
+            const parentName = String(subAgentParentRef.current.get(chunk.agent) || '');
+            if (parentName && content) {
+              setSubTimeline(prev => [
+                ...prev,
+                ({ id: `subtok-${Date.now()}`, parent: parentName, agent: String(chunk.agent), type: 'token' as const, preview: String(content).slice(0, 60), ts: Date.now() } as SubTimelineItem)
+              ].slice(-500));
+            }
+          } catch {}
+
           // Auto-scroll to bottom as content streams
           setTimeout(() => {
             const messagesContainer = document.querySelector(
@@ -881,6 +1098,14 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       case "agent_completed":
         if (chunk.agent) {
           updateAgentStatus(chunk.agent, "complete");
+          // Close out subagent in timeline
+          try {
+            const parentName = String(subAgentParentRef.current.get(chunk.agent) || '');
+            if (parentName) setSubTimeline(prev => [
+              ...prev,
+              ({ id: `subdone-${Date.now()}`, parent: parentName, agent: String(chunk.agent), type: 'done' as const, ts: Date.now() } as SubTimelineItem)
+            ].slice(-500));
+          } catch {}
 
           // Finalize the streaming message
           const content = agentMessages.get(chunk.agent) || "";
@@ -1160,6 +1385,122 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  // ===== Session history management (similar to /swarm) =====
+  const HISTORY_KEY = 'event_swarm_session_history';
+  const CURRENT_SESSION_KEY = 'event_swarm_current_session_id';
+
+  const loadSessionHistory = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      if (raw) setSessionHistory(JSON.parse(raw));
+    } catch {}
+  }, []);
+
+  const persistHistory = (history: SessionData[]) => {
+    setSessionHistory(history);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch {}
+  };
+
+  const persistNewSession = (sid: string, initialTask: string) => {
+    const now = new Date().toISOString();
+    const initial: SessionData = {
+      id: sid,
+      title: initialTask?.slice(0, 50) || 'New Chat',
+      messages: [
+        { id: `u-${Date.now()}`, role: 'user', content: initialTask, timestamp: now }
+      ],
+      timestamp: now,
+      lastMessage: initialTask?.slice(0, 100)
+    };
+    const existing = sessionHistory.filter(s => s.id !== sid);
+    const updated = [initial, ...existing].slice(0, 50);
+    persistHistory(updated);
+    try { localStorage.setItem(CURRENT_SESSION_KEY, sid); } catch {}
+  };
+
+  const saveCurrentSessionSnapshot = (sid: string) => {
+    const now = new Date().toISOString();
+    const transformed: PersistedMessage[] = messages.map(m => ({
+      id: m.id,
+      role: m.agent === 'user' ? 'user' : (m.type === 'system' ? 'system' : 'assistant'),
+      content: m.content,
+      agent: m.agent,
+      timestamp: m.timestamp.toISOString(),
+    }));
+    const title = transformed[0]?.content?.slice(0, 50) || 'Chat';
+    const last = transformed[transformed.length - 1]?.content?.slice(0, 100) || '';
+
+    const updated = sessionHistory.map(s => s.id === sid ? ({
+      ...s,
+      title,
+      messages: transformed,
+      timestamp: now,
+      lastMessage: last,
+    }) : s);
+    persistHistory(updated);
+  };
+
+  const createNewSession = () => {
+    // Reset local UI state and clear execution context
+    setTask("");
+    setIsExecuting(false);
+    isExecutingRef.current = false;
+    setEvents([]);
+    setAgents(new Map());
+    setHumanQuestions([]);
+    setHumanApprovals([]);
+    setMessages([]);
+    setAutoScroll(true);
+    setExecutionId(null);
+    const newId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setSessionId(newId);
+    try { localStorage.setItem(CURRENT_SESSION_KEY, newId); } catch {}
+  };
+
+  const deleteSession = (sid: string) => {
+    const updated = sessionHistory.filter(s => s.id !== sid);
+    persistHistory(updated);
+    if (sessionId === sid) {
+      setSessionId(null);
+      setMessages([]);
+      setExecutionId(null);
+    }
+  };
+
+  const renameSession = (sid: string, newTitle: string) => {
+    const updated = sessionHistory.map(s => s.id === sid ? { ...s, title: newTitle } : s);
+    persistHistory(updated);
+    setEditingSessionId(null);
+    setEditingTitle("");
+  };
+
+  const loadSession = (sid: string) => {
+    const s = sessionHistory.find(x => x.id === sid);
+    setSessionId(sid);
+    try { localStorage.setItem(CURRENT_SESSION_KEY, sid); } catch {}
+    if (!s) return;
+    const restored: Message[] = (s.messages || []).map(pm => ({
+      id: pm.id,
+      agent: pm.agent || (pm.role === 'user' ? 'user' : 'assistant'),
+      content: pm.content,
+      timestamp: new Date(pm.timestamp),
+      type: pm.role === 'system' ? 'system' : 'message',
+    }));
+    setMessages(restored);
+    setTask("");
+    setIsExecuting(false);
+    isExecutingRef.current = false;
+    setExecutionId(null);
+  };
+
+  useEffect(() => {
+    loadSessionHistory();
+    try {
+      const sid = localStorage.getItem(CURRENT_SESSION_KEY);
+      if (sid) setSessionId(sid);
+    } catch {}
+  }, [loadSessionHistory]);
+
   const answerQuestion = async (questionId: string) => {
     const token = localStorage.getItem("access_token");
     if (!token || !currentAnswer.trim()) return;
@@ -1229,337 +1570,403 @@ export const EventDrivenSwarmInterface: React.FC = () => {
   };
 
   return (
-    <ModernLayout>
-      <div className="h-full flex flex-col bg-background">
-      {/* Enhanced Header with Stats */}
-      <div className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
-              <Sparkles className="h-6 w-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-foreground">
-                Event-Driven Swarm
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Intelligent multi-agent execution platform
-              </p>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            {/* Real-time Stats */}
-            <div className="flex items-center gap-3 text-sm">
-              <div className="flex items-center gap-1">
-                <Users className="h-4 w-4 text-blue-500" />
-                <span className="font-medium text-foreground">{agents.size}</span>
-                <span className="text-muted-foreground">agents</span>
+    <div className="flex h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950">
+      {/* Sidebar: New Chat + History */}
+      <motion.div
+        className={`${sidebarCollapsed ? 'w-16' : 'w-72'} bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col transition-all duration-300 shadow-xl flex-shrink-0`}
+        initial={{ x: -320 }}
+        animate={{ x: 0 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 20 }}
+        style={{ maxWidth: sidebarCollapsed ? '64px' : '288px' }}
+      >
+        <div className="p-4 border-b border-gray-200 dark:border-gray-800">
+          <div className="flex items-center justify-between">
+            <div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}>
+              <div className="p-2 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl shadow-lg">
+                <Sparkles className="h-5 w-5 text-white" />
               </div>
-              <div className="flex items-center gap-1">
-                <Activity className="h-4 w-4 text-green-500" />
-                <span className="font-medium text-foreground">{activeAgentCount}</span>
-                <span className="text-muted-foreground">active</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <BarChart3 className="h-4 w-4 text-purple-500" />
-                <span className="font-medium text-foreground">{totalEvents}</span>
-                <span className="text-muted-foreground">events</span>
-              </div>
-            </div>
-
-            {/* Execution Status */}
-            {isExecuting && (
-              <div className="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900 rounded-full">
-                <RefreshCw className="h-4 w-4 text-green-600 animate-spin" />
-                <span className="text-sm font-medium text-green-700 dark:text-green-300">
-                  Executing
-                </span>
-              </div>
-            )}
-
-            {executionId && (
-              <Badge variant="outline" className="text-xs">
-                {executionId.slice(0, 8)}...
-              </Badge>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Task Input & Controls */}
-        <div className="w-80 bg-card border-r border-border flex flex-col">
-          {/* Task Input */}
-          <div className="p-4 border-b border-border">
-            <div className="space-y-3">
-              <div>
-                <label className="text-sm font-medium text-foreground">
-                  Task Description
-                </label>
-                <Textarea
-                  value={task}
-                  onChange={(e) => setTask(e.target.value)}
-                  placeholder="Describe what you want the swarm to accomplish..."
-                  className="mt-1 min-h-[80px] resize-none"
-                  disabled={isExecuting}
-                />
-              </div>
-              
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => executeSwarm()}
-                  disabled={isExecuting || !task.trim()}
-                  className="flex-1"
-                >
-                  {isExecuting ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                      Running
-                    </>
-                  ) : (
-                    <>
-                      <PlayCircle className="h-4 w-4 mr-2" />
-                      Execute
-                    </>
-                  )}
-                </Button>
-
-                {isExecuting && executionId && (
-                  <Button
-                    onClick={stopExecution}
-                    variant="destructive"
-                    size="icon"
-                  >
-                    <StopCircle className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Configuration */}
-          <div className="p-4 border-b border-border">
-            <Button
-              onClick={() => setShowConfig(!showConfig)}
-              variant="ghost"
-              className="w-full justify-between"
-            >
-              <span className="flex items-center gap-2">
-                <Settings className="h-4 w-4" />
-                Configuration
-              </span>
-              {showConfig ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            </Button>
-
-            {showConfig && (
-              <div className="mt-3 space-y-3">
+              {!sidebarCollapsed && (
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Max Concurrent ({maxConcurrentAgents})
-                  </label>
-                  <Input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={maxConcurrentAgents}
-                    onChange={(e) => setMaxConcurrentAgents(parseInt(e.target.value) || 3)}
-                    disabled={isExecuting}
-                    className="mt-1"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Max Total Agents ({maxTotalAgents})
-                  </label>
-                  <Input
-                    type="range"
-                    min="1"
-                    max="20"
-                    value={maxTotalAgents}
-                    onChange={(e) => setMaxTotalAgents(parseInt(e.target.value) || 8)}
-                    disabled={isExecuting}
-                    className="mt-1"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Execution Timeout ({maxExecutionTime}s)
-                  </label>
-                  <Input
-                    type="range"
-                    min="30"
-                    max="600"
-                    value={maxExecutionTime}
-                    onChange={(e) => setMaxExecutionTime(parseInt(e.target.value) || 180)}
-                    disabled={isExecuting}
-                    className="mt-1"
-                  />
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    id="humanLoop"
-                    checked={enableHumanLoop}
-                    onChange={(e) => setEnableHumanLoop(e.target.checked)}
-                    disabled={isExecuting}
-                    className="rounded"
-                  />
-                  <label htmlFor="humanLoop" className="text-xs font-medium">
-                    Human-in-the-Loop
-                  </label>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Quick Stats */}
-          <div className="p-4 space-y-2">
-            <div className="text-xs font-medium text-muted-foreground mb-2">
-              Current Session
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-muted p-2 rounded">
-                <div className="font-medium text-blue-600 dark:text-blue-400">Active</div>
-                <div className="text-lg font-bold">{activeAgentCount}</div>
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <div className="font-medium text-green-600 dark:text-green-400">Complete</div>
-                <div className="text-lg font-bold">{completedAgentCount}</div>
-              </div>
-            </div>
-            <div className="bg-muted p-2 rounded">
-              <div className="font-medium text-purple-600 dark:text-purple-400">Total Events</div>
-              <div className="text-lg font-bold">{totalEvents}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Center - Messages/Output */}
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="bg-card border-b border-border px-4 py-2">
-            <div className="flex items-center justify-between">
-              <h2 className="font-medium text-foreground">Agent Output</h2>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>{messages.length} messages</span>
-                {recentEvents > 0 && (
-                  <Badge variant="outline" className="text-xs">
-                    {recentEvents} new
-                  </Badge>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 relative overflow-hidden">
-            <div
-              ref={messagesContainerRef}
-              className="messages-container absolute inset-0 overflow-y-auto p-4"
-              onScroll={handleScroll}
-            >
-              {messages.length === 0 && !isExecuting && (
-                <div className="flex flex-col items-center justify-center h-full text-center">
-                  <Bot className="h-12 w-12 text-gray-400 mb-4" />
-                  <h3 className="text-lg font-medium text-foreground mb-2">
-                    Ready for Execution
-                  </h3>
-                  <p className="text-muted-foreground max-w-md">
-                    Enter a task description and click Execute to start the swarm. 
-                    Agents will collaborate to complete your task.
-                  </p>
+                  <h1 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Event Swarm</h1>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Event-driven orchestration</p>
                 </div>
               )}
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="p-1">
+              <ChevronRight className={`h-4 w-4 transition-transform ${sidebarCollapsed ? '' : 'rotate-180'}`} />
+            </Button>
+          </div>
+        </div>
 
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={cn(
-                    "mb-4 group",
-                    message.type === "handoff" && "text-center",
-                    message.type === "system" && "text-center",
-                  )}
-                >
-                  {message.type === "message" && (
-                    <div className="flex items-start gap-3 max-w-4xl">
-                      <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600">
-                        <Bot className="h-4 w-4 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="font-semibold text-foreground">
-                            {message.agent}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {message.timestamp.toLocaleTimeString()}
-                          </span>
-                          {message.streaming && (
-                            <Badge variant="outline" className="text-xs">
-                              Streaming...
-                            </Badge>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={() => copyMessage(message)}
-                          >
-                            {copiedId === message.id ? (
-                              <Check className="h-3 w-3" />
-                            ) : (
-                              <Copy className="h-3 w-3" />
-                            )}
+        {!sidebarCollapsed && (
+          <div className="p-3">
+            <Button onClick={createNewSession} className="w-full justify-start gap-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white">
+              <Plus className="h-4 w-4" />
+              New Chat
+            </Button>
+          </div>
+        )}
+
+        {!sidebarCollapsed && (
+          <ScrollArea className="flex-1 px-3">
+            <div className="space-y-1 py-2">
+              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 px-2 mb-2 flex items-center justify-between">
+                <span>RECENT CHATS</span>
+                <History className="h-3 w-3" />
+              </div>
+              {sessionHistory.length === 0 ? (
+                <div className="text-xs text-gray-500 dark:text-gray-400 text-center py-4">No chat history yet</div>
+              ) : (
+                sessionHistory.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`group relative flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
+                      s.id === sessionId ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800' : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                    }`}
+                    onClick={() => loadSession(s.id)}
+                  >
+                    <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      {editingSessionId === s.id ? (
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <Input
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') renameSession(s.id, editingTitle); }}
+                            className="h-6 text-xs"
+                            autoFocus
+                          />
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => renameSession(s.id, editingTitle)}>
+                            <Save className="h-3 w-3" />
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => { setEditingSessionId(null); setEditingTitle(''); }}>
+                            <X className="h-3 w-3" />
                           </Button>
                         </div>
-                        <div className="prose prose-sm dark:prose-invert max-w-none bg-muted p-3 rounded-lg">
-                          <ReactMarkdown>{message.content}</ReactMarkdown>
-                          {message.streaming && (
-                            <span className="inline-block w-1 h-4 bg-blue-500 ml-1 animate-pulse" />
-                          )}
-                        </div>
-                      </div>
+                      ) : (
+                        <>
+                          <div className="text-sm font-medium truncate">{s.title}</div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{new Date(s.timestamp).toLocaleDateString()}</div>
+                        </>
+                      )}
                     </div>
-                  )}
-
-                  {(message.type === "handoff" || message.type === "system") && (
-                    <div className="flex justify-center mb-4">
-                      <div className="bg-muted px-4 py-2 rounded-full text-sm">
-                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                    {!editingSessionId && (
+                      <div className="absolute right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={(e) => { e.stopPropagation(); setEditingSessionId(s.id); setEditingTitle(s.title); }}>
+                          <Edit2 className="h-3 w-3" />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:text-red-700" onClick={(e) => { e.stopPropagation(); if (window.confirm('Delete this chat?')) deleteSession(s.id); }}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    )}
+                  </div>
+                ))
+              )}
             </div>
+          </ScrollArea>
+        )}
 
-            {/* Scroll to bottom button */}
-            {!autoScroll && (
-              <Button
-                onClick={scrollToBottom}
-                size="sm"
-                variant="secondary"
-                className="absolute bottom-4 right-4 rounded-full shadow-lg"
-              >
-                <ArrowDown className="h-4 w-4" />
+        {!sidebarCollapsed && (
+          <div className="p-3 border-t border-gray-200 dark:border-gray-800">
+            <Card className="p-2 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border-blue-200 dark:border-blue-800">
+              <div className="flex items-center gap-2 mb-1">
+                <Database className="h-3 w-3 text-blue-600" />
+                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Current Session</span>
+              </div>
+              <div className="text-xs text-gray-600 dark:text-gray-400">
+                <div>Messages: {messages.length}</div>
+                <div>Agents: {agents.size}</div>
+              </div>
+            </Card>
+          </div>
+        )}
+      </motion.div>
+
+      {/* Main Chat + Right Panel */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top bar with stats and quick controls */}
+        <div className="bg-white/70 dark:bg-gray-900/70 backdrop-blur border-b border-gray-200 dark:border-gray-800 px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <MessageSquare className="h-5 w-5 text-blue-600" />
+            <div className="text-sm text-gray-600 dark:text-gray-300">Messages: {messages.length}</div>
+            <div className="text-sm text-gray-600 dark:text-gray-300">Active: {activeAgentCount}</div>
+            <div className="text-sm text-gray-600 dark:text-gray-300">Events: {totalEvents}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowSettingsHub(true)} className="gap-2">
+              <Settings className="h-4 w-4" /> Settings
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setShowToolsHub(true)} className="gap-2">
+              <Wrench className="h-4 w-4" /> Tools Hub
+            </Button>
+            {isExecuting && executionId && (
+              <Badge variant="outline" className="text-xs">{executionId.slice(0,8)}...</Badge>
+            )}
+          </div>
+        </div>
+
+        {/* Chat + Subtask Timeline */}
+        <div className="flex-1 relative overflow-hidden flex">
+          {/* Subtask vertical timeline */}
+          <div className="hidden lg:block w-64 border-r border-gray-200 dark:border-gray-800 p-3 overflow-y-auto">
+            <div className="text-sm font-semibold mb-2">Subtask Timeline</div>
+            {/* Group by parent */}
+            {Array.from(new Set(subTimeline.map(t => t.parent))).map(parent => (
+              <div key={parent} className="mb-4">
+                <div className="text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">{parent}</div>
+                <div className="pl-2 border-l border-gray-300 dark:border-gray-700 space-y-1">
+                  {subTimeline.filter(t => t.parent===parent).map(item => (
+                    <div key={item.id} className="text-xs text-gray-700 dark:text-gray-300">
+                      <span className={`inline-block w-2 h-2 rounded-full mr-2 ${item.type==='start'?'bg-blue-500':item.type==='done'?'bg-green-500':'bg-purple-500'}`}></span>
+                      <span className="font-medium">{item.agent}</span>
+                      {item.type==='token' && item.preview ? <span className="text-gray-500 ml-1">{item.preview}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {subTimeline.length===0 && (
+              <div className="text-xs text-gray-500">No subtasks yet</div>
+            )}
+          </div>
+          <div className="flex-1 relative">
+            <div ref={messagesContainerRef} className="messages-container absolute inset-0 overflow-y-auto p-6 space-y-4" onScroll={handleScroll}>
+            {messages.length === 0 && !isExecuting && (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <Bot className="h-12 w-12 text-gray-400 mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">Ready for Execution</h3>
+                <p className="text-gray-500 dark:text-gray-400 max-w-md">Describe your task below and press Run. Agents will collaborate to complete it.</p>
+              </div>
+            )}
+
+            {messages.map((m) => (
+              <motion.div key={m.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+                <div className={`flex ${m.agent === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <Card className={`max-w-[min(70%,42rem)] ${m.agent === 'user' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-gray-900'} shadow`}> 
+                    <div className="p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className={`p-1.5 rounded-md ${m.agent === 'user' ? 'bg-blue-500/40' : 'bg-gray-100 dark:bg-gray-800'}`}>
+                          {m.agent === 'user' ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
+                        </div>
+                        <div className="text-xs opacity-70">
+                          {m.agent === 'user' ? 'You' : m.agent} · {m.timestamp.toLocaleTimeString()}
+                        </div>
+                        {m.streaming && (
+                          <Badge variant="outline" className="text-[10px]">Streaming…</Badge>
+                        )}
+                        <Button variant="ghost" size="icon" className="h-6 w-6 ml-auto" onClick={() => copyMessage(m)}>
+                          {copiedId === m.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                        </Button>
+                      </div>
+                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <ReactMarkdown
+                          components={{
+                            code({ node, className, children, ...props }: any) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              const inline = !match;
+                              return !inline && match ? (
+                                <SyntaxHighlighter style={vscDarkPlus as any} language={match[1]} PreTag="div" {...props}>
+                                  {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                              ) : (
+                                <code className={className} {...props}>{children}</code>
+                              );
+                            }
+                          }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
+                        {m.streaming && <span className="inline-block w-1 h-4 bg-blue-500 ml-1 animate-pulse" />}
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+              </motion.div>
+            ))}
+            </div>
+          </div>
+
+          {!autoScroll && (
+            <Button onClick={scrollToBottom} size="sm" variant="secondary" className="absolute bottom-4 right-4 rounded-full shadow-lg">
+              <ArrowDown className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+
+        {/* Bottom input bar */}
+        <div className="border-t border-gray-200 dark:border-gray-800 bg-white/70 dark:bg-gray-900/70 backdrop-blur p-3">
+          <div className="max-w-4xl mx-auto flex items-center gap-2">
+            <Input
+              placeholder="Describe the task for the swarm..."
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              disabled={isExecuting}
+              onKeyDown={(e) => { if (e.key === 'Enter' && task.trim() && !isExecuting) executeSwarm(); }}
+            />
+            {!isExecuting ? (
+              <Button onClick={() => executeSwarm()} disabled={!task.trim()} className="gap-2">
+                <Send className="h-4 w-4" /> Run
+              </Button>
+            ) : (
+              <Button onClick={stopExecution} variant="destructive" className="gap-2">
+                <StopCircle className="h-4 w-4" /> Stop
               </Button>
             )}
           </div>
         </div>
+      </div>
 
-        {/* Right Sidebar - Agent Monitor */}
-        <div className="w-96 bg-card border-l border-border">
-          <AgentMonitor
-            agents={agents}
-            events={events}
-            isExecuting={isExecuting}
-            executionId={executionId}
-          />
+      {/* Right: Monitor only */}
+      <div className="w-96 bg-white/70 dark:bg-gray-900/70 backdrop-blur border-l border-gray-200 dark:border-gray-800 flex flex-col">
+        <div className="p-3 border-b border-gray-200 dark:border-gray-800 flex items-center gap-2 text-sm font-semibold">
+          <Activity className="h-4 w-4" /> Monitor
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <AgentMonitor agents={agents} events={events} isExecuting={isExecuting} executionId={executionId} />
         </div>
       </div>
-      </div>
-    </ModernLayout>
+
+      {/* Slide-over Tools Hub (mirrors /swarm/tools structure) */}
+      <AnimatePresence>
+        {showToolsHub && (
+          <motion.div className="fixed inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="absolute inset-0 bg-black/40" onClick={() => setShowToolsHub(false)} />
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'tween', duration: 0.25 }} className="absolute right-0 top-0 h-full w-[min(100%,1100px)] bg-white dark:bg-gray-900 shadow-xl border-l border-gray-200 dark:border-gray-800 flex flex-col">
+              {/* Header */}
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Wrench className="h-5 w-5 text-blue-600" />
+                  <div className="font-semibold">Swarm Tools</div>
+                  <div className="text-xs text-gray-500">{availableTools.length} tools</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input placeholder="Search tools..." value={toolSearch} onChange={e=>setToolSearch(e.target.value)} />
+                  <Button size="sm" variant="ghost" onClick={() => setToolsViewMode(toolsViewMode==='grid'?'list':'grid')}>
+                    {toolsViewMode==='grid' ? <List className="h-4 w-4" /> : <Grid3x3 className="h-4 w-4" />}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setShowToolsHub(false)}>Apply</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowToolsHub(false)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              {/* Body */}
+              <div className="flex-1 flex overflow-hidden">
+                {/* Categories */}
+                <div className="w-72 border-r border-gray-200 dark:border-gray-800 p-3 overflow-y-auto">
+                  <div className="text-xs font-semibold mb-2">Categories</div>
+                  <div className="space-y-1">
+                    <button onClick={() => setSelectedCategory(null)} className={`w-full text-left px-3 py-2 rounded-lg ${selectedCategory===null?'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300':'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                      All Tools <span className="text-xs text-gray-500">{availableTools.length}</span>
+                    </button>
+                    {orderedCategories.map(cat => (
+                      <button key={cat} onClick={() => setSelectedCategory(cat)} className={`w-full text-left px-3 py-2 rounded-lg flex items-center justify-between ${selectedCategory===cat?'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300':'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                        <span>{cat}</span>
+                        <span className="text-xs text-gray-500">{(groupedTools[cat]||[]).length}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 text-xs flex items-center gap-2">
+                    <input id="restrictTools2" type="checkbox" className="rounded" checked={restrictToSelected} onChange={e=>setRestrictToSelected(e.target.checked)} />
+                    <label htmlFor="restrictTools2">Restrict to selected tools</label>
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <Button size="sm" variant="secondary" onClick={selectAllTools}>Select All</Button>
+                    <Button size="sm" variant="secondary" onClick={clearAllTools}>Clear</Button>
+                  </div>
+                </div>
+                {/* Tools list */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  {orderedCategories.filter(cat => !selectedCategory || cat===selectedCategory).map(cat => {
+                    const tools = (groupedTools[cat]||[]).filter(t=>t.toLowerCase().includes(toolSearch.toLowerCase()));
+                    if (!tools.length) return null;
+                    return (
+                      <div key={cat} className="mb-6">
+                        <div className="text-sm font-semibold mb-2">{cat} <span className="text-xs text-gray-500">{tools.length}</span></div>
+                        {toolsViewMode==='grid' ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {tools.map(t => (
+                              <div key={t} className={`border rounded-lg p-3 ${selectedTools.has(t)?'border-blue-500 bg-blue-50 dark:bg-blue-900/20':'border-gray-200 dark:border-gray-800'}`}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="font-medium truncate">{t}</div>
+                                  <Button size="sm" variant={selectedTools.has(t)?'default':'outline'} onClick={()=>toggleTool(t)}>{selectedTools.has(t)?'Selected':'Select'}</Button>
+                                </div>
+                                {toolDetails[t]?.description && (
+                                  <div className="text-xs text-gray-500 mt-1 line-clamp-2">{toolDetails[t]?.description}</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-gray-200 dark:divide-gray-800">
+                            {tools.map(t => (
+                              <div key={t} className="py-2 flex items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="font-medium truncate">{t}</div>
+                                  {toolDetails[t]?.description && (
+                                    <div className="text-xs text-gray-500 truncate">{toolDetails[t]?.description}</div>
+                                  )}
+                                </div>
+                                <Button size="sm" variant={selectedTools.has(t)?'default':'outline'} onClick={()=>toggleTool(t)}>{selectedTools.has(t)?'Selected':'Select'}</Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Slide-over Settings */}
+      <AnimatePresence>
+        {showSettingsHub && (
+          <motion.div className="fixed inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="absolute inset-0 bg-black/40" onClick={() => setShowSettingsHub(false)} />
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'tween', duration: 0.25 }} className="absolute right-0 top-0 h-full w-[min(100%,560px)] bg-white dark:bg-gray-900 shadow-xl border-l border-gray-200 dark:border-gray-800 flex flex-col">
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Settings className="h-5 w-5" />
+                  <div className="font-semibold">Event Swarm Settings</div>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setShowSettingsHub(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="flex-1 overflow-auto p-4 space-y-4">
+                <div>
+                  <div className="text-sm font-medium mb-1">Max Concurrent Agents</div>
+                  <input type="number" min={1} max={10} value={maxConcurrentAgents} onChange={e=>setMaxConcurrentAgents(parseInt(e.target.value||'1'))} className="w-full border rounded-lg px-3 py-2 bg-transparent" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-1">Max Total Agents</div>
+                  <input type="number" min={1} max={50} value={maxTotalAgents} onChange={e=>setMaxTotalAgents(parseInt(e.target.value||'1'))} className="w-full border rounded-lg px-3 py-2 bg-transparent" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-1">Max Execution Time (seconds)</div>
+                  <input type="number" min={30} max={900} value={maxExecutionTime} onChange={e=>setMaxExecutionTime(parseInt(e.target.value||'30'))} className="w-full border rounded-lg px-3 py-2 bg-transparent" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-1">Max Agent Runtime (seconds)</div>
+                  <input type="number" min={10} max={600} value={maxAgentRuntime} onChange={e=>setMaxAgentRuntime(parseInt(e.target.value||'60'))} className="w-full border rounded-lg px-3 py-2 bg-transparent" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <input id="hil" type="checkbox" className="rounded" checked={enableHumanLoop} onChange={e=>setEnableHumanLoop(e.target.checked)} />
+                  <label htmlFor="hil" className="text-sm">Enable Human-in-the-Loop</label>
+                </div>
+              </div>
+              <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-800 flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => setShowSettingsHub(false)}>Close</Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 };

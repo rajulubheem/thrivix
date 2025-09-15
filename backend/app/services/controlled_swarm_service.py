@@ -54,6 +54,19 @@ class ControlledSwarmService:
         # Register for human interaction events
         if self.enable_human_loop:
             self._register_human_interaction_handlers()
+        
+        # UI-provided tool preferences (set by API layer)
+        self.user_tool_preferences: Dict[str, Any] = {
+            'selected_tools': [],
+            'restrict_to_selected': False,
+        }
+        # Queue spawn requests per execution for reliable processing
+        self._pending_spawns: Dict[str, List[Any]] = {}
+        try:
+            # Register listener to capture agent.needed as they happen
+            event_bus.on("agent.needed", self._on_agent_needed)
+        except Exception:
+            pass
     
     def _register_human_interaction_handlers(self):
         """Register handlers to track human interactions"""
@@ -110,7 +123,8 @@ class ControlledSwarmService:
                 "start_time": start_time,
                 "user_id": user_id,
                 "request": request,
-                "callback": callback_handler
+                "callback": callback_handler,
+                "parent_map": {}
             }
             
             # Execute with controls
@@ -405,18 +419,26 @@ Be specific and relevant to the role. Don't be generic.""",
             
             prompt = f"Generate capabilities for this agent role: {role}"
             
-            # Use stream_async to get capabilities
-            capabilities_content = ""
-            async for event in capability_generator.stream_async(prompt):
-                if "data" in event:
-                    capabilities_content += event["data"]
-                elif "result" in event:
-                    result = event["result"]
-                    if hasattr(result, 'content'):
-                        capabilities_content = result.content
-                    else:
-                        capabilities_content = str(result)
-                    break
+            # Use stream_async to get capabilities with a strict timeout
+            async def _consume_stream() -> str:
+                content = ""
+                async for event in capability_generator.stream_async(prompt):
+                    if "data" in event:
+                        content += event["data"]
+                    elif "result" in event:
+                        result = event["result"]
+                        if hasattr(result, 'content'):
+                            content = result.content
+                        else:
+                            content = str(result)
+                        break
+                return content
+
+            try:
+                capabilities_content = await asyncio.wait_for(_consume_stream(), timeout=20.0)
+            except asyncio.TimeoutError:
+                logger.warning("Capability generation timed out; using fallback")
+                return self._fallback_capabilities(role)
                     
             response = capabilities_content.strip()
             
@@ -424,9 +446,13 @@ Be specific and relevant to the role. Don't be generic.""",
             try:
                 capabilities_data = json.loads(response)
                 
+                # Merge UI-selected tools into capabilities, with mapping where needed
+                base_tools = capabilities_data.get("tools", []) or []
+                merged_tools = self._merge_selected_tools(base_tools)
+
                 return AgentCapabilities(
                     skills=capabilities_data.get("skills", [role.lower()]),
-                    tools=capabilities_data.get("tools", []),
+                    tools=merged_tools,
                     listens_to=capabilities_data.get("listens_to", ["agent.needed"]),
                     emits=capabilities_data.get("emits", ["task.complete"])
                 )
@@ -436,16 +462,85 @@ Be specific and relevant to the role. Don't be generic.""",
                 
         except Exception as e:
             logger.error(f"AI capability generation failed: {e}")
-            return self._fallback_capabilities(role)
+            # Ensure fallback respects selected tools
+            caps = self._fallback_capabilities(role)
+            caps.tools = self._merge_selected_tools(caps.tools)
+            return caps
     
     def _fallback_capabilities(self, role: str) -> AgentCapabilities:
         """Fallback capabilities when AI generation fails"""
-        return AgentCapabilities(
+        caps = AgentCapabilities(
             skills=[role.lower().replace(" ", "_"), "problem_solving"],
             tools=[],
             listens_to=["agent.needed"],
             emits=["task.complete"]
         )
+        return caps
+
+    def _merge_selected_tools(self, ai_tools: List[str]) -> List[str]:
+        """Merge UI-selected tool names into agent capability tool flags.
+        Maps known tool IDs to capability flags used by agents.
+        """
+        try:
+            selected = set([t for t in (self.user_tool_preferences.get('selected_tools') or []) if isinstance(t, str)])
+            restrict = bool(self.user_tool_preferences.get('restrict_to_selected', False))
+        except Exception:
+            selected = set()
+            restrict = False
+
+        # Start from AI-suggested capabilities/tools
+        merged: set = set(ai_tools or [])
+
+        # Map specific tool ids to capability flags recognized by agents, and also include raw ids
+        tool_to_cap = {
+            'tavily_search': 'web_search',
+            'web_search': 'web_search',
+            'http_request': 'web_search',  # treat as research capability
+            'file_read': 'file_read',
+            'file_write': 'file_write',
+            'python_repl': 'python_repl',
+            'editor': 'editor',
+        }
+
+        # Always union the raw selected ids so agents can check directly
+        merged |= selected
+
+        # Add mapped capability flags for selected tool ids
+        for t in list(selected):
+            cap = tool_to_cap.get(t)
+            if cap:
+                merged.add(cap)
+
+        if restrict:
+            # Keep only selected ids and their mapped caps; drop unrelated AI-suggested caps
+            keep_caps = set()
+            for t in selected:
+                cap = tool_to_cap.get(t)
+                if cap:
+                    keep_caps.add(cap)
+            merged = (selected | keep_caps)
+
+        return list(merged)
+
+    # Queue handler to capture spawn requests reliably
+    async def _on_agent_needed(self, event):
+        try:
+            exec_id = None
+            if isinstance(event.data, dict):
+                exec_id = event.data.get('execution_id')
+            if not exec_id:
+                exec_id = self.pool_manager.execution_id
+            if not exec_id:
+                return
+            if exec_id not in self._pending_spawns:
+                self._pending_spawns[exec_id] = []
+            # Deduplicate by role
+            role = event.data.get('role') if isinstance(event.data, dict) else None
+            if role and any(getattr(e, 'data', {}).get('role') == role for e in self._pending_spawns[exec_id]):
+                return
+            self._pending_spawns[exec_id].append(event)
+        except Exception as e:
+            logger.debug(f"Queueing agent.needed failed: {e}")
     
     async def _generate_dynamic_system_prompt(self, role: str) -> str:
         """Generate AI-driven system prompt for the specific role"""
@@ -487,18 +582,26 @@ Generate a system prompt that makes the agent highly effective at their specific
             
             prompt = f"Create a specialized system prompt for a '{role}' agent in a multi-agent swarm system."
             
-            # Use stream_async to get the system prompt
-            prompt_content = ""
-            async for event in prompt_generator.stream_async(prompt):
-                if "data" in event:
-                    prompt_content += event["data"]
-                elif "result" in event:
-                    result = event["result"]
-                    if hasattr(result, 'content'):
-                        prompt_content = result.content
-                    else:
-                        prompt_content = str(result)
-                    break
+            # Use stream_async to get the system prompt with timeout
+            async def _consume_stream() -> str:
+                content = ""
+                async for event in prompt_generator.stream_async(prompt):
+                    if "data" in event:
+                        content += event["data"]
+                    elif "result" in event:
+                        result = event["result"]
+                        if hasattr(result, 'content'):
+                            content = result.content
+                        else:
+                            content = str(result)
+                        break
+                return content
+
+            try:
+                prompt_content = await asyncio.wait_for(_consume_stream(), timeout=25.0)
+            except asyncio.TimeoutError:
+                logger.warning("System prompt generation timed out; using fallback")
+                return self._fallback_system_prompt(role)
                     
             system_prompt = prompt_content.strip()
             
@@ -528,6 +631,15 @@ Complete your assigned task efficiently and professionally."""
             if not agent:
                 return
             
+            # Notify frontend that this agent is starting (for timelines)
+            try:
+                exec_ctx = self.active_executions.get(self.pool_manager.execution_id, {})
+                cb = exec_ctx.get("callback")
+                if cb:
+                    await cb(type="agent_started", agent=agent.name)
+            except Exception:
+                pass
+
             # Create event with execution context and streaming callback
             event_data = {
                 "task": task,
@@ -555,6 +667,15 @@ Complete your assigned task efficiently and professionally."""
             
             # Mark as completed
             await self.pool_manager.mark_agent_completed(agent_id, success=True)
+
+            # Notify frontend that this agent completed (streaming layer will finalize text)
+            try:
+                exec_ctx = self.active_executions.get(self.pool_manager.execution_id, {})
+                cb = exec_ctx.get("callback")
+                if cb:
+                    await cb(type="agent_completed", agent=agent.name, data={})
+            except Exception:
+                pass
             
         except asyncio.TimeoutError:
             logger.error(f"⏰ Agent {agent_id} timed out")
@@ -574,6 +695,8 @@ Complete your assigned task efficiently and professionally."""
         # Initialize thread-safe spawned roles tracking for this execution
         with self._spawned_roles_lock:
             self._spawned_roles_by_execution[execution_id] = set()
+        # Initialize pending spawn queue for this execution
+        self._pending_spawns[execution_id] = []
         
         while loop_count < max_loops and not self.pool_manager.is_stopped:
             loop_count += 1
@@ -609,11 +732,11 @@ Complete your assigned task efficiently and professionally."""
                     logger.info(f"🔄 Still have {active_agents} active agents and {pending_human_interactions} pending human interactions, continuing...")
                     continue
                 
-                # Spawn ALL needed agents (up to user's max limit) to enable true swarm intelligence
-                recent_events = event_bus.get_recent_events(15)  # Get more recent events
-                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]  # Get all agent requests
-                
-                logger.info(f"🔍 Loop {loop_count}: Found {len(recent_events)} recent events, {len(spawn_requests)} spawn requests")
+                # Spawn ONE needed agent (sequential) using queued requests (preferred)
+                spawn_requests = list(self._pending_spawns.get(execution_id, []))
+                if not spawn_requests:
+                    spawn_requests = event_bus.get_recent_events(250, event_type="agent.needed")
+                logger.info(f"🔍 Loop {loop_count}: pending spawn requests: {len(spawn_requests)}")
                 
                 # Thread-safe filtering of already spawned agent roles to prevent duplicates
                 unique_spawn_requests = {}
@@ -627,8 +750,8 @@ Complete your assigned task efficiently and professionally."""
                 
                 # Spawn ONLY ONE agent at a time - true sequential event-driven behavior
                 if unique_spawn_requests:
-                    # Get the highest priority or most recent request
-                    next_agent_request = list(unique_spawn_requests.values())[0]  # Take first one
+                    # Get the first request (could be enhanced by priority)
+                    next_agent_request = list(unique_spawn_requests.values())[0]
                     role = next_agent_request.data.get("role", "writer")
                     
                     logger.info(f"🔄 Spawning SINGLE agent sequentially: {role}")
@@ -646,6 +769,27 @@ Complete your assigned task efficiently and professionally."""
                         
                         if new_agent_id:
                             logger.info(f"✅ Successfully spawned {role} agent: {new_agent_id}")
+                            # Remove from pending queue if present
+                            try:
+                                if execution_id in self._pending_spawns and next_agent_request in self._pending_spawns[execution_id]:
+                                    self._pending_spawns[execution_id].remove(next_agent_request)
+                            except Exception:
+                                pass
+                            # Record parent-child mapping for UI timeline
+                            try:
+                                parent = getattr(next_agent_request, 'source', None) or next_agent_request.data.get('requesting_agent')
+                                if parent:
+                                    exec_data = self.active_executions.get(execution_id)
+                                    if exec_data is not None:
+                                        parent_map = exec_data.get('parent_map', {})
+                                        # Map by agent NAME, not internal id, to match streaming events
+                                        child_name = f"{role}_{new_agent_id[:8]}"
+                                        parent_map[child_name] = parent
+                                        exec_data['parent_map'] = parent_map
+                                        self.active_executions[execution_id] = exec_data
+                                        logger.info(f"🧬 Linked subagent {new_agent_id} to parent {parent}")
+                            except Exception as map_err:
+                                logger.debug(f"Parent mapping failed: {map_err}")
                             # Brief pause to let agent initialize
                             await asyncio.sleep(1)
                         else:
@@ -719,8 +863,7 @@ Complete your assigned task efficiently and professionally."""
             # Check if we should continue - only stop if we have results AND no active agents AND no pending spawn requests
             if accumulated_results and len(self.pool_manager.active_agents) == 0:
                 # Check if there are any pending agent spawn requests
-                recent_events = event_bus.get_recent_events(10)
-                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]
+                spawn_requests = event_bus.get_recent_events(100, event_type="agent.needed")
                 
                 # Thread-safe filtering of already spawned agent roles
                 pending_spawn_requests = []
@@ -743,8 +886,7 @@ Complete your assigned task efficiently and professionally."""
                 len(self.pool_manager.active_agents) == 0):
                 
                 # Check if there are any pending agent spawn requests before stopping
-                recent_events = event_bus.get_recent_events(10)
-                spawn_requests = [e for e in recent_events if e.type == "agent.needed"]
+                spawn_requests = event_bus.get_recent_events(100, event_type="agent.needed")
                 
                 pending_spawn_requests = []
                 with self._spawned_roles_lock:

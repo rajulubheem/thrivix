@@ -5,7 +5,7 @@ import { Input } from '../components/ui/input';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { 
   Loader2, Send, StopCircle, RefreshCw, User, Bot, Sparkles, Brain,
-  Settings, Activity, Users, MessageSquare, Clock, ChevronRight,
+  Settings, Activity, Users, MessageSquare, Clock, ChevronRight, ChevronDown,
   Zap, Shield, Gauge, Filter, LayoutGrid, List, Play, Pause,
   CheckCircle, AlertCircle, Cpu, Database, GitBranch, Target,
   Plus, Trash2, Edit2, Save, X, History, FileText
@@ -78,6 +78,7 @@ export function CleanSwarmChat() {
   const [availableTools, setAvailableTools] = useState<string[]>(['python_repl', 'file_write', 'file_read', 'tavily_search']);
   const [isGeneratingAgents, setIsGeneratingAgents] = useState<boolean>(false);
   const [runParallel, setRunParallel] = useState<boolean>(false);
+  const [showScrollButton, setShowScrollButton] = useState<boolean>(false);
   
   // Track accumulating tool calls to prevent duplicate messages
   const accumulatingToolsRef = useRef<Map<string, any>>(new Map());
@@ -125,6 +126,8 @@ export function CleanSwarmChat() {
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const processedAgentFinalRef = useRef<Set<string>>(new Set());
+  // Track last delegated target agent for fallback rendering
+  const lastHandoffTargetRef = useRef<string | null>(null);
   
   const roleFor = (name: string) => {
     const n = (name || '').toLowerCase();
@@ -161,16 +164,62 @@ export function CleanSwarmChat() {
   };
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const currentAgentContentRef = useRef<Map<string, string>>(new Map());
+  const isUserScrollingRef = useRef<boolean>(false);
+  const lastScrollPositionRef = useRef<number>(0);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Smart auto-scroll like ChatGPT - only scroll if user is at bottom
+  useEffect(() => {
+    console.log(`📊 Messages state updated: ${messages.length} messages`);
+    messages.forEach((msg, idx) => {
+      console.log(`  Message ${idx}: role=${msg.role}, agent=${msg.agent}, content=${msg.content.substring(0, 50)}...`);
+    });
+    
+    if (scrollAreaRef.current) {
+      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollContainer) {
+        // Check if user is near the bottom (within 100px threshold)
+        const isNearBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 100;
+        
+        // Only auto-scroll if user is near bottom or if this is a new conversation
+        if (isNearBottom || messages.length <= 1) {
+          // Use requestAnimationFrame for smoother scrolling
+          requestAnimationFrame(() => {
+            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+          });
+        }
+      }
+    }
+  }, [messages, streamingContent]);
+
+  // Add scroll event listener to detect when user scrolls
   useEffect(() => {
     if (scrollAreaRef.current) {
       const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
       if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        const handleScroll = () => {
+          const isNearBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 100;
+          setShowScrollButton(!isNearBottom && scrollContainer.scrollHeight > scrollContainer.clientHeight);
+        };
+
+        scrollContainer.addEventListener('scroll', handleScroll);
+        return () => scrollContainer.removeEventListener('scroll', handleScroll);
       }
     }
-  }, [messages, streamingContent]);
+  }, []);
+
+  // Function to manually scroll to bottom
+  const scrollToBottom = useCallback(() => {
+    if (scrollAreaRef.current) {
+      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollContainer) {
+        scrollContainer.scrollTo({
+          top: scrollContainer.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+    }
+  }, []);
 
   // Load session history from localStorage
   const loadSessionHistory = useCallback(() => {
@@ -454,7 +503,8 @@ export function CleanSwarmChat() {
 
       // Process the stream
       let buffer = '';
-      let currentAgentContent = new Map<string, string>();
+      // Reset the ref for new request
+      currentAgentContentRef.current = new Map<string, string>();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -471,6 +521,23 @@ export function CleanSwarmChat() {
               try {
                 const event = JSON.parse(jsonStr);
                 console.log('📨 SSE Event:', event.type, event);
+                
+                // Debug logging for text generation events
+                if (event.type === 'text_generation' || event.type === 'delta') {
+                  const agent = event.agent || 'unknown';
+                  const content = event.content || event.data?.chunk || event.data?.text || '';
+                  console.log(`📝 Text from ${agent}:`, content);
+                  console.log('Current accumulated content:', currentAgentContentRef.current.get(agent));
+                }
+                
+                // Debug logging for agent completion
+                if (event.type === 'agent_completed' || event.type === 'agent_done') {
+                  const agent = event.agent || 'unknown';
+                  console.log(`✅ Agent ${agent} completed`);
+                  console.log('Final accumulated content:', currentAgentContentRef.current.get(agent));
+                  console.log('Event content:', event.content);
+                  console.log('Event data.output:', event.data?.output);
+                }
 
                 const pushTimeline = (type: string, extra: any = {}) => {
                   setTimeline(prev => [...prev, { type, ts: event.timestamp, agent: event.agent, ...extra }].slice(-500));
@@ -494,7 +561,7 @@ export function CleanSwarmChat() {
                       agent: startAgent,
                       status: 'thinking'
                     }));
-                    currentAgentContent.set(startAgent, '');
+                    currentAgentContentRef.current.set(startAgent, '');
                     // record start time for progress clocks
                     setAgentStartTs((prev: Map<string, number>) => { const n = new Map(prev); n.set(startAgent, Date.now()); return n; });
                     pushTimeline('agent_started');
@@ -509,6 +576,12 @@ export function CleanSwarmChat() {
                     if (deltaAgent === 'system') {
                       // Still consume but do not display/accumulate
                       break;
+                    }
+                    
+                    // Initialize accumulator for this agent if it doesn't exist
+                    if (!currentAgentContentRef.current.has(deltaAgent)) {
+                      currentAgentContentRef.current.set(deltaAgent, '');
+                      console.log(`🆕 Initializing content accumulator for agent: ${deltaAgent}`);
                     }
                     
                     if (content) {
@@ -529,9 +602,9 @@ export function CleanSwarmChat() {
                           return next;
                         });
                       } else {
-                        const existingContent = currentAgentContent.get(deltaAgent) || '';
-                        currentAgentContent.set(deltaAgent, existingContent + content);
-                        setStreamingContent(new Map(currentAgentContent));
+                        const existingContent = currentAgentContentRef.current.get(deltaAgent) || '';
+                        currentAgentContentRef.current.set(deltaAgent, existingContent + content);
+                        setStreamingContent(new Map(currentAgentContentRef.current));
                       }
                     }
                     break;
@@ -543,21 +616,113 @@ export function CleanSwarmChat() {
                     // Dedupe: only finalize once per agent per run
                     if (processedAgentFinalRef.current.has(doneAgent)) {
                       // Ensure we still clear any buffers
-                      currentAgentContent.delete(doneAgent);
-                      setStreamingContent(new Map(currentAgentContent));
+                      currentAgentContentRef.current.delete(doneAgent);
+                      setStreamingContent(new Map(currentAgentContentRef.current));
                       setPausedBuffer(prev => { const n=new Map(prev); n.delete(doneAgent); return n; });
                       break;
                     }
                     processedAgentFinalRef.current.add(doneAgent);
                     if (doneAgent === 'system') {
                       // Don't create user-visible messages for system meta
-                      currentAgentContent.delete(doneAgent);
-                      setStreamingContent(new Map(currentAgentContent));
+                      currentAgentContentRef.current.delete(doneAgent);
+                      setStreamingContent(new Map(currentAgentContentRef.current));
                       break;
                     }
-                    const finalContent = event.content || event.data?.output || currentAgentContent.get(doneAgent) || '';
                     
-                    if (finalContent.trim()) {
+                    // Helper to detect truly blank/placeholder outputs
+                    const isTrulyBlank = (txt?: string) => {
+                      const t = (txt || '').trim();
+                      if (!t) return true;
+                      const lower = t.toLowerCase();
+                      return lower === '[blank text]' || lower === '(no content)' || lower === '<blank>';
+                    };
+
+                    // Skip empty coordinator responses (they're just handoffs). Try fallback to delegated agent output.
+                    const coordOutput = event.data?.output || event.content || '';
+                    if (doneAgent === 'coordinator' && isTrulyBlank(coordOutput)) {
+                      console.log('📝 Skipping empty coordinator response (handoff). Attempting fallback to delegated agent output.');
+                      try {
+                        if (sessionId) {
+                          // Fetch latest shared state snapshot to find agent_outputs
+                          const res = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/shared-state`);
+                          if (res.ok) {
+                            const data = await res.json();
+                            const outputs = (data?.agent_outputs) || (data?.shared_context?.agent_outputs) || {};
+                            const agentNames: string[] = Array.isArray(data?.agents) ? data.agents : Object.keys(outputs);
+
+                            // Build candidate order: preferred handoff target first, then others excluding coordinator
+                            const preferred = (lastHandoffTargetRef.current || '').trim();
+                            const candidates: string[] = [];
+                            if (preferred && !candidates.includes(preferred)) candidates.push(preferred);
+                            for (const name of agentNames) {
+                              if (name && name !== 'coordinator' && !candidates.includes(name)) candidates.push(name);
+                            }
+
+                            // Try to find the first non-duplicate, non-blank content
+                            let inserted = false;
+                            for (const name of candidates) {
+                              const val = outputs?.[name];
+                              if (typeof val !== 'string') continue;
+                              const txt = val as string;
+                              if (!txt || !txt.trim() || isTrulyBlank(txt)) continue;
+                              // Avoid duplicate same-content message from same agent
+                              let isDup = false;
+                              // Check a small tail of messages for duplicates
+                              // Using a closure on current state is tricky; rely on the latest messages array
+                              const lastSameAgent = [...messages].reverse().find(m => m.role==='assistant' && m.agent===name);
+                              if (lastSameAgent && (lastSameAgent.content || '').trim() === txt.trim()) {
+                                console.log(`⚠️ Skipping duplicate fallback candidate from ${name}`);
+                                isDup = true;
+                              }
+                              if (isDup) continue;
+                              const newMessage: Message = {
+                                id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                role: 'assistant',
+                                content: txt,
+                                agent: name,
+                                timestamp: new Date().toISOString(),
+                                isStreaming: false
+                              };
+                              setMessages(prev => {
+                                const last = [...prev].reverse().find(m => m.role==='assistant' && m.agent===name);
+                                if (last && last.content.trim() === txt.trim()) {
+                                  console.log(`⚠️ Skipping duplicate fallback message from ${name}`);
+                                  return prev;
+                                }
+                                console.log(`✅ Fallback: adding message from ${name} to UI:`, txt.substring(0, 100));
+                                return [...prev, newMessage];
+                              });
+                              inserted = true;
+                              break;
+                            }
+                            if (!inserted) {
+                              console.log('⚠️ No suitable agent_outputs found for fallback.');
+                            }
+                          }
+                        }
+                      } catch (e) {
+                        console.log('⚠️ Fallback to delegated agent output failed:', e);
+                      }
+                      // Cleanup streaming buffers for coordinator and exit
+                      currentAgentContentRef.current.delete(doneAgent);
+                      setStreamingContent(new Map(currentAgentContentRef.current));
+                      setPausedBuffer(prev => { const n=new Map(prev); n.delete(doneAgent); return n; });
+                      setActiveAgents(prev => {
+                        const updated = new Map(prev);
+                        updated.set(doneAgent, { agent: doneAgent, status: 'done' });
+                        return updated;
+                      });
+                      if (sessionId) {
+                        fetchSharedState(sessionId);
+                      }
+                      break;
+                    }
+                    const finalContent = event.content || event.data?.output || currentAgentContentRef.current.get(doneAgent) || '';
+                    
+                    console.log(`📦 Agent ${doneAgent} completed with content:`, finalContent);
+                    console.log('Full event data:', event.data);
+                    
+                    if (finalContent.trim() && !isTrulyBlank(finalContent)) {
                       // Add final message
                       const newMessage: Message = {
                         id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -571,14 +736,18 @@ export function CleanSwarmChat() {
                       // Avoid duplicate same-content message from same agent
                       setMessages(prev => {
                         const last = [...prev].reverse().find(m => m.role==='assistant' && m.agent===doneAgent);
-                        if (last && last.content.trim() === finalContent.trim()) return prev;
+                        if (last && last.content.trim() === finalContent.trim()) {
+                          console.log(`⚠️ Skipping duplicate message from ${doneAgent}`);
+                          return prev;
+                        }
+                        console.log(`✅ Adding message from ${doneAgent} to UI:`, finalContent.substring(0, 100));
                         return [...prev, newMessage];
                       });
                     }
 
                     // Clear streaming content for this agent
-                    currentAgentContent.delete(doneAgent);
-                    setStreamingContent(new Map(currentAgentContent));
+                    currentAgentContentRef.current.delete(doneAgent);
+                    setStreamingContent(new Map(currentAgentContentRef.current));
                     setPausedBuffer(prev => {
                       const next = new Map(prev);
                       next.delete(doneAgent);
@@ -650,6 +819,14 @@ export function CleanSwarmChat() {
                           parsedParams = JSON.parse(toolAcc.parameters);
                         } catch {
                           parsedParams = toolAcc.parameters;
+                        }
+                        // Track last delegated agent for fallback rendering when coordinator output is blank
+                        if (toolName === 'handoff_to_agent') {
+                          const target = (parsedParams && (parsedParams.to_agent || parsedParams.target_agent || parsedParams.agent)) || null;
+                          if (typeof target === 'string' && target.trim()) {
+                            lastHandoffTargetRef.current = target.trim();
+                            console.log('🧭 Recorded last handoff target:', lastHandoffTargetRef.current);
+                          }
                         }
                         const paramsBlock = parsedParams ? `\n\nParameters:\n\n\`\`\`json\n${JSON.stringify(parsedParams, null, 2)}\n\`\`\`` : '';
                         
@@ -756,6 +933,14 @@ export function CleanSwarmChat() {
                       reason: event.reason || event.data?.reason,
                       timestamp: event.timestamp
                     }]);
+                    // Track last handoff target for fallback logic
+                    try {
+                      const dest = (event.to || event.data?.to || '').toString();
+                      if (dest) {
+                        lastHandoffTargetRef.current = dest;
+                        console.log('🧭 Recorded last handoff target (event):', dest);
+                      }
+                    } catch {}
                     // Also surface a concise system message
                     setMessages(prev => [...prev, {
                       id: `handoff_${Date.now()}`,
@@ -790,9 +975,9 @@ export function CleanSwarmChat() {
                     }
                     console.log('✅ Session complete');
                     // Finalize any remaining streaming content as assistant messages
-                    if (currentAgentContent.size > 0) {
+                    if (currentAgentContentRef.current.size > 0) {
                       const now = Date.now();
-                      const entries = Array.from(currentAgentContent.entries())
+                      const entries = Array.from(currentAgentContentRef.current.entries())
                         .filter(([agentName, content]) => agentName !== 'system' && (content || '').trim().length > 0);
                       const finalMsgs: Message[] = entries
                         .map(([agentName, content], idx) => ({
@@ -808,10 +993,46 @@ export function CleanSwarmChat() {
                       }
                     }
                     // Clear streaming state/maps
-                    currentAgentContent.clear();
+                    currentAgentContentRef.current.clear();
                     setStreamingContent(new Map());
                     setIsLoading(false);
                     setActiveAgents(new Map());
+
+                    // Reconcile: If backend only completed coordinator, surface any non-empty agent_outputs
+                    try {
+                      if (sessionId) {
+                        const res = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/shared-state`);
+                        if (res.ok) {
+                          const data = await res.json();
+                          const outputs = (data?.agent_outputs) || (data?.shared_context?.agent_outputs) || {};
+                          const agentNames: string[] = Array.isArray(data?.agents) ? data.agents : Object.keys(outputs);
+                          const placeholders = new Set(['[blank text]', '(no content)', '<blank>']);
+                          const candidates = agentNames.filter(n => n && n !== 'coordinator');
+                          for (const name of candidates) {
+                            const txt = (outputs?.[name] || '') as string;
+                            if (typeof txt !== 'string') continue;
+                            const t = txt.trim();
+                            if (!t || placeholders.has(t.toLowerCase())) continue;
+                            // Append if not already present for this agent/content
+                            setMessages(prev => {
+                              const existing = [...prev].reverse().find(m => m.role==='assistant' && m.agent===name && (m.content||'').trim() === t);
+                              if (existing) return prev;
+                              console.log(`✅ Reconcile: adding message from ${name} to UI:`, t.substring(0, 100));
+                              return [...prev, {
+                                id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                role: 'assistant',
+                                content: txt,
+                                agent: name,
+                                timestamp: new Date().toISOString(),
+                                isStreaming: false
+                              }];
+                            });
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.log('⚠️ Reconcile from shared-state failed:', e);
+                    }
                     break;
 
                   case 'error':
@@ -839,6 +1060,14 @@ export function CleanSwarmChat() {
                   case 'handoff.requested':
                   case 'handoff':
                     pushTimeline('handoff', { from: event?.data?.from, to: event?.data?.to });
+                    // Track last handoff target for fallback logic
+                    try {
+                      const dest = (event?.data?.to || '').toString();
+                      if (dest) {
+                        lastHandoffTargetRef.current = dest;
+                        console.log('🧭 Recorded last handoff target (event):', dest);
+                      }
+                    } catch {}
                     setMessages(prev => [...prev, {
                       id: `handoff_${Date.now()}`,
                       role: 'system',
@@ -1404,8 +1633,8 @@ export function CleanSwarmChat() {
       <div className="flex-1 flex flex-col">
         {/* Top Header Bar */}
         <div className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-3 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between min-w-0">
+            <div className="flex items-center gap-4 min-w-0">
               {/* Status Pills */}
               <div className="flex items-center gap-2">
                 <div className="px-3 py-1.5 bg-gradient-to-r from-blue-100 to-purple-100 dark:from-blue-900/30 dark:to-purple-900/30 rounded-full flex items-center gap-2">
@@ -1436,6 +1665,32 @@ export function CleanSwarmChat() {
               </Button>
               <Button size="sm" variant="ghost" onClick={() => navigate('/orchestrator/config')} title="Configure Agents">
                 <Brain className="h-4 w-4 mr-1" /> Configure Agents
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                title="Export session as ZIP (HTML report + artifacts)"
+                onClick={async () => {
+                  try {
+                    if (!sessionId) return;
+                    const res = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/export`);
+                    if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `session_${sessionId}.zip`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                  } catch (e) {
+                    console.error('Export error', e);
+                    alert('Export failed');
+                  }
+                }}
+              >
+                Export
               </Button>
               {isLoading && (
                 <Button
@@ -1488,7 +1743,7 @@ export function CleanSwarmChat() {
 
           {/* Active Agents Bar */}
           {activeAgents.size > 0 && (
-            <div className="mt-3 overflow-x-auto">
+            <div className="mt-3 overflow-x-auto max-w-full overscroll-x-contain">
               <motion.div 
                 className="flex items-center gap-2 pb-2 min-w-max"
                 initial={{ opacity: 0, y: -10 }}
@@ -1869,6 +2124,22 @@ export function CleanSwarmChat() {
             )}
           </div>
         </ScrollArea>
+
+        {/* Scroll to Bottom Button */}
+        <AnimatePresence>
+          {showScrollButton && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              onClick={scrollToBottom}
+              className="absolute bottom-24 right-8 z-10 p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg transition-colors"
+              title="Scroll to bottom"
+            >
+              <ChevronDown className="h-5 w-5" />
+            </motion.button>
+          )}
+        </AnimatePresence>
 
         {/* Collapsible Tools Bar */}
         <div className="border-t bg-white dark:bg-gray-900 px-4 py-2">

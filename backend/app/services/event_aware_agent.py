@@ -155,7 +155,7 @@ class EventAwareAgent:
             
             # Build tools list based on capabilities
             tools = []
-            if "web_search" in self.capabilities.tools:
+            if "web_search" in self.capabilities.tools or "tavily_search" in self.capabilities.tools:
                 try:
                     from app.tools.tavily_search_tool import tavily_search
                     tools.append(tavily_search)
@@ -170,6 +170,29 @@ class EventAwareAgent:
                     except Exception as e2:
                         logger.warning(f"⚠️ Could not load alternative tavily tool: {e2}")
                         pass
+            # File operations
+            try:
+                if "file_write" in self.capabilities.tools or "editor" in self.capabilities.tools:
+                    from app.tools.file_tools import file_write
+                    tools.append(file_write)
+                    logger.info("✅ Added file_write tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load file_write tool: {e}")
+            try:
+                if "file_read" in self.capabilities.tools:
+                    from app.tools.file_tools import file_read
+                    tools.append(file_read)
+                    logger.info("✅ Added file_read tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load file_read tool: {e}")
+            # Python REPL
+            try:
+                if "python_repl" in self.capabilities.tools:
+                    from app.tools.python_repl_tool import python_repl
+                    tools.append(python_repl)
+                    logger.info("✅ Added python_repl tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load python_repl tool: {e}")
             
             # Create agent with NO callback handler - we'll use stream_async
             strands_agent = Agent(
@@ -446,8 +469,9 @@ You excel at recognizing when preliminary work (analysis, outlines, plans) needs
                     await self._fallback_trigger_logic(original_output)
                     return
             
-            # Check if task is complete
-            if decision_json.get("task_complete", False):
+            # Prefer spawning needed agents if provided; only mark complete when none are needed
+            needed_agents = decision_json.get("needed_agents", [])
+            if decision_json.get("task_complete", False) and not needed_agents:
                 await event_bus.emit(
                     "task.complete",
                     {
@@ -461,8 +485,7 @@ You excel at recognizing when preliminary work (analysis, outlines, plans) needs
                 logger.info(f"AI decided task is complete: {decision_json.get('reasoning')}")
                 return
             
-            # Spawn needed agents based on AI decision
-            needed_agents = decision_json.get("needed_agents", [])
+            # Spawn needed agents based on AI decision (sequentially by controller)
             for agent_spec in needed_agents:
                 if isinstance(agent_spec, dict) and "role" in agent_spec:
                     await event_bus.emit(
@@ -472,7 +495,8 @@ You excel at recognizing when preliminary work (analysis, outlines, plans) needs
                             "reason": agent_spec.get("reason", "AI determined this agent is needed"),
                             "priority": agent_spec.get("priority", "medium"),
                             "context": original_output[:500],
-                            "decision_maker": "ai"
+                            "decision_maker": "ai",
+                            "execution_id": getattr(self, 'execution_id', None)
                         },
                         source=self.name
                     )
@@ -490,7 +514,10 @@ You excel at recognizing when preliminary work (analysis, outlines, plans) needs
                 },
                 source=self.name
             )
-            
+            # If agents were requested, do not synthesize a final response here; let them work
+            if needed_agents:
+                return
+        
         except json.JSONDecodeError:
             logger.warning("Failed to parse AI decision JSON, falling back to simple logic")
             await self._fallback_trigger_logic(original_output)

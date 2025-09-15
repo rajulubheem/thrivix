@@ -647,7 +647,7 @@ Memory Summary:
             
             # Build tools list based on capabilities
             tools = []
-            if "web_search" in self.capabilities.tools:
+            if "web_search" in self.capabilities.tools or "tavily_search" in self.capabilities.tools:
                 try:
                     from app.tools.tavily_search_tool import tavily_search
                     tools.append(tavily_search)
@@ -662,6 +662,29 @@ Memory Summary:
                     except Exception as e2:
                         logger.warning(f"⚠️ Could not load alternative tavily tool: {e2}")
                         pass
+            # File operations
+            try:
+                if "file_write" in self.capabilities.tools or "editor" in self.capabilities.tools:
+                    from app.tools.file_tools import file_write
+                    tools.append(file_write)
+                    logger.info("✅ Added file_write tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load file_write tool: {e}")
+            try:
+                if "file_read" in self.capabilities.tools:
+                    from app.tools.file_tools import file_read
+                    tools.append(file_read)
+                    logger.info("✅ Added file_read tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load file_read tool: {e}")
+            # Python REPL
+            try:
+                if "python_repl" in self.capabilities.tools:
+                    from app.tools.python_repl_tool import python_repl
+                    tools.append(python_repl)
+                    logger.info("✅ Added python_repl tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load python_repl tool: {e}")
             
             # Enhanced system prompt with context awareness
             enhanced_prompt = f"""

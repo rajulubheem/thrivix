@@ -308,22 +308,22 @@ class AIOrchestrator:
                 AgentConfig(
                     name="architect",
                     description="Design the solution architecture",
-                    system_prompt="You are a solution architect. Analyze requirements and design the system architecture.",
-                    tools=["file_write", "diagram_create"],
+                    system_prompt="You are a solution architect. Analyze requirements and design the system architecture for the user's task. Keep outputs concise and actionable.",
+                    tools=["diagram", "file_write"],  # Use real, registered tools
                     model=self.complexity_models[analysis.complexity]
                 ),
                 AgentConfig(
                     name="developer",
                     description="Implement the solution",
-                    system_prompt="You are a developer. Implement the solution based on the architecture.",
-                    tools=["code_write", "file_write", "file_read"],
+                    system_prompt="You are a developer. Implement the requested app by writing the necessary code and using file_write to provide ready-to-save files. Avoid executing code; focus on producing high-quality source content.",
+                    tools=["file_write", "file_read"],
                     model=self.complexity_models[analysis.complexity]
                 ),
                 AgentConfig(
                     name="tester",
                     description="Test and validate the solution",
-                    system_prompt="You are a QA engineer. Test the implementation and ensure quality.",
-                    tools=["test_runner", "code_review"],
+                    system_prompt="You are QA. Validate outputs by reading files and suggesting fixes. If issues found, clearly describe them.",
+                    tools=["file_read"],  # Keep to existing tools to avoid missing handlers
                     model="gpt-4o-mini"
                 )
             ]
@@ -343,8 +343,8 @@ class AIOrchestrator:
                 AgentConfig(
                     name="analyst",
                     description="Analyze and synthesize findings",
-                    system_prompt="You are an analyst. Synthesize research findings into actionable insights.",
-                    tools=["data_query", "markdown_write"],
+                    system_prompt="You are an analyst. Synthesize research findings into actionable insights and write a concise report.",
+                    tools=["file_write", "file_read"],  # Use file_write for markdown output
                     model=self.complexity_models[analysis.complexity]
                 )
             ]
@@ -355,21 +355,21 @@ class AIOrchestrator:
                     name="coordinator",
                     description="Coordinate and plan the task",
                     system_prompt="You are a coordinator. Break down the task and plan the approach.",
-                    tools=["task_create"],
+                    tools=["diagram"],  # Prefer an existing tool
                     model="gpt-4o-mini"
                 ),
                 AgentConfig(
                     name="executor",
-                    description="Execute the main task",
-                    system_prompt="You are an executor. Implement the solution based on the plan.",
-                    tools=["file_write", "code_write"],
+                    description="Build the main deliverables",
+                    system_prompt="You are an executor. Produce complete source files for the solution using file_write; do not execute code.",
+                    tools=["file_write", "file_read"],
                     model=self.complexity_models[analysis.complexity]
                 ),
                 AgentConfig(
                     name="reviewer",
                     description="Review and finalize",
                     system_prompt="You are a reviewer. Review the work and ensure quality.",
-                    tools=["file_read", "markdown_write"],
+                    tools=["file_read", "file_write"],
                     model="gpt-4o-mini"
                 )
             ]

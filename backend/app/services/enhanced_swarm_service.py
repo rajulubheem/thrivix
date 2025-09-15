@@ -236,7 +236,13 @@ If a tool fails, check:
             # Stream the response in real-time
             agent_stream = self.agent.stream_async(context)
             
+            logger.info(f"📡 Starting stream for agent {self.name}")
+            event_count = 0
+            
             async for event in agent_stream:
+                event_count += 1
+                if event_count <= 3:
+                    logger.debug(f"📡 Agent {self.name} stream event #{event_count}: {list(event.keys())[:5]}")
                 # Handle text generation - send immediately
                 if "data" in event:
                     text_chunk = event["data"]
@@ -245,6 +251,7 @@ If a tool fails, check:
                     
                     # Send chunk immediately for real-time streaming
                     if self.callback_handler:
+                        logger.debug(f"📤 Sending text chunk for {self.name}: {text_chunk[:50] if text_chunk else 'empty'}...")
                         await self.callback_handler(
                             type="text_generation",
                             agent=self.name,
@@ -254,6 +261,12 @@ If a tool fails, check:
                                 "accumulated": accumulated_text
                             }
                         )
+                        # Track that we sent chunks
+                        if not hasattr(self, '_chunks_sent'):
+                            self._chunks_sent = 0
+                        self._chunks_sent += 1
+                    else:
+                        logger.warning(f"⚠️ No callback handler for {self.name} - cannot stream text!")
                 
                 # Handle tool usage events for visibility
                 elif "current_tool_use" in event:
@@ -340,8 +353,37 @@ If a tool fails, check:
             # Clean response text (remove tool syntax)
             clean_response = self._clean_response(response_text)
 
-            # Don't re-stream the response since we already streamed it in real-time above
-            # Just log that we have the cleaned response
+            # Log what we have
+            chunks_sent = hasattr(self, '_chunks_sent') and self._chunks_sent > 0
+            logger.info(f"📊 Agent {self.name}: response_text={len(response_text)} chars, accumulated={len(accumulated_text)} chars, clean_response={len(clean_response) if clean_response else 0} chars, chunks_sent={chunks_sent}")
+            
+            # CRITICAL FIX: Send the response if no chunks were actually sent to callback
+            if clean_response and not chunks_sent and self.callback_handler:
+                logger.info(f"📤 Sending complete response for {self.name} (no chunks were sent to UI)")
+                await self.callback_handler(
+                    type="text_generation",
+                    agent=self.name,
+                    data={
+                        "text": clean_response,
+                        "chunk": clean_response,
+                        "accumulated": clean_response
+                    }
+                )
+            elif not clean_response and result and hasattr(result, 'content'):
+                # Fallback: get from result if we have nothing
+                clean_response = self._clean_response(result.content)
+                if clean_response and self.callback_handler:
+                    logger.info(f"📤 Sending result content for {self.name}")
+                    await self.callback_handler(
+                        type="text_generation",
+                        agent=self.name,
+                        data={
+                            "text": clean_response,
+                            "chunk": clean_response,
+                            "accumulated": clean_response
+                        }
+                    )
+            
             if clean_response:
                 logger.info(f"✅ Cleaned response ready for {self.name}: {len(clean_response)} chars")
 
@@ -854,10 +896,86 @@ def create_handoff_to_agent_tool(
                         target_cfg = acfg
                         break
             if not target_cfg:
-                msg = f"Agent '{to_agent}' not found among configured agents"
-                if callback_handler:
-                    await callback_handler(type="text_generation", agent="coordinator", data={"chunk": msg, "text": msg})
-                return {"status": "error", "content": [{"text": msg}]}
+                # DYNAMIC AI-DRIVEN AGENT CREATION
+                logger.info(f"🤖 AI creating specialized agent '{to_agent}' for: {reason}")
+                
+                # Let AI determine the best configuration for this agent
+                from app.services.ai_orchestrator import AIOrchestrator
+                orchestrator = AIOrchestrator()
+                
+                # Ask AI to analyze the task and determine optimal agent configuration
+                analysis_prompt = f"""
+                Analyze this delegation request and determine the optimal agent configuration:
+                
+                Agent Name: {to_agent}
+                Task/Reason: {reason}
+                Context: {json.dumps(context) if context else 'None'}
+                
+                Based on the agent name and task, determine:
+                1. What tools this agent needs from these available tools:
+                   - tavily_search: Web search for current information
+                   - file_write: Create and save files
+                   - file_read: Read existing files
+                   - python_repl: Execute Python code
+                   - fetch_webpage: Fetch and extract content from URLs
+                   - calculator: Perform calculations
+                   - diagram: Create diagrams and visualizations
+                   Select ONLY the tools actually needed for this specific task.
+                2. The specialized system prompt for this agent (be specific about the task)
+                3. Any specific instructions for completing this task
+                
+                Respond with JSON:
+                {{
+                    "tools": ["list", "of", "needed", "tools"],
+                    "system_prompt": "Detailed prompt for the agent",
+                    "temperature": 0.7
+                }}
+                """
+                
+                try:
+                    # Get AI's recommendation for agent configuration
+                    import asyncio
+                    config_response = await asyncio.to_thread(
+                        orchestrator._generate_json_response,
+                        analysis_prompt,
+                        model="gpt-4o-mini"
+                    )
+                    
+                    # Extract configuration from AI response
+                    selected_tools = config_response.get("tools", ["python_repl", "file_write"])
+                    system_prompt = config_response.get("system_prompt", f"You are a {to_agent} specialist. {reason}")
+                    temperature = config_response.get("temperature", 0.7)
+                    
+                    logger.info(f"✨ AI configured '{to_agent}' with tools: {selected_tools}")
+                    
+                except Exception as e:
+                    logger.warning(f"AI configuration failed, using defaults: {e}")
+                    # Fallback to reasonable defaults
+                    selected_tools = ["python_repl", "file_write", "file_read", "tavily_search"]
+                    system_prompt = f"""You are a {to_agent} specialist.
+                    
+Your task: {reason}
+
+You have access to various tools. Use them as needed to complete your task.
+Provide complete, working solutions - not just descriptions.
+If creating files, use file_write. If researching, use tavily_search."""
+                    temperature = 0.7
+                
+                # Add context to the prompt
+                if context:
+                    system_prompt += f"\n\nContext provided:\n{json.dumps(context, indent=2)}"
+                
+                # Create the dynamic agent configuration
+                from app.schemas.swarm import AgentConfig
+                target_cfg = AgentConfig(
+                    name=to_agent,
+                    system_prompt=system_prompt,
+                    tools=selected_tools,
+                    temperature=temperature
+                )
+                
+                # Log AI-driven agent creation but don't send to UI
+                logger.info(f"✨ AI configured {to_agent} with tools: {', '.join(selected_tools)}")
         except Exception as e:
             return {"status": "error", "content": [{"text": f"Lookup failed: {e}"}]}
 
@@ -1465,9 +1583,10 @@ class EnhancedSwarmService:
                     data={"chunk": continuation_msg, "text": continuation_msg}
                 )
             
-            # Only generate agents if this is a NEW session (no existing coordinator)
-            if use_orchestrator and not is_continuation and (not request.agents or len(request.agents) == 0):
-                logger.info(f"📋 Orchestrating task for NEW session: {request.task}")
+            # Generate agents for new tasks (even in continuations if no agents provided)
+            # For continuations, we need task-specific agents for the new message
+            if use_orchestrator and (not request.agents or len(request.agents) == 0):
+                logger.info(f"📋 Orchestrating agents for task: {request.task}")
                 
                 # This is a new session, we need to generate agents
                 has_existing_agents = bool(existing_agents and len(existing_agents) > 0)
@@ -1721,6 +1840,217 @@ class EnhancedSwarmService:
                     final_response = coordinator_result.get("content", "")
                 else:
                     final_response = coordinator_result.get("content", "Error occurred")
+                
+                # CRITICAL FIX: Check if coordinator output is a handoff call
+                # If so, parse and execute it!
+                if final_response and "handoff_to_agent" in final_response:
+                    logger.info(f"🔄 Coordinator output contains handoff call: {final_response[:100]}")
+                    
+                    # Parse the handoff call
+                    import re
+                    match = re.search(r'handoff_to_agent\(to_agent="([^"]+)"(?:,\s*reason="([^"]*)")?(?:,\s*context=(\{[^}]*\}))?\)', final_response)
+                    
+                    if match:
+                        target_agent = match.group(1)
+                        reason = match.group(2) or ""
+                        context_str = match.group(3) or "{}"
+                        
+                        logger.info(f"🎯 Parsed handoff: to_agent={target_agent}, reason={reason[:50]}")
+                        
+                        # Try to find and execute the target agent
+                        try:
+                            # Look for the agent in our configured agents
+                            agent_found = False
+                            for agent_config in request.agents:
+                                if hasattr(agent_config, 'name') and agent_config.name == target_agent:
+                                    agent_found = True
+                                    logger.info(f"✅ Found configured agent: {target_agent}")
+                                    
+                                    # Create and execute the agent
+                                    from app.services.strands_session_service import get_strands_session_service
+                                    strands_service = get_strands_session_service()
+                                    
+                                    # Get agent tools (resolve into callable tools)
+                                    agent_tools = []
+                                    try:
+                                        if hasattr(agent_config, 'tools') and agent_config.tools:
+                                            added: set = set()
+                                            STRICT = os.getenv("STRICT_AGENT_TOOLS", "true").lower() in ("1", "true", "yes")
+                                            for tname in agent_config.tools:
+                                                if tname in added:
+                                                    continue
+                                                if tname in ("tavily_search", "web_search"):
+                                                    if os.getenv("TAVILY_API_KEY"):
+                                                        agent_tools.append(create_tavily_tool(target_agent, callback_handler))
+                                                        added.add("tavily_search")
+                                                elif tname == "fetch_webpage":
+                                                    try:
+                                                        agent_tools.append(create_fetch_webpage_tool(target_agent, callback_handler))
+                                                        added.add("fetch_webpage")
+                                                    except Exception as e:
+                                                        logger.warning(f"Could not add fetch_webpage: {e}")
+                                                elif tname in ("file_write", "file_read"):
+                                                    fw, fr = create_file_tools(target_agent, callback_handler)
+                                                    if "file_write" in agent_config.tools and "file_write" not in added:
+                                                        agent_tools.append(fw)
+                                                        added.add("file_write")
+                                                    if "file_read" in agent_config.tools and "file_read" not in added:
+                                                        agent_tools.append(fr)
+                                                        added.add("file_read")
+                                                # Skip python_repl per user preference (do not execute code)
+                                                else:
+                                                    if not STRICT:
+                                                        try:
+                                                            from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+                                                            wrapper = DynamicToolWrapper(callback_handler=callback_handler)
+                                                            wrapped = wrapper.wrap_strands_tool(tname, target_agent)
+                                                            if wrapped:
+                                                                agent_tools.append(wrapped)
+                                                                added.add(tname)
+                                                        except Exception as e:
+                                                            logger.warning(f"handoff tool resolution skipped for {tname}: {e}")
+                                    except Exception as e:
+                                        logger.warning(f"Tool resolution failed for agent {target_agent}: {e}")
+                                    
+                                    # Create the agent
+                                    agent = strands_service.get_or_create_agent(
+                                        session_id=execution_id,
+                                        agent_name=target_agent,
+                                        system_prompt=agent_config.system_prompt if hasattr(agent_config, 'system_prompt') else f"You are {target_agent}",
+                                        tools=agent_tools,
+                                        model_config={
+                                            "model_id": "gpt-4o-mini",
+                                            "temperature": 0.7,
+                                            "max_tokens": 4000
+                                        }
+                                    )
+                                    
+                                    # Execute the agent
+                                    logger.info(f"🚀 Executing delegated agent: {target_agent}")
+                                    
+                                    if callback_handler:
+                                        await callback_handler(
+                                            type="agent_started",
+                                            agent=target_agent,
+                                            data={"task": request.task, "reason": reason}
+                                        )
+                                    
+                                    # Stream the agent's response
+                                    agent_response = ""
+                                    async for event in agent.stream_async(request.task):
+                                        if "data" in event and event["data"]:
+                                            chunk = event["data"]
+                                            agent_response += chunk
+                                            
+                                            if callback_handler:
+                                                await callback_handler(
+                                                    type="text_generation",
+                                                    agent=target_agent,
+                                                    data={"chunk": chunk}
+                                                )
+                                    
+                                    # Complete the agent
+                                    if callback_handler:
+                                        await callback_handler(
+                                            type="agent_completed",
+                                            agent=target_agent,
+                                            data={"output": agent_response}
+                                        )
+                                    
+                                    final_response = agent_response
+                                    break
+                            
+                            if not agent_found:
+                                logger.warning(f"⚠️ Target agent '{target_agent}' not found in configured agents, creating dynamically")
+                                
+                                # Dynamically create the agent that the coordinator is asking for
+                                from app.services.strands_session_service import get_strands_session_service
+                                strands_service = get_strands_session_service()
+                                
+                                # Heuristically assign useful tools for the dynamic agent
+                                dyn_tools = []
+                                try:
+                                    added: set = set()
+                                    STRICT = os.getenv("STRICT_AGENT_TOOLS", "true").lower() in ("1", "true", "yes")
+                                    text_blob = f"{request.task}\n{reason}".lower()
+                                    needs_build = any(k in text_blob for k in ["build", "create", "implement", "generate", "scaffold", "write", "file", "app", "prototype", "calculator", "web app"]) 
+                                    needs_research = any(k in text_blob for k in ["research", "search", "web", "current", "news", "find", "discover"]) 
+                                    
+                                    if needs_build:
+                                        fw, fr = create_file_tools(target_agent, callback_handler)
+                                        dyn_tools.append(fw); added.add("file_write")
+                                        dyn_tools.append(fr); added.add("file_read")
+                                    if needs_research and os.getenv("TAVILY_API_KEY"):
+                                        dyn_tools.append(create_tavily_tool(target_agent, callback_handler)); added.add("tavily_search")
+                                        try:
+                                            dyn_tools.append(create_fetch_webpage_tool(target_agent, callback_handler)); added.add("fetch_webpage")
+                                        except Exception:
+                                            pass
+                                    # If still empty and not strict, try dynamic wrapping of common tools
+                                    if not dyn_tools and not STRICT:
+                                        try:
+                                            from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+                                            wrapper = DynamicToolWrapper(callback_handler=callback_handler)
+                                            for tname in ["file_write", "file_read", "tavily_search", "fetch_webpage"]:
+                                                wrapped = wrapper.wrap_strands_tool(tname, target_agent)
+                                                if wrapped:
+                                                    dyn_tools.append(wrapped)
+                                        except Exception:
+                                            pass
+                                except Exception as e:
+                                    logger.warning(f"Dynamic tool selection failed for {target_agent}: {e}")
+                                
+                                # Create the agent with a generic prompt and heuristic tools
+                                agent = strands_service.get_or_create_agent(
+                                    session_id=execution_id,
+                                    agent_name=target_agent,
+                                    system_prompt=f"You are {target_agent}. {reason}",
+                                    tools=dyn_tools,
+                                    model_config={
+                                        "model_id": "gpt-4o-mini",
+                                        "temperature": 0.7,
+                                        "max_tokens": 4000
+                                    }
+                                )
+                                
+                                # Execute the agent
+                                logger.info(f"🚀 Executing dynamically created agent: {target_agent}")
+                                
+                                if callback_handler:
+                                    await callback_handler(
+                                        type="agent_started",
+                                        agent=target_agent,
+                                        data={"task": request.task, "reason": reason}
+                                    )
+                                
+                                # Stream the agent's response
+                                agent_response = ""
+                                async for event in agent.stream_async(request.task):
+                                    if "data" in event and event["data"]:
+                                        chunk = event["data"]
+                                        agent_response += chunk
+                                        
+                                        if callback_handler:
+                                            await callback_handler(
+                                                type="text_generation",
+                                                agent=target_agent,
+                                                data={"chunk": chunk}
+                                            )
+                                
+                                # Complete the agent
+                                if callback_handler:
+                                    await callback_handler(
+                                        type="agent_completed",
+                                        agent=target_agent,
+                                        data={"output": agent_response}
+                                    )
+                                
+                                final_response = agent_response
+                                
+                        except Exception as e:
+                            logger.error(f"Failed to execute handoff: {e}")
+                            # Fallback - the handoff text becomes the response
+                            pass
                 
                 # Handle artifacts if any
                 all_artifacts = []

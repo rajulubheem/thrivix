@@ -3,7 +3,7 @@ Production-ready streaming endpoint with polling-based approach
 Supports Redis for distributed session storage
 """
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 import json
 import asyncio
 import uuid
@@ -17,6 +17,9 @@ from app.services.enhanced_swarm_service import EnhancedSwarmService
 from app.services.realtime_swarm_service import RealtimeSwarmService
 from app.services.strands_session_service import get_strands_session_service
 from app.services.shared_state_service import SharedStateService
+from fastapi.responses import StreamingResponse
+import io
+import zipfile
 # from app.services.swarm_dag_adapter import swarm_dag_adapter, ExecutionMode  # Disabled DAG
 from app.core.config import settings
 from .streaming_optimizer import optimizer
@@ -596,6 +599,17 @@ async def start_streaming(
                     "agent": agent,
                     "timestamp": datetime.utcnow().isoformat()
                 }
+                # Attach parent relationship if available from service
+                try:
+                    import app.api.v1.endpoints.streaming as streaming_module
+                    svc = getattr(streaming_module, '_services_by_session', {}).get(session_id)
+                    if svc and isinstance(getattr(svc, 'active_executions', None), dict):
+                        parent_map = svc.active_executions.get(session_id, {}).get('parent_map', {})
+                        parent = parent_map.get(agent)
+                        if parent:
+                            event['parent'] = parent
+                except Exception:
+                    pass
 
                 # Update metrics and initialize accumulator
                 session = await storage.get(session_id)
@@ -708,6 +722,17 @@ async def start_streaming(
                     "tokens": data.get("tokens", 0),
                     "timestamp": datetime.utcnow().isoformat()
                 }
+                # Attach parent if known
+                try:
+                    import app.api.v1.endpoints.streaming as streaming_module
+                    svc = getattr(streaming_module, '_services_by_session', {}).get(session_id)
+                    if svc and isinstance(getattr(svc, 'active_executions', None), dict):
+                        parent_map = svc.active_executions.get(session_id, {}).get('parent_map', {})
+                        parent = parent_map.get(agent)
+                        if parent:
+                            event['parent'] = parent
+                except Exception:
+                    pass
                 
                 # CRITICAL FIX: Append agent_done event to storage immediately
                 # First verify session exists
@@ -1035,11 +1060,27 @@ async def start_streaming(
                         "max_execution_time": swarm_config.get("max_execution_time", 180),
                         "max_agent_runtime": swarm_config.get("max_agent_runtime", 60)
                     }
-                
+                # Extract tool preferences if provided
+                tool_preferences = {}
+                if hasattr(request, 'context') and request.context:
+                    tool_preferences = request.context.get('tool_preferences', {}) or {}
+
                 service = ControlledSwarmService(config=user_config)
+                # Attach tool preferences to the service so agents can adapt
+                try:
+                    service.user_tool_preferences = {
+                        'selected_tools': list(tool_preferences.get('selected_tools', []) or []),
+                        'restrict_to_selected': bool(tool_preferences.get('restrict_to_selected', False)),
+                    }
+                except Exception:
+                    service.user_tool_preferences = {'selected_tools': [], 'restrict_to_selected': False}
                 # Store service globally so stop endpoint can access it
                 import app.api.v1.endpoints.streaming as streaming_module
                 streaming_module._global_swarm_service = service
+                # Also keep per-session reference for better control
+                if not hasattr(streaming_module, '_services_by_session'):
+                    streaming_module._services_by_session = {}
+                streaming_module._services_by_session[session_id] = service
                 # Store mapping between session_id and execution_id for stop functionality
                 if not hasattr(streaming_module, '_session_execution_map'):
                     streaming_module._session_execution_map = {}
@@ -1168,9 +1209,18 @@ async def start_streaming(
                 conversation_history = []
                 
                 # Extract conversation history if available (for context, not agent reuse)
-                if session and "accumulated" in session:
-                    conversation_history = session["accumulated"]
-                    logger.info(f"📖 Using {len(conversation_history)} conversation history items for context")
+                # IMPORTANT: Use Strands-persisted messages, not accumulated map
+                try:
+                    strands_service = get_strands_session_service()
+                    saved_ctx = strands_service.get_context(session_id) or {}
+                    msgs = saved_ctx.get("messages", [])
+                    if isinstance(msgs, list):
+                        conversation_history = msgs
+                        logger.info(f"📖 Using {len(conversation_history)} persisted messages for context")
+                    else:
+                        conversation_history = []
+                except Exception as e:
+                    logger.warning(f"Could not load persisted messages for context: {e}")
                 
                 logger.info(f"🆕 Starting with fresh agents - service will create appropriate ones")
                 
@@ -1185,11 +1235,13 @@ async def start_streaming(
                     streaming_module._session_execution_map = {}
                 streaming_module._session_execution_map[session_id] = request.execution_id or session_id
 
+                # Include current task as the latest user message for immediate context
+                conv_plus_current = list(conversation_history) + ([{"role": "user", "content": request.task}] if request.task else [])
                 result = await service.execute_swarm_async(
                     request=request,
                     user_id="stream_user",
                     callback_handler=stream_callback,
-                    conversation_history=conversation_history,
+                    conversation_history=conv_plus_current,
                     existing_agents=existing_agents
                 )
 
@@ -1224,57 +1276,58 @@ async def start_streaming(
                     "content": request.task
                 })
                 
-                # Get the assistant's response - check multiple sources
-                assistant_content = ""
+                # Add each finalized agent output in order of completion
+                try:
+                    chunks = await storage.get_chunks(session_id, offset=0, limit=2000)
+                except Exception:
+                    chunks = []
+                # Collect agent_done events in order
+                for ch in chunks:
+                    if ch.get("type") in ("agent_done", "agent_completed"):
+                        content = ch.get("content") or (ch.get("data", {}) or {}).get("output")
+                        if content and isinstance(content, str) and content.strip():
+                            all_messages.append({
+                                "role": "assistant",
+                                "content": content
+                            })
                 
-                # First check result object
-                if result:
-                    if hasattr(result, 'result'):
-                        assistant_content = str(result.result)
-                    elif hasattr(result, 'output'):
-                        assistant_content = str(result.output)
-                    elif hasattr(result, 'content'):
-                        assistant_content = str(result.content)
-                    else:
-                        assistant_content = str(result)
-                
-                # If no result, check accumulated content
-                if not assistant_content and session.get("accumulated"):
-                    accumulated = session["accumulated"]
-                    
-                    # Check coordinator first
-                    if "coordinator" in accumulated:
-                        assistant_content = accumulated["coordinator"]
-                    else:
-                        # Check for any agent responses
-                        for agent_name, content in accumulated.items():
-                            if content and isinstance(content, str) and len(content.strip()) > 0:
-                                assistant_content = content
-                                break
-                
-                # If still no content, check the last chunk for final response
-                if not assistant_content:
-                    try:
-                        chunks = await storage.get_chunks(session_id, offset=0, limit=1000)
-                        for chunk in reversed(chunks):  # Check from most recent
-                            if chunk.get("type") == "text_generation" and chunk.get("content"):
-                                if not assistant_content:
-                                    assistant_content = ""
-                                assistant_content += chunk["content"]
-                        
-                        # Clean up if we built from chunks
-                        if assistant_content:
+                # If we didn't capture any assistant content via chunks, fallback to single assistant message
+                if not any(m.get('role') == 'assistant' for m in all_messages):
+                    assistant_content = ""
+                    # First check result object
+                    if result:
+                        if hasattr(result, 'result'):
+                            assistant_content = str(result.result)
+                        elif hasattr(result, 'output'):
+                            assistant_content = str(result.output)
+                        elif hasattr(result, 'content'):
+                            assistant_content = str(result.content)
+                        else:
+                            assistant_content = str(result)
+                    # If no result, check accumulated content
+                    if not assistant_content and session.get("accumulated"):
+                        accumulated = session["accumulated"]
+                        if "coordinator" in accumulated:
+                            assistant_content = accumulated["coordinator"]
+                        else:
+                            for agent_name, content in accumulated.items():
+                                if content and isinstance(content, str) and len(content.strip()) > 0:
+                                    assistant_content = content
+                                    break
+                    # If still empty, aggregate text_generation chunks
+                    if not assistant_content and chunks:
+                        try:
+                            for ch in chunks:
+                                if ch.get("type") == "text_generation" and ch.get("content"):
+                                    assistant_content += ch.get("content")
                             assistant_content = assistant_content.strip()
-                    except Exception as e:
-                        logger.warning(f"Could not extract content from chunks: {e}")
-                
-                logger.info(f"💬 Assistant content length: {len(assistant_content) if assistant_content else 0}")
-                
-                if assistant_content:
-                    all_messages.append({
-                        "role": "assistant",
-                        "content": assistant_content
-                    })
+                        except Exception:
+                            pass
+                    if assistant_content:
+                        all_messages.append({
+                            "role": "assistant",
+                            "content": assistant_content
+                        })
                 
                 # Save messages to database
                 try:
@@ -1312,7 +1365,8 @@ async def start_streaming(
                     "virtual_filesystem": session.get("virtual_filesystem", {}),
                     "task_history": session.get("task_history", [])
                 }
-                strands_service.save_context(session_id, context_to_save)
+                # Avoid UnboundLocalError by fetching service at use-site
+                get_strands_session_service().save_context(session_id, context_to_save)
                 logger.info(f"✅ Saved {len(all_messages)} messages to Strands session")
 
                 # Send completion event
@@ -1726,6 +1780,745 @@ async def health_check():
         "storage_healthy": storage_healthy,
         "timestamp": datetime.utcnow().isoformat()
     })
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session(session_id: str):
+    """Export a session snapshot as a ZIP containing:
+    - report.html (print-friendly)
+    - data.json (raw snapshot)
+    - artifacts/ (virtual filesystem files)
+    - chunks.json (SSE timeline)
+    """
+    try:
+        strands = get_strands_session_service()
+        shared = SharedStateService()
+        try:
+            ctx = strands.get_context(session_id) or {}
+        except Exception:
+            ctx = {}
+        try:
+            vfs = strands.get_virtual_filesystem(session_id) or {}
+            if not isinstance(vfs, dict):
+                vfs = {}
+        except Exception:
+            vfs = {}
+        try:
+            shared_ctx = shared.get_all(session_id) or {}
+        except Exception:
+            shared_ctx = {}
+        try:
+            session = await storage.get(session_id) or {}
+        except Exception:
+            session = {}
+        try:
+            chunks = await storage.get_chunks(session_id, offset=0, limit=5000)
+            if not isinstance(chunks, list):
+                chunks = []
+        except Exception:
+            chunks = []
+
+        messages = ctx.get("messages", []) if isinstance(ctx, dict) else []
+        agent_outputs = (shared_ctx.get("shared_context", {}) or {}).get("agent_outputs", {})
+        task_history = (shared_ctx.get("shared_context", {}) or {}).get("task_history", [])
+
+        # Build enhanced HTML report with modern design and better formatting
+        def esc(s: str) -> str:
+            """Escape HTML special characters for safe rendering"""
+            try:
+                text = str(s or "")
+                return (text.replace("&", "&amp;")
+                           .replace("<", "&lt;")
+                           .replace(">", "&gt;")
+                           .replace('"', "&quot;")
+                           .replace("'", "&#39;"))
+            except Exception:
+                return str(s)
+        
+        def format_markdown(text: str) -> str:
+            """Convert basic markdown to HTML for better formatting"""
+            if not text:
+                return ""
+            
+            # Handle code blocks
+            parts = []
+            code_blocks = text.split("```")
+            for i, part in enumerate(code_blocks):
+                if i % 2 == 1:  # Inside code block
+                    lines = part.split("\n", 1)
+                    if len(lines) > 1 and lines[0].strip():
+                        lang = esc(lines[0].strip())
+                        code = esc(lines[1])
+                        parts.append(f'<pre class="code-block" data-lang="{lang}"><code>{code}</code></pre>')
+                    else:
+                        parts.append(f'<pre class="code-block"><code>{esc(part)}</code></pre>')
+                else:  # Outside code block
+                    formatted = esc(part)
+                    # Convert **bold** text
+                    import re
+                    formatted = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', formatted)
+                    # Convert line breaks
+                    formatted = formatted.replace("\n", "<br>")
+                    parts.append(formatted)
+            
+            return "".join(parts)
+
+        html_parts = []
+        # Modern HTML template with enhanced styling and better UX
+        html_parts.append(f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Session Report - {esc(session_id[:8])}</title>
+    <style>
+        :root {{
+            --primary: #6366f1;
+            --primary-light: #818cf8;
+            --primary-dark: #4f46e5;
+            --secondary: #06b6d4;
+            --secondary-light: #22d3ee;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --dark: #1e293b;
+            --dark-lighter: #334155;
+            --dark-card: #0f172a;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --code-bg: #0f172a;
+        }}
+        
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            min-height: 100vh;
+        }}
+        
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }}
+        
+        header {{
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            padding: 2rem 0;
+            margin-bottom: 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }}
+        
+        .header-content {{
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }}
+        
+        .logo {{
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 24px;
+            color: white;
+            box-shadow: 0 4px 24px rgba(99, 102, 241, 0.3);
+        }}
+        
+        .header-text h1 {{
+            font-size: 1.875rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-light) 0%, var(--secondary-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        
+        .header-text p {{
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }}
+        
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }}
+        
+        .stat-card {{
+            background: var(--dark-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }}
+        
+        .stat-card:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border-color: var(--primary);
+        }}
+        
+        .stat-label {{
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }}
+        
+        .stat-value {{
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-light);
+        }}
+        
+        .stat-value.small {{
+            font-size: 1rem;
+            word-break: break-all;
+        }}
+        
+        .card {{
+            background: var(--dark-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        }}
+        
+        .card h2 {{
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: var(--text);
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 0.5rem;
+        }}
+        
+        .agent-chips {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }}
+        
+        .chip {{
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 24px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: transform 0.2s;
+        }}
+        
+        .chip:hover {{
+            transform: scale(1.05);
+        }}
+        
+        .message-bubble {{
+            background: var(--dark-lighter);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1rem;
+            position: relative;
+        }}
+        
+        .message-bubble.user {{
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(79, 70, 229, 0.2) 100%);
+            border-left: 3px solid var(--primary);
+            margin-left: 2rem;
+        }}
+        
+        .message-bubble.assistant {{
+            background: var(--dark-card);
+            margin-right: 2rem;
+            border-left: 3px solid var(--secondary);
+        }}
+        
+        .message-bubble.system {{
+            background: rgba(245, 158, 11, 0.1);
+            border-left: 3px solid var(--warning);
+            font-size: 0.875rem;
+        }}
+        
+        .message-role {{
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }}
+        
+        .message-content {{
+            color: var(--text);
+            word-wrap: break-word;
+        }}
+        
+        .code-block {{
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            overflow-x: auto;
+            position: relative;
+        }}
+        
+        .code-block[data-lang]:not([data-lang=""])::before {{
+            content: attr(data-lang);
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: var(--primary);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0 8px 0 8px;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }}
+        
+        .code-block code {{
+            color: #e2e8f0;
+            font-family: 'Cascadia Code', 'Fira Code', 'Monaco', 'Courier New', monospace;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }}
+        
+        table {{
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 1rem 0;
+        }}
+        
+        th {{
+            background: var(--primary);
+            color: white;
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        
+        td {{
+            padding: 1rem;
+            border-top: 1px solid var(--border);
+            color: var(--text);
+            vertical-align: top;
+        }}
+        
+        tr:hover td {{
+            background: rgba(99, 102, 241, 0.1);
+        }}
+        
+        .timeline-item {{
+            display: flex;
+            gap: 1rem;
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }}
+        
+        .timeline-item:last-child {{
+            border-bottom: none;
+        }}
+        
+        .timeline-badge {{
+            background: var(--primary);
+            color: white;
+            padding: 0.5rem;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            height: fit-content;
+            min-width: 80px;
+            text-align: center;
+        }}
+        
+        .agent-output {{
+            background: var(--dark-lighter);
+            border-left: 3px solid var(--secondary);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border-radius: 8px;
+        }}
+        
+        .agent-name {{
+            background: linear-gradient(135deg, var(--secondary) 0%, var(--secondary-light) 100%);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 16px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 1rem;
+        }}
+        
+        .empty-state {{
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+            font-style: italic;
+        }}
+        
+        .task-item {{
+            background: var(--dark-lighter);
+            border-left: 3px solid var(--success);
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        
+        .task-text {{
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            color: var(--text);
+        }}
+        
+        .task-time {{
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }}
+        
+        .footer {{
+            text-align: center;
+            padding: 2rem;
+            margin-top: 3rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }}
+        
+        @media print {{
+            body {{
+                background: white;
+                color: black;
+            }}
+            
+            header {{
+                position: static;
+                background: white;
+                border-bottom: 2px solid black;
+            }}
+            
+            .card {{
+                page-break-inside: avoid;
+                border: 1px solid black;
+                box-shadow: none;
+            }}
+            
+            .message-bubble {{
+                page-break-inside: avoid;
+            }}
+        }}
+        
+        /* Smooth scrolling */
+        html {{
+            scroll-behavior: smooth;
+        }}
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {{
+            width: 12px;
+            height: 12px;
+        }}
+        
+        ::-webkit-scrollbar-track {{
+            background: var(--dark);
+        }}
+        
+        ::-webkit-scrollbar-thumb {{
+            background: var(--primary);
+            border-radius: 6px;
+        }}
+        
+        ::-webkit-scrollbar-thumb:hover {{
+            background: var(--primary-light);
+        }}
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <div class="logo">S</div>
+            <div class="header-text">
+                <h1>Swarm Session Report</h1>
+                <p>Comprehensive analysis and export of your collaborative AI session</p>
+            </div>
+        </div>
+    </header>
+    
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Session ID</div>
+                <div class="stat-value small">
+""")
+
+        html_parts.append(esc(session_id))
+        html_parts.append("""
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Messages</div>
+                <div class="stat-value">""")
+        html_parts.append(str(len(messages)))
+        html_parts.append("""
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Artifacts</div>
+                <div class="stat-value">""")
+        html_parts.append(str(len(vfs)))
+        html_parts.append("""
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Tasks</div>
+                <div class="stat-value">""")
+        html_parts.append(str(len(task_history)))
+        html_parts.append("""
+                </div>
+            </div>
+        </div>
+""")
+
+        # Skip redundant summary block since we have the stats grid
+
+        # Agents section with enhanced styling
+        agent_names = []
+        try:
+            if isinstance(agent_outputs, dict):
+                agent_names = list(agent_outputs.keys())
+        except Exception:
+            agent_names = []
+        
+        html_parts.append("<div class='card'><h2>Active Agents</h2>")
+        if agent_names:
+            html_parts.append("<div class='agent-chips'>")
+            for n in agent_names:
+                html_parts.append(f"<span class='chip'>{esc(n)}</span>")
+            html_parts.append("</div>")
+        else:
+            html_parts.append("<div class='empty-state'>No agents were activated in this session</div>")
+        html_parts.append("</div>")
+
+        # Task history with improved layout
+        html_parts.append("<div class='card'><h2>Task History</h2>")
+        if task_history:
+            for t in task_history:
+                task_text = esc(t.get("task", "Unknown task"))
+                task_time = esc(t.get("timestamp", "No timestamp"))
+                html_parts.append(f"""
+                <div class="task-item">
+                    <div class="task-text">{task_text}</div>
+                    <div class="task-time">{task_time}</div>
+                </div>
+                """)
+        else:
+            html_parts.append("<div class='empty-state'>No tasks have been recorded</div>")
+        html_parts.append("</div>")
+
+        # Conversation with enhanced message rendering
+        html_parts.append("<div class='card'><h2>Conversation</h2>")
+        if messages:
+            for m in messages:
+                role_raw = (m.get("role", "") or "").lower()
+                role = esc(role_raw.title())
+                content_raw = m.get("content") or ""
+                
+                # Use the format_markdown function for better rendering
+                body = format_markdown(content_raw)
+                
+                css = 'system' if role_raw == 'system' else ('user' if role_raw == 'user' else 'assistant')
+                html_parts.append(f"""
+                <div class='message-bubble {css}'>
+                    <div class='message-role'>{role}</div>
+                    <div class='message-content'>{body}</div>
+                </div>
+                """)
+        else:
+            html_parts.append("<div class='empty-state'>No messages have been captured</div>")
+        html_parts.append("</div>")
+
+        # Agent outputs with improved formatting
+        html_parts.append("<div class='card'><h2>Agent Outputs</h2>")
+        if agent_outputs:
+            for name, out in agent_outputs.items():
+                html_parts.append(f"""
+                <div class='agent-output'>
+                    <div class='agent-name'>{esc(name)}</div>
+                    <div class='message-content'>{format_markdown(str(out))}</div>
+                </div>
+                """)
+        else:
+            html_parts.append("<div class='empty-state'>No agent outputs have been recorded</div>")
+        html_parts.append("</div>")
+
+        # Timeline with enhanced table styling
+        html_parts.append("<div class='card'><h2>Event Timeline</h2>")
+        if chunks:
+            html_parts.append("""
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Agent</th>
+                        <th>Preview</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """)
+            for ch in chunks:
+                typ = esc(ch.get("type", "unknown"))
+                ag = esc(ch.get("agent", "system"))
+                preview = ch.get("content") or ch.get("data") or ""
+                if isinstance(preview, dict):
+                    pv = esc(json.dumps(preview, ensure_ascii=False)[:300])
+                else:
+                    pv = esc(str(preview)[:300])
+                if len(str(preview)) > 300:
+                    pv += "..."
+                html_parts.append(f"""
+                <tr>
+                    <td style="font-family: monospace;">{typ}</td>
+                    <td style="font-family: monospace;">{ag}</td>
+                    <td>{pv}</td>
+                </tr>
+                """)
+            html_parts.append("</tbody></table>")
+        else:
+            html_parts.append("<div class='empty-state'>No timeline events recorded</div>")
+        html_parts.append("</div>")
+
+        # Artifacts with improved presentation
+        html_parts.append("<div class='card'><h2>Artifacts (Virtual Filesystem)</h2>")
+        if isinstance(vfs, dict) and vfs:
+            html_parts.append("""
+            <table>
+                <thead>
+                    <tr>
+                        <th>File Path</th>
+                        <th>Content Preview</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """)
+            for path, content in vfs.items():
+                preview = str(content)
+                # Limit preview length and lines
+                lines = preview.splitlines()
+                if len(lines) > 20:
+                    preview = "\n".join(lines[:20]) + f"\n... (+{len(lines)-20} more lines)"
+                if len(preview) > 4000:
+                    preview = preview[:4000] + "\n... (truncated)"
+                html_parts.append(f"""
+                <tr>
+                    <td style="font-family: monospace; font-weight: 600;">{esc(path)}</td>
+                    <td><pre class="code-block"><code>{esc(preview)}</code></pre></td>
+                </tr>
+                """)
+            html_parts.append("</tbody></table>")
+        else:
+            html_parts.append("<div class='empty-state'>No artifacts have been generated</div>")
+        html_parts.append("</div>")
+
+        # Enhanced footer
+        generation_time = datetime.utcnow().strftime("%B %d, %Y at %H:%M:%S UTC")
+        html_parts.append(f"""
+        <div class='footer'>
+            <p>Generated by Swarm Intelligence Export System</p>
+            <p>{esc(generation_time)}</p>
+        </div>
+    </div>
+</body>
+</html>
+""")
+        # Compile the final HTML
+        report_html = "".join(html_parts)
+
+        # Prepare ZIP
+        mem = io.BytesIO()
+        with zipfile.ZipFile(mem, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            # Always include report.html
+            try:
+                zf.writestr('report.html', report_html)
+            except Exception:
+                zf.writestr('report.html', '<html><body><h1>Session Report</h1><p>Report generation failed.</p></body></html>')
+            # data.json
+            data_payload = {
+                'session_id': session_id,
+                'messages': messages,
+                'agent_outputs': agent_outputs,
+                'task_history': task_history,
+                'virtual_filesystem': list(vfs.keys()) if isinstance(vfs, dict) else [],
+                'chunks': chunks if isinstance(chunks, list) else []
+            }
+            try:
+                zf.writestr('data.json', json.dumps(data_payload, ensure_ascii=False, indent=2))
+            except Exception:
+                zf.writestr('data.json', '{}')
+            # chunks.json
+            try:
+                zf.writestr('chunks.json', json.dumps(chunks if isinstance(chunks, list) else [], ensure_ascii=False, indent=2))
+            except Exception:
+                zf.writestr('chunks.json', '[]')
+            # Add artifacts
+            if isinstance(vfs, dict):
+                for path, content in vfs.items():
+                    try:
+                        # Normalize to string; encode to utf-8 bytes
+                        data_bytes = content if isinstance(content, (bytes, bytearray)) else str(content).encode('utf-8', errors='ignore')
+                        zf.writestr(f'artifacts/{path}', data_bytes)
+                    except Exception:
+                        safe = str(path).replace('..','_').replace('/', '_')
+                        try:
+                            zf.writestr(f'artifacts/{safe}', str(content))
+                        except Exception:
+                            zf.writestr(f'artifacts/{safe}', '<unserializable>')
+        mem.seek(0)
+        headers = {"Content-Disposition": f"attachment; filename=session_{session_id}.zip"}
+        # Return as a normal Response to avoid any streaming iterator edge cases
+        return Response(content=mem.getvalue(), media_type='application/zip', headers=headers)
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Convenience alias (path variant) to reduce 404s from mismatched prefixes
+@router.get("/export/{session_id}")
+async def export_session_alias(session_id: str):
+    return await export_session(session_id)
 
 
 @router.get("/sessions/{session_id}/shared-state")
@@ -2519,12 +3312,16 @@ async def execute_swarm_with_context(
                 logger.info(f"📋 Request details: task={request.task}, agents={len(request.agents)}")
                 logger.info(f"📋 Conversation history: {conversation_history}")
                 
+                # Include current task at the tail of conversation history for immediate context
+                conv_plus_current = list(conversation_history)
+                if task:
+                    conv_plus_current.append({"role": "user", "content": task})
                 result = await service.execute_swarm_async(
                     request=request,
                     user_id="stream_user",
                     callback_handler=streaming_callback,
                     use_orchestrator=True,
-                    conversation_history=conversation_history,
+                    conversation_history=conv_plus_current,
                     existing_agents=context.get("existing_agents", [])
                 )
                 logger.info(f"✅ Sequential execution completed with result: {result}")
@@ -2532,55 +3329,58 @@ async def execute_swarm_with_context(
                 logger.error(f"❌ Sequential execution failed: {seq_error}", exc_info=True)
                 raise
         
-        # Save final result
-        session = await storage.get(session_id)
-        if session:
-            session["status"] = "complete"
-            # Serialize the result object properly
-            if result:
-                if hasattr(result, 'dict'):
-                    session["result"] = result.dict()
-                elif hasattr(result, 'model_dump'):
-                    session["result"] = result.model_dump()
+            # Save final result
+            session = await storage.get(session_id)
+            if session:
+                session["status"] = "complete"
+                # Serialize the result object properly
+                if result:
+                    if hasattr(result, 'dict'):
+                        session["result"] = result.dict()
+                    elif hasattr(result, 'model_dump'):
+                        session["result"] = result.model_dump()
+                    else:
+                        session["result"] = str(result)
                 else:
-                    session["result"] = str(result)
-            else:
-                session["result"] = None
-            await storage.set(session_id, session)
+                    session["result"] = None
+                await storage.set(session_id, session)
             
             # CRITICAL: Save ALL context including messages to Strands for future continuation
             logger.info(f"💾 Saving complete context for continued session {session_id}")
             
             # Build complete message history
             all_messages = []
-            
             # Include previous messages from context
             if context.get("previous_messages"):
                 all_messages.extend(context["previous_messages"])
-            
             # Add the current task as a user message
-            all_messages.append({
-                "role": "user",
-                "content": request.task
-            })
+            all_messages.append({"role": "user", "content": request.task})
             
-            # Add the result as assistant message if available
-            if result:
-                # CRITICAL FIX: Extract actual content from result
+            # Append each agent's final output in the order they completed
+            try:
+                chunks = await storage.get_chunks(session_id, offset=0, limit=2000)
+            except Exception:
+                chunks = []
+            for ch in chunks:
+                if ch.get("type") in ("agent_done", "agent_completed"):
+                    content = ch.get("content") or (ch.get("data", {}) or {}).get("output")
+                    if content and isinstance(content, str) and content.strip():
+                        all_messages.append({"role": "assistant", "content": content})
+            
+            # Fallback to single assistant message if none were found
+            if not any(m.get('role') == 'assistant' for m in all_messages):
                 result_content = ""
-                if hasattr(result, 'result'):
-                    result_content = result.result
-                elif hasattr(result, 'message'):
-                    result_content = result.message
-                elif hasattr(result, 'content'):
-                    result_content = result.content
-                else:
-                    result_content = str(result)
-                
-                all_messages.append({
-                    "role": "assistant", 
-                    "content": result_content
-                })
+                if result:
+                    if hasattr(result, 'result'):
+                        result_content = result.result
+                    elif hasattr(result, 'message'):
+                        result_content = result.message
+                    elif hasattr(result, 'content'):
+                        result_content = result.content
+                    else:
+                        result_content = str(result)
+                if result_content:
+                    all_messages.append({"role": "assistant", "content": result_content})
             
             context_to_save = {
                 "messages": all_messages,  # Save complete message history

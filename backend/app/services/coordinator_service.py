@@ -39,18 +39,45 @@ class CoordinatorService:
         # Build coordinator prompt with delegation instructions
         coordinator_prompt = self._build_coordinator_prompt(session_id, task, agent_configs)
         
+        # CRITICAL: Ensure handoff_to_agent is ALWAYS in the tools list
+        # Create a simple handoff wrapper if not provided in tools
+        if tools is None:
+            tools = []
+        
+        # Check if handoff_to_agent is already in tools
+        has_handoff = False
+        for tool in tools:
+            if callable(tool):
+                # Check various ways the tool might be named
+                tool_name = None
+                if hasattr(tool, '__name__'):
+                    tool_name = tool.__name__
+                elif hasattr(tool, 'name'):
+                    tool_name = tool.name
+                elif hasattr(tool, '__wrapped__') and hasattr(tool.__wrapped__, '__name__'):
+                    tool_name = tool.__wrapped__.__name__
+                
+                if tool_name and 'handoff' in tool_name.lower():
+                    has_handoff = True
+                    logger.info(f"✅ Found handoff tool: {tool_name}")
+                    break
+        
+        if not has_handoff:
+            logger.error("❌ CRITICAL: handoff_to_agent not found in tools! Coordinator CANNOT delegate!")
+            logger.info(f"📦 Available tools: {[getattr(t, '__name__', getattr(t, 'name', 'unknown')) for t in tools if callable(t)]}")
+        
         # Get or create coordinator with consistent naming for persistence
         coordinator = self.strands_service.get_or_create_agent(
             session_id=session_id,
             agent_name="coordinator",  # MUST be exactly "coordinator" for persistence logic
             system_prompt=coordinator_prompt,
-            tools=tools or [],
+            tools=tools,  # Now tools is never None
             model_config={
-                "model_id": "gpt-4o-mini",
-                "temperature": 0.7,
+                "model_id": "gpt-4o",  # Use GPT-4 for better instruction following
+                "temperature": 0.0,  # Zero temperature for most deterministic behavior
                 "max_tokens": 16000
             },
-            force_new=False  # Now this will actually work with unique agent_id
+            force_new=False  # Reuse existing coordinator for continuation messages
         )
         
         # The coordinator now has access to the FULL conversation history
@@ -69,6 +96,15 @@ class CoordinatorService:
         
         prompt = f"""You are the Coordinator Agent for session {session_id}.
 
+CRITICAL: You have a tool called 'handoff_to_agent' that you MUST USE for every user message.
+DO NOT write the function call as text - USE the actual tool from your tools list.
+
+YOUR ONLY ALLOWED ACTION:
+- USE the handoff_to_agent tool (it appears in your available tools)
+- Never output text
+- Never write the function call as a string
+- Actually CALL the tool function
+
 You maintain the COMPLETE conversation history and context for this session.
 You can see ALL previous messages and maintain continuity across all interactions.
 
@@ -79,26 +115,76 @@ Current Task: {task}
         if agent_configs:
             prompt += "You have the following specialized capabilities that you coordinate:\n\n"
             for i, config in enumerate(agent_configs, 1):
-                name = config.get('name', f'Capability {i}')
-                description = config.get('description', config.get('system_prompt', ''))[:200]
+                # Handle both dict and string configs
+                if isinstance(config, dict):
+                    name = config.get('name', f'Capability {i}')
+                    description = config.get('description', config.get('system_prompt', ''))[:200]
+                else:
+                    # If it's a string or something else, use it as the name
+                    name = str(config) if config else f'Capability {i}'
+                    description = ""
                 prompt += f"{i}. **{name}**: {description}\n"
             
-            prompt += "\nYou synthesize these capabilities to provide comprehensive responses.\n"
+            prompt += "\nYou DELEGATE to these capabilities. You NEVER synthesize or respond yourself.\n"
         
         prompt += """
-IMPORTANT INSTRUCTIONS:
-1. You ALWAYS have access to the full conversation history
-2. Reference previous messages when relevant
-3. Maintain context across all interactions
-4. Provide direct, synthesized answers
-5. Use your tools when needed to complete tasks
-6. When a specialist is needed, DELEGATE by calling the tool `handoff_to_agent` with:
-   - to_agent: the exact agent name from your configured capabilities
-   - reason: why you are delegating
-   - context: JSON context (inputs, partial results, file paths)
-   Do not write a plan when code or file operations are required — delegate instead.
+CRITICAL COORDINATOR RULES - YOU MUST FOLLOW THESE:
 
-Remember: You are the ONLY agent in this session. You see everything and remember everything.
+1. YOU ARE ONLY A COORDINATOR - YOU DO NOT DO ANY ACTUAL WORK
+2. FOR EVERY USER REQUEST, YOU MUST USE handoff_to_agent TO DELEGATE
+3. NEVER PROVIDE DIRECT ANSWERS - ALWAYS DELEGATE TO A SPECIALIST
+4. CONTINUE DELEGATING THROUGHOUT THE ENTIRE CONVERSATION
+5. THE handoff_to_agent TOOL IS YOUR ONLY WAY TO RESPOND
+6. DO NOT SUMMARIZE, ACKNOWLEDGE, OR RESPOND TO THE USER - ONLY DELEGATE
+
+YOUR ONLY JOB IS TO:
+1. Understand what the user needs
+2. IMMEDIATELY call handoff_to_agent to delegate to a specialist
+3. NEVER write ANY text response yourself
+4. When a specialist completes work, DO NOT comment on it
+5. For follow-up requests, IMMEDIATELY delegate again WITHOUT commentary
+
+CRITICAL: If you receive ANY user message and don't call handoff_to_agent, you have FAILED.
+EVERY user message MUST result in a handoff_to_agent call. NO EXCEPTIONS.
+
+HOW TO USE THE handoff_to_agent TOOL:
+- It's a function in your tools list - CALL it, don't write it as text
+- Pass parameters: to_agent (string), reason (string), context (object)
+- The tool will handle the delegation automatically
+
+DELEGATION PATTERNS:
+- User says "hello" or "hi" → Call tool with to_agent="greeting_specialist"
+- User introduces themselves → Call tool with to_agent="introduction_handler"  
+- User provides information → Call tool with to_agent="conversation_specialist"
+- User says "proceed" → Call tool with to_agent="implementation_specialist"
+- User says "continue" → Call tool with to_agent="continuation_specialist"
+- User says "thanks" → Call tool with to_agent="gratitude_specialist"
+- ANY OTHER INPUT → Call tool with appropriate to_agent parameter
+
+CRITICAL - DO NOT DO THIS (WRONG):
+❌ "I have gathered some current trends..." - NO! You cannot summarize!
+❌ "The design and architecture planning is underway..." - NO! You cannot provide status updates!
+❌ "Please let me know if you have specific requirements..." - NO! You cannot ask questions!
+❌ "If you have any additional input..." - NO! You cannot request feedback!
+
+CRITICAL - ALWAYS DO THIS (CORRECT):
+✅ User says anything → IMMEDIATELY USE the handoff_to_agent TOOL
+✅ NEVER write text - only use the tool function
+✅ Let the specialist handle ALL communication with the user
+
+ENFORCEMENT RULES:
+- If you output ANY TEXT, you have FAILED
+- You MUST use the tool even for "hello", "thanks", "goodbye", or "what is 2+2"
+- Your response should ONLY be a TOOL CALL - NO TEXT
+- Do not explain what you're doing - just USE THE TOOL
+
+Remember: You are ONLY a coordinator. Your ONLY action is to USE the handoff_to_agent TOOL.
+
+FINAL REMINDER:
+- Use the handoff_to_agent tool from your tools list
+- Do not output any text
+- Do not write function calls as strings
+- Actually invoke the tool function
 """
         
         return prompt
@@ -138,13 +224,48 @@ Remember: You are the ONLY agent in this session. You see everything and remembe
         # - The framework handles all persistence through FileSessionManager
         
         # Since coordinator uses session_id as agent_id and force_new=False,
-        # Strands automatically loads all previous messages from the session
-        
+        # Strands automatically loads all previous messages from the session. However,
+        # in some flows we maintain history in external context. If explicit
+        # conversation_history is provided, reconcile it into the shared
+        # conversation manager before execution so ALL agents see it.
         if hasattr(coordinator, 'conversation_manager') and coordinator.conversation_manager:
             conversation_manager = coordinator.conversation_manager
             existing_message_count = len(conversation_manager.messages) if hasattr(conversation_manager, 'messages') else 0
             
             logger.info(f"📚 Strands loaded {existing_message_count} messages from session persistence")
+            
+            # Reconcile provided history into the shared manager if needed
+            try:
+                if conversation_history and isinstance(conversation_history, list):
+                    # Normalize to role/content dicts only
+                    def norm(msg: Dict[str, Any]) -> Dict[str, str]:
+                        return {
+                            'role': str(msg.get('role', 'user')),
+                            'content': str(msg.get('content', ''))
+                        }
+                    normalized = [norm(m) for m in conversation_history if isinstance(m, dict)]
+                    # If coordinator has fewer messages or differs, replace with normalized history
+                    needs_sync = (existing_message_count < len(normalized))
+                    if not needs_sync and existing_message_count == len(normalized):
+                        try:
+                            for a, b in zip(conversation_manager.messages, normalized):
+                                if a.get('role') != b.get('role') or (a.get('content') or '') != (b.get('content') or ''):
+                                    needs_sync = True
+                                    break
+                        except Exception:
+                            needs_sync = True
+                    if needs_sync:
+                        logger.info(f"🔁 Syncing {len(normalized)} messages into shared conversation manager for session {session_id}")
+                        conversation_manager.messages = normalized
+                        # Best-effort: some managers expose a save/sync
+                        try:
+                            if hasattr(conversation_manager, 'save') and callable(conversation_manager.save):
+                                conversation_manager.save()
+                        except Exception:
+                            pass
+                        existing_message_count = len(conversation_manager.messages)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to reconcile conversation history into Strands manager: {e}")
             
             # Log the messages for debugging
             if existing_message_count > 0:
@@ -219,20 +340,31 @@ Remember: You are the ONLY agent in this session. You see everything and remembe
                     
                     logger.debug(f"📤 Chunk {chunk_count}: {text_chunk[:50] if text_chunk else 'empty'}...")
                     
-                    # Stream individual chunks to UI for real-time display
+                    # CRITICAL: Don't stream coordinator's function calls to UI
+                    # The coordinator should only be calling handoff_to_agent
+                    # These calls are internal and shouldn't be shown to users
+                    if "handoff_to_agent" in text_chunk:
+                        logger.info(f"🔄 Coordinator calling handoff function, not streaming to UI")
+                        # Don't send function calls to UI
+                        continue
+                    
+                    # Only stream if it's not a function call
+                    # (This shouldn't happen if coordinator is properly configured)
                     if callback_handler:
-                        await callback_handler(
-                            type="text_generation",
-                            agent="coordinator",
-                            data={
-                                "chunk": text_chunk,  # Primary chunk key
-                                "text": text_chunk,
-                                "content": text_chunk,
-                                "accumulated": accumulated_text,
-                                "sequence": sequence_counter  # Use proper sequence counter
-                            }
-                        )
-                        sequence_counter += 1  # Increment after each chunk
+                        logger.warning(f"⚠️ Coordinator generated text instead of just calling handoff: {text_chunk[:50]}...")
+                        # Optionally still send it but mark as an error
+                        # await callback_handler(
+                        #     type="text_generation",
+                        #     agent="coordinator",
+                        #     data={
+                        #         "chunk": text_chunk,  # Primary chunk key
+                        #         "text": text_chunk,
+                        #         "content": text_chunk,
+                        #         "accumulated": accumulated_text,
+                        #         "sequence": sequence_counter  # Use proper sequence counter
+                        #     }
+                        # )
+                        # sequence_counter += 1  # Increment after each chunk
                 
                 # Handle tool usage
                 elif "current_tool_use" in event:
@@ -285,26 +417,30 @@ Remember: You are the ONLY agent in this session. You see everything and remembe
                                     }
                                 )
             
-            # Send agent completed event with content
+            # Send agent completed event - but DON'T send handoff text to UI
             if callback_handler:
-                logger.info(f"📤 Sending agent_completed with {len(result_content)} chars")
-                # CRITICAL: Send with output in data field for streaming callback to capture
-                await callback_handler(
-                    type="agent_completed",
-                    agent="coordinator",
-                    data={
-                        "output": result_content,  # This will be captured by streaming callback
-                        "tokens": len(result_content.split()) if result_content else 0
-                    }
-                )
-                
-                # Also send an agent_done event directly if we have content
-                if result_content:
-                    logger.info(f"📤 Also sending agent_done event directly with content")
+                # Check if this is just a handoff call (which shouldn't be shown to users)
+                if "handoff_to_agent" in result_content:
+                    logger.info(f"✅ Coordinator completed with handoff call - not sending to UI")
+                    # Still send completion event but with empty content
                     await callback_handler(
-                        type="agent_done",
+                        type="agent_completed",
                         agent="coordinator",
-                        content=result_content  # Send content directly at top level
+                        data={
+                            "output": "",  # Empty output for coordinator handoffs
+                            "tokens": 0
+                        }
+                    )
+                else:
+                    # This shouldn't happen - coordinator should only output handoff calls
+                    logger.warning(f"⚠️ Coordinator generated non-handoff text: {result_content[:100]}")
+                    await callback_handler(
+                        type="agent_completed",
+                        agent="coordinator",
+                        data={
+                            "output": result_content,
+                            "tokens": len(result_content.split()) if result_content else 0
+                        }
                     )
             
             # Return the actual message content
