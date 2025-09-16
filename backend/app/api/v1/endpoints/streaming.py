@@ -608,6 +608,20 @@ async def start_streaming(
                         parent = parent_map.get(agent)
                         if parent:
                             event['parent'] = parent
+                        # Also update execution graph with start and parent info
+                        graph = getattr(svc, 'execution_graphs', {}).get(session_id)
+                        if graph is not None:
+                            node = graph['nodes'].get(agent, {"name": agent, "role": getattr(agent, 'role', ''), "parent": parent, "status": "running", "started_at": event['timestamp'], "finished_at": None})
+                            node['status'] = 'running'
+                            node['started_at'] = node.get('started_at') or event['timestamp']
+                            if parent and not node.get('parent'):
+                                node['parent'] = parent
+                            graph['nodes'][agent] = node
+                            # Edge parent->child if not present
+                            if parent:
+                                exists = any(e for e in graph['edges'] if e.get('from')==parent and e.get('to')==agent)
+                                if not exists:
+                                    graph['edges'].append({"from": parent, "to": agent})
                 except Exception:
                     pass
 
@@ -731,6 +745,22 @@ async def start_streaming(
                         parent = parent_map.get(agent)
                         if parent:
                             event['parent'] = parent
+                        # Also update execution graph with output and finish time
+                        graph = getattr(svc, 'execution_graphs', {}).get(session_id)
+                        if graph is not None:
+                            node = graph['nodes'].get(agent, {"name": agent, "role": getattr(agent, 'role', ''), "parent": parent, "status": "completed", "started_at": None, "finished_at": event['timestamp']})
+                            node['status'] = 'completed'
+                            node['finished_at'] = event['timestamp']
+                            # Store an output preview; keep it reasonably sized
+                            try:
+                                if accumulated_text:
+                                    preview = accumulated_text if len(accumulated_text) <= 4000 else accumulated_text[:4000] + "…"
+                                    node['output'] = preview
+                            except Exception:
+                                pass
+                            if parent and not node.get('parent'):
+                                node['parent'] = parent
+                            graph['nodes'][agent] = node
                 except Exception:
                     pass
                 
@@ -889,6 +919,35 @@ async def start_streaming(
                 await storage.append_chunk(session_id, event)
                 return  # Return early to ensure immediate visibility
 
+            elif event_type == "execution_stopped":
+                # Mark session as stopped and append a stop chunk for clients to exit polling
+                session = await storage.get(session_id)
+                if session:
+                    session["status"] = "stopped"
+                    await storage.set(session_id, session)
+
+                    # Best-effort: flush any accumulated partial outputs so UI can show something
+                    try:
+                        accumulated = session.get("accumulated", {}) or {}
+                        if isinstance(accumulated, dict):
+                            for agent_name, text in accumulated.items():
+                                if not text:
+                                    continue
+                                await storage.append_chunk(session_id, {
+                                    "type": "agent_done",
+                                    "agent": agent_name,
+                                    "content": text,
+                                    "tokens": 0,
+                                    "timestamp": datetime.utcnow().isoformat()
+                                })
+                    except Exception as flush_err:
+                        logger.debug(f"Partial flush on stop failed: {flush_err}")
+
+                event = {
+                    "type": "execution_stopped",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
             elif event_type == "tool_result":
                 # Handle tool result events with structured data
                 # Ensure data has the expected structure
@@ -1402,6 +1461,20 @@ async def start_streaming(
         "poll_url": f"/api/v1/streaming/poll/{session_id}"
     })
 
+@router.get("/streaming/execution/{session_id}/graph")
+async def get_execution_graph(session_id: str):
+    """Return a JSON execution graph for the given session_id."""
+    try:
+        svc = _services_by_session.get(session_id) or globals().get('_global_swarm_service')
+        if not svc:
+            return JSONResponse({"error": "service not found"}, status_code=404)
+        graph = getattr(svc, 'execution_graphs', {}).get(session_id)
+        if not graph:
+            return JSONResponse({"error": "graph not found"}, status_code=404)
+        return JSONResponse({"session_id": session_id, "graph": graph})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @router.post("/streaming/stop/{session_id}")
 async def stop_execution(session_id: str):
@@ -1678,7 +1751,11 @@ async def poll_stream(
 
         # Determine if there are more chunks
         total_chunks = session.get("metrics", {}).get("chunk_count", 0)
-        has_more = (new_offset < total_chunks) or (session.get("status") == "running")
+        status = session.get("status")
+        has_more = (new_offset < total_chunks) or (status == "running")
+        # If stopped/complete/error and no new chunks, do not keep client polling
+        if status in ["stopped", "complete", "error"] and not chunks:
+            has_more = False
 
         # Build response
         response_data = {

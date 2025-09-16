@@ -60,6 +60,15 @@ class ControlledSwarmService:
             'selected_tools': [],
             'restrict_to_selected': False,
         }
+        # Execution graphs for JSON export and UI introspection
+        self.execution_graphs: Dict[str, Dict[str, Any]] = {}
+        # Queue spawn requests per execution
+        self._pending_spawns: Dict[str, List[Any]] = {}
+        try:
+            # Register listener to capture agent.needed
+            event_bus.on("agent.needed", self._on_agent_needed)
+        except Exception:
+            pass
         # Queue spawn requests per execution for reliable processing
         self._pending_spawns: Dict[str, List[Any]] = {}
         try:
@@ -126,6 +135,10 @@ class ControlledSwarmService:
                 "callback": callback_handler,
                 "parent_map": {}
             }
+            
+            # Pass streaming callback to pool_manager for timeout notifications
+            if callback_handler:
+                self.pool_manager.streaming_callback = callback_handler
             
             # Execute with controls
             result = await self._execute_with_controls(execution_id, request, callback_handler)
@@ -258,7 +271,9 @@ class ControlledSwarmService:
                     "priority": request.data.get("priority", "medium"),
                     "original_query": original_query,
                     "accumulated_results": accumulated_results,  # Pass full context
-                    "agent_role": agent_role
+                    "agent_role": agent_role,
+                    "tool_preferences": self.user_tool_preferences,
+                    "parent": getattr(request, 'source', None) or request.data.get('requesting_agent')
                 },
                 callback_handler=callback_handler,
                 session_id=session_id
@@ -266,6 +281,27 @@ class ControlledSwarmService:
             
             if new_agent_id:
                 logger.info(f"✅ Atomically spawned {agent_role} agent: {new_agent_id}")
+                # Record parent-child mapping and graph edge now that we know ids
+                try:
+                    parent = getattr(request, 'source', None) or request.data.get('requesting_agent')
+                    if parent:
+                        exec_data = self.active_executions.get(execution_id, {})
+                        parent_map = exec_data.get('parent_map', {})
+                        child_name = f"{agent_role}_{new_agent_id[:8]}"
+                        parent_map[child_name] = parent
+                        exec_data['parent_map'] = parent_map
+                        self.active_executions[execution_id] = exec_data
+                        # Also update execution graph with edge and parent
+                        graph = self.execution_graphs.get(execution_id)
+                        if graph is not None:
+                            node = graph['nodes'].get(child_name, {"name": child_name, "role": agent_role, "parent": parent, "status": "starting", "started_at": None, "finished_at": None})
+                            node['parent'] = parent
+                            graph['nodes'][child_name] = node
+                            graph['edges'].append({"from": parent, "to": child_name})
+                            self.execution_graphs[execution_id] = graph
+                        logger.info(f"🧬 Linked subagent {child_name} to parent {parent}")
+                except Exception as map_err:
+                    logger.debug(f"Parent mapping/graph update failed: {map_err}")
                 return new_agent_id
             else:
                 logger.warning(f"⚠️ Failed to spawn {agent_role} agent")
@@ -310,6 +346,25 @@ class ControlledSwarmService:
             
             # Store in registry
             self.agent_registry[agent_id] = agent
+
+            # Record node in execution graph
+            try:
+                child_name = f"{role}_{agent_id[:8]}"
+                if execution_id not in self.execution_graphs:
+                    self.execution_graphs[execution_id] = {"nodes": {}, "edges": [], "requested": [], "spawned": []}
+                graph = self.execution_graphs[execution_id]
+                graph["nodes"][child_name] = graph["nodes"].get(child_name, { 
+                    "name": child_name,
+                    "role": role,
+                    "parent": None,
+                    "status": "starting",
+                    "started_at": None,
+                    "finished_at": None
+                })
+                if child_name not in graph["spawned"]:
+                    graph["spawned"].append(child_name)
+            except Exception:
+                pass
             
             # Mark as running
             await self.pool_manager.mark_agent_running(agent_id)
@@ -340,6 +395,25 @@ class ControlledSwarmService:
         
         # Generate AI-driven system prompt
         system_prompt = await self._generate_dynamic_system_prompt(role)
+        
+        # Augment prompt with execution rules and tool guidance (bias toward concrete outputs)
+        try:
+            selected_tools = list(self.user_tool_preferences.get('selected_tools') or [])
+            restrict_flag = bool(self.user_tool_preferences.get('restrict_to_selected', False))
+            if selected_tools:
+                tool_text = ", ".join(sorted(set(selected_tools)))
+            else:
+                tool_text = "(auto)"
+            system_prompt += (
+                "\n\nExecution Rules:\n"
+                f"- You are a specialized '{role}' agent. Do not re-plan; execute your part.\n"
+                "- Prefer concrete outputs over analysis. Use tools when helpful.\n"
+                f"- Available tools preference: {tool_text}. Restrict mode: {'on' if restrict_flag else 'off'}.\n"
+                "- If coding, generate files and artifacts; if researching, include citations and links.\n"
+                "- Keep responses concise and action-oriented. Mark completion clearly.\n"
+            )
+        except Exception:
+            pass
         
         # Use HumanLoopAgent if human interaction is enabled
         if self.enable_human_loop:
@@ -522,6 +596,41 @@ Be specific and relevant to the role. Don't be generic.""",
 
         return list(merged)
 
+    # Queue handler to capture spawn requests reliably and record into graph
+    async def _on_agent_needed(self, event):
+        try:
+            exec_id = None
+            if isinstance(event.data, dict):
+                exec_id = event.data.get('execution_id')
+            if not exec_id:
+                exec_id = self.pool_manager.execution_id
+            if not exec_id:
+                return
+            if exec_id not in self._pending_spawns:
+                self._pending_spawns[exec_id] = []
+            # Deduplicate by role
+            role = event.data.get('role') if isinstance(event.data, dict) else None
+            if role and any(getattr(e, 'data', {}).get('role') == role for e in self._pending_spawns[exec_id]):
+                return
+            self._pending_spawns[exec_id].append(event)
+
+            # Record requested in execution graph
+            try:
+                if exec_id not in self.execution_graphs:
+                    self.execution_graphs[exec_id] = {"nodes": {}, "edges": [], "requested": [], "spawned": []}
+                req = {
+                    "role": role,
+                    "priority": event.data.get('priority') if isinstance(event.data, dict) else None,
+                    "reason": event.data.get('reason') if isinstance(event.data, dict) else None,
+                    "requested_by": event.source,
+                    "ts": event.timestamp
+                }
+                self.execution_graphs[exec_id]["requested"].append(req)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.debug(f"Queueing agent.needed failed: {e}")
+
     # Queue handler to capture spawn requests reliably
     async def _on_agent_needed(self, event):
         try:
@@ -636,7 +745,33 @@ Complete your assigned task efficiently and professionally."""
                 exec_ctx = self.active_executions.get(self.pool_manager.execution_id, {})
                 cb = exec_ctx.get("callback")
                 if cb:
-                    await cb(type="agent_started", agent=agent.name)
+                    # Attach parent for grouping
+                    parent_name = None
+                    parent_map = exec_ctx.get('parent_map', {})
+                    parent_name = parent_map.get(agent.name)
+                    await cb(type="agent_started", agent=agent.name, parent=parent_name)
+            except Exception:
+                pass
+
+            # Update execution graph with started_at and parent if known
+            try:
+                graph = self.execution_graphs.get(self.pool_manager.execution_id)
+                if graph is not None:
+                    node = graph['nodes'].get(agent.name)
+                    if node is None:
+                        graph['nodes'][agent.name] = {"name": agent.name, "role": getattr(agent, 'role', ''), "parent": parent_name, "status": "running", "started_at": datetime.utcnow().isoformat(), "finished_at": None}
+                    else:
+                        node['status'] = 'running'
+                        node['started_at'] = node.get('started_at') or datetime.utcnow().isoformat()
+                        if parent_name and not node.get('parent'):
+                            node['parent'] = parent_name
+                        graph['nodes'][agent.name] = node
+                    # Add edge if parent available and not already present
+                    if parent_name:
+                        exists = any(e for e in graph['edges'] if e.get('from')==parent_name and e.get('to')==agent.name)
+                        if not exists:
+                            graph['edges'].append({"from": parent_name, "to": agent.name})
+                    self.execution_graphs[self.pool_manager.execution_id] = graph
             except Exception:
                 pass
 
@@ -664,7 +799,7 @@ Complete your assigned task efficiently and professionally."""
                 agent.activate(mock_event),
                 timeout=60.0  # 1 minute max per agent
             )
-            
+
             # Mark as completed
             await self.pool_manager.mark_agent_completed(agent_id, success=True)
 
@@ -673,10 +808,26 @@ Complete your assigned task efficiently and professionally."""
                 exec_ctx = self.active_executions.get(self.pool_manager.execution_id, {})
                 cb = exec_ctx.get("callback")
                 if cb:
-                    await cb(type="agent_completed", agent=agent.name, data={})
+                    parent_name = exec_ctx.get('parent_map', {}).get(agent.name)
+                    await cb(type="agent_completed", agent=agent.name, parent=parent_name, data={})
             except Exception:
                 pass
-            
+
+            # Update execution graph with finished_at and status
+            try:
+                graph = self.execution_graphs.get(self.pool_manager.execution_id)
+                if graph is not None:
+                    node = graph['nodes'].get(agent.name)
+                    if node is None:
+                        graph['nodes'][agent.name] = {"name": agent.name, "role": getattr(agent, 'role', ''), "parent": None, "status": "completed", "started_at": None, "finished_at": datetime.utcnow().isoformat()}
+                    else:
+                        node['status'] = 'completed'
+                        node['finished_at'] = datetime.utcnow().isoformat()
+                        graph['nodes'][agent.name] = node
+                    self.execution_graphs[self.pool_manager.execution_id] = graph
+            except Exception:
+                pass
+
         except asyncio.TimeoutError:
             logger.error(f"⏰ Agent {agent_id} timed out")
             await self.pool_manager.mark_agent_completed(agent_id, success=False)
@@ -697,6 +848,9 @@ Complete your assigned task efficiently and professionally."""
             self._spawned_roles_by_execution[execution_id] = set()
         # Initialize pending spawn queue for this execution
         self._pending_spawns[execution_id] = []
+        # Initialize execution graph container
+        if execution_id not in self.execution_graphs:
+            self.execution_graphs[execution_id] = {"nodes": {}, "edges": [], "requested": [], "spawned": []}
         
         while loop_count < max_loops and not self.pool_manager.is_stopped:
             loop_count += 1
@@ -750,8 +904,11 @@ Complete your assigned task efficiently and professionally."""
                 
                 # Spawn ONLY ONE agent at a time - true sequential event-driven behavior
                 if unique_spawn_requests:
-                    # Get the first request (could be enhanced by priority)
-                    next_agent_request = list(unique_spawn_requests.values())[0]
+                    # Order requests by priority: high > medium > low
+                    prio_map = {"high": 3, "medium": 2, "low": 1}
+                    candidates = list(unique_spawn_requests.values())
+                    candidates.sort(key=lambda r: prio_map.get(str(r.data.get("priority", "medium")).lower(), 2), reverse=True)
+                    next_agent_request = candidates[0]
                     role = next_agent_request.data.get("role", "writer")
                     
                     logger.info(f"🔄 Spawning SINGLE agent sequentially: {role}")
@@ -948,6 +1105,13 @@ Complete your assigned task efficiently and professionally."""
         
         if execution_id in self.active_executions:
             self.active_executions[execution_id]["status"] = "stopped"
+            # Notify frontend via callback so polling exits promptly
+            try:
+                cb = self.active_executions[execution_id].get("callback")
+                if cb:
+                    await cb(type="execution_stopped", agent=None, data={"execution_id": execution_id})
+            except Exception:
+                pass
         
         # Force stop pool manager
         await self.pool_manager.stop_execution(force=True)

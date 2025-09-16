@@ -56,6 +56,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
+// API base URL
+const API_BASE_URL = (process as any).env?.REACT_APP_API_URL || 'http://localhost:8000';
+
 interface SwarmEvent {
   id: string;
   type: string;
@@ -170,6 +173,62 @@ export const EventDrivenSwarmInterface: React.FC = () => {
   type SubTimelineItem = { id: string; parent: string; agent: string; type: 'start'|'token'|'done'; preview?: string; ts: number };
   const subAgentParentRef = useRef<Map<string, string>>(new Map());
   const [subTimeline, setSubTimeline] = useState<SubTimelineItem[]>([]);
+  // Execution tree (collapsible) with elapsed times
+  type TreeNode = { name: string; parent?: string; start?: number; end?: number; children: Set<string> };
+  const [execTree, setExecTree] = useState<Map<string, TreeNode>>(new Map());
+  const [treeCollapsed, setTreeCollapsed] = useState<Set<string>>(new Set());
+  const [leftView, setLeftView] = useState<'tree'|'timeline'>('tree');
+
+  // ----- Persistence keys -----
+  const TREE_KEY = (sid: string) => `event_swarm_exec_tree_${sid}`;
+  const TIMELINE_KEY = (sid: string) => `event_swarm_timeline_${sid}`;
+  const COLLAPSED_KEY = (sid: string) => `event_swarm_tree_collapsed_${sid}`;
+
+  // Serialize and persist execution tree + timeline + collapsed state
+  const persistExecState = useCallback((sid: string) => {
+    try {
+      // Serialize execTree (Map/Set -> plain)
+      const treePlain: Record<string, { name: string; parent?: string; start?: number; end?: number; children: string[] }> = {};
+      execTree.forEach((node, name) => {
+        treePlain[name] = {
+          name: node.name,
+          parent: node.parent,
+          start: node.start,
+          end: node.end,
+          children: Array.from(node.children || new Set<string>())
+        };
+      });
+      localStorage.setItem(TREE_KEY(sid), JSON.stringify(treePlain));
+      localStorage.setItem(TIMELINE_KEY(sid), JSON.stringify(subTimeline));
+      localStorage.setItem(COLLAPSED_KEY(sid), JSON.stringify(Array.from(treeCollapsed)));
+    } catch {}
+  }, [execTree, subTimeline, treeCollapsed]);
+
+  const restoreExecState = useCallback((sid: string) => {
+    try {
+      const tRaw = localStorage.getItem(TREE_KEY(sid));
+      if (tRaw) {
+        const plain = JSON.parse(tRaw) as Record<string, { name: string; parent?: string; start?: number; end?: number; children: string[] }>;
+        const m = new Map<string, TreeNode>();
+        Object.values(plain || {}).forEach(p => {
+          m.set(p.name, { name: p.name, parent: p.parent, start: p.start, end: p.end, children: new Set(p.children || []) });
+        });
+        setExecTree(m);
+      } else {
+        setExecTree(new Map());
+      }
+    } catch { setExecTree(new Map()); }
+
+    try {
+      const tlRaw = localStorage.getItem(TIMELINE_KEY(sid));
+      if (tlRaw) setSubTimeline(JSON.parse(tlRaw)); else setSubTimeline([]);
+    } catch { setSubTimeline([]); }
+
+    try {
+      const cRaw = localStorage.getItem(COLLAPSED_KEY(sid));
+      if (cRaw) setTreeCollapsed(new Set<string>(JSON.parse(cRaw))); else setTreeCollapsed(new Set());
+    } catch { setTreeCollapsed(new Set()); }
+  }, []);
 
   // Sidebar + history state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -191,6 +250,8 @@ export const EventDrivenSwarmInterface: React.FC = () => {
   const [showSettingsHub, setShowSettingsHub] = useState(false);
   const [toolsViewMode, setToolsViewMode] = useState<'grid'|'list'>('grid');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [timelineCompact, setTimelineCompact] = useState(true);
+  const [wasStopped, setWasStopped] = useState<{ reason?: string; at?: number } | null>(null);
 
   // Swarm configuration controls
   const [showConfig, setShowConfig] = useState(false);
@@ -508,6 +569,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
     setIsExecuting(true);
     isExecutingRef.current = true;
+    setWasStopped(null);
     setEvents([]);
     setAgents(new Map());
     setHumanQuestions([]);
@@ -771,6 +833,26 @@ export const EventDrivenSwarmInterface: React.FC = () => {
           });
           // Initialize message buffer for this agent
           agentMessages.set(chunk.agent, "");
+
+          // Update execution tree (start time)
+          try {
+            const parentName = chunk.parent ? String(chunk.parent) : undefined;
+            const startTs = chunk.timestamp ? Date.parse(chunk.timestamp) : Date.now();
+            setExecTree(prev => {
+              const map = new Map(prev);
+              const node: TreeNode = map.get(chunk.agent) as TreeNode || ({ name: chunk.agent, parent: parentName, children: new Set<string>() } as TreeNode);
+              node.parent = parentName;
+              node.start = node.start || startTs;
+              map.set(chunk.agent, node);
+              if (parentName) {
+                const p = map.get(parentName) || { name: parentName, children: new Set<string>() } as TreeNode;
+                p.children = p.children || new Set<string>();
+                p.children.add(chunk.agent);
+                map.set(parentName, p);
+              }
+              return map;
+            });
+          } catch {}
 
           // Create initial streaming message for this agent
           setMessages((prev) => {
@@ -1071,10 +1153,10 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             return updated;
           });
 
-          // Subagent token into timeline if mapped
+          // Subagent token into timeline if mapped (compact mode hides token spam)
           try {
             const parentName = String(subAgentParentRef.current.get(chunk.agent) || '');
-            if (parentName && content) {
+            if (!timelineCompact && parentName && content) {
               setSubTimeline(prev => [
                 ...prev,
                 ({ id: `subtok-${Date.now()}`, parent: parentName, agent: String(chunk.agent), type: 'token' as const, preview: String(content).slice(0, 60), ts: Date.now() } as SubTimelineItem)
@@ -1105,6 +1187,18 @@ export const EventDrivenSwarmInterface: React.FC = () => {
               ...prev,
               ({ id: `subdone-${Date.now()}`, parent: parentName, agent: String(chunk.agent), type: 'done' as const, ts: Date.now() } as SubTimelineItem)
             ].slice(-500));
+          } catch {}
+
+          // Update execution tree (end time)
+          try {
+            const endTs = chunk.timestamp ? Date.parse(chunk.timestamp) : Date.now();
+            setExecTree(prev => {
+              const map = new Map(prev);
+              const node = map.get(chunk.agent) || { name: chunk.agent, children: new Set<string>() } as TreeNode;
+              node.end = endTs;
+              map.set(chunk.agent, node);
+              return map;
+            });
           } catch {}
 
           // Finalize the streaming message
@@ -1356,6 +1450,64 @@ export const EventDrivenSwarmInterface: React.FC = () => {
         }
         break;
 
+      case "execution_stopped":
+        // Handle explicit execution stop
+        setIsExecuting(false);
+        isExecutingRef.current = false;
+        if (chunk.data?.message) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `stopped-${Date.now()}`,
+              agent: "system",
+              content: `🛑 **Execution Stopped:** ${chunk.data.message}`,
+              timestamp: new Date(),
+              type: "system" as const,
+            },
+          ]);
+        }
+        break;
+      
+      case "execution_timeout":
+        // Handle execution timeout event
+        setIsExecuting(false);
+        isExecutingRef.current = false;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `timeout-${Date.now()}`,
+            agent: "system",
+            content: `⏰ **Execution Timeout:** The execution has exceeded the maximum time limit of ${chunk.data?.timeout || maxExecutionTime} seconds. The swarm has been stopped.`,
+            timestamp: new Date(),
+            type: "system" as const,
+          },
+        ]);
+        handleSwarmEvent({
+          id: Date.now().toString(),
+          type: "execution.timeout",
+          data: chunk.data || { timeout: maxExecutionTime },
+          timestamp: Date.now(),
+          severity: 'warning',
+        });
+        break;
+      
+      case "agent_timeout":
+        // Handle individual agent timeout
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `agent-timeout-${Date.now()}`,
+            agent: "system",
+            content: `⏰ **Agent Timeout:** ${chunk.agent || chunk.data?.agent_id} exceeded the runtime limit of ${chunk.data?.limit || maxAgentRuntime} seconds and was terminated.`,
+            timestamp: new Date(),
+            type: "system" as const,
+          },
+        ]);
+        if (chunk.agent || chunk.data?.agent_id) {
+          handleAgentCompleted({ agent_id: chunk.agent || chunk.data?.agent_id, success: false });
+        }
+        break;
+      
       case "error":
         setMessages((prev) => [
           ...prev,
@@ -1450,6 +1602,9 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     setHumanQuestions([]);
     setHumanApprovals([]);
     setMessages([]);
+    setExecTree(new Map());
+    setSubTimeline([]);
+    setTreeCollapsed(new Set());
     setAutoScroll(true);
     setExecutionId(null);
     const newId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1487,6 +1642,8 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       type: pm.role === 'system' ? 'system' : 'message',
     }));
     setMessages(restored);
+    // Restore execution tree and timeline for richer history
+    restoreExecState(sid);
     setTask("");
     setIsExecuting(false);
     isExecutingRef.current = false;
@@ -1500,6 +1657,18 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       if (sid) setSessionId(sid);
     } catch {}
   }, [loadSessionHistory]);
+
+  // Persist chat history whenever messages change (debounced)
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = setTimeout(() => {
+      try {
+        saveCurrentSessionSnapshot(sessionId);
+        persistExecState(sessionId);
+      } catch {}
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [messages, execTree, subTimeline, treeCollapsed, sessionId, persistExecState]);
 
   const answerQuestion = async (questionId: string) => {
     const token = localStorage.getItem("access_token");
@@ -1700,34 +1869,133 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             <Button variant="secondary" size="sm" onClick={() => setShowToolsHub(true)} className="gap-2">
               <Wrench className="h-4 w-4" /> Tools Hub
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setTimelineCompact(!timelineCompact)} className="gap-2">
+              {timelineCompact ? 'Verbose Timeline' : 'Compact Timeline'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={async () => {
+              try {
+                if (!executionId) return;
+                const res = await fetch(`${API_BASE_URL}/api/v1/streaming/execution/${executionId}/graph`);
+                const data = await res.json();
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `execution-graph-${executionId}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              } catch (e) { console.error('Export failed', e); }
+            }} className="gap-2">
+              <FileText className="h-4 w-4" /> Export JSON
+            </Button>
+            <Button variant={timelineCompact? 'default':'outline'} size="sm" onClick={() => setTimelineCompact(!timelineCompact)} className="gap-2">
+              {timelineCompact ? 'Compact Timeline' : 'Verbose Timeline'}
+            </Button>
             {isExecuting && executionId && (
               <Badge variant="outline" className="text-xs">{executionId.slice(0,8)}...</Badge>
             )}
           </div>
         </div>
+        {wasStopped && !isExecuting && (
+          <div className="px-4 py-2 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-700 flex items-center justify-between">
+            <div className="text-sm text-amber-800 dark:text-amber-200">
+              {wasStopped.reason || 'Execution stopped'} — increase limits and continue.
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={() => {
+                setMaxExecutionTime((prev) => Math.max(prev, 900));
+                setMaxAgentRuntime((prev) => Math.max(prev, 180));
+              }}>
+                Increase Limits
+              </Button>
+              <Button size="sm" onClick={() => executeSwarm()}>
+                Continue
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setWasStopped(null)}>Dismiss</Button>
+            </div>
+          </div>
+        )}
 
         {/* Chat + Subtask Timeline */}
         <div className="flex-1 relative overflow-hidden flex">
           {/* Subtask vertical timeline */}
-          <div className="hidden lg:block w-64 border-r border-gray-200 dark:border-gray-800 p-3 overflow-y-auto">
-            <div className="text-sm font-semibold mb-2">Subtask Timeline</div>
-            {/* Group by parent */}
-            {Array.from(new Set(subTimeline.map(t => t.parent))).map(parent => (
-              <div key={parent} className="mb-4">
-                <div className="text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">{parent}</div>
-                <div className="pl-2 border-l border-gray-300 dark:border-gray-700 space-y-1">
-                  {subTimeline.filter(t => t.parent===parent).map(item => (
-                    <div key={item.id} className="text-xs text-gray-700 dark:text-gray-300">
-                      <span className={`inline-block w-2 h-2 rounded-full mr-2 ${item.type==='start'?'bg-blue-500':item.type==='done'?'bg-green-500':'bg-purple-500'}`}></span>
-                      <span className="font-medium">{item.agent}</span>
-                      {item.type==='token' && item.preview ? <span className="text-gray-500 ml-1">{item.preview}</span> : null}
-                    </div>
-                  ))}
-                </div>
+          <div className="hidden lg:block w-72 border-r border-gray-200 dark:border-gray-800 p-3 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-semibold">{leftView==='tree' ? 'Execution Tree' : 'Subtask Timeline'}</div>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant={leftView==='tree'?'default':'ghost'} onClick={()=>setLeftView('tree')}>Tree</Button>
+                <Button size="sm" variant={leftView==='timeline'?'default':'ghost'} onClick={()=>setLeftView('timeline')}>Timeline</Button>
               </div>
-            ))}
-            {subTimeline.length===0 && (
-              <div className="text-xs text-gray-500">No subtasks yet</div>
+            </div>
+            {leftView==='tree' ? (
+              <div className="space-y-2">
+                {(() => {
+                  // Build roots: nodes that either have no parent or parent not found
+                  const nodes = execTree;
+                  const roots: string[] = [];
+                  nodes.forEach((node, name) => {
+                    const p = node.parent;
+                    if (!p || !nodes.get(p)) roots.push(name);
+                  });
+                  // Helper to format duration
+                  const fmtDur = (n?: number, e?: number) => {
+                    if (!n) return '';
+                    const end = e || Date.now();
+                    const secs = Math.max(0, Math.floor((end - n)/1000));
+                    return `${secs}s`;
+                  };
+                  const renderNode = (name: string, depth=0) => {
+                    const node = nodes.get(name);
+                    if (!node) return null;
+                    const hasChildren = node.children && node.children.size>0;
+                    const collapsed = treeCollapsed.has(name);
+                    return (
+                      <div key={`${name}-${depth}`} className="mb-1">
+                        <div className="flex items-center">
+                          {hasChildren && (
+                            <button className="text-xs mr-1" onClick={()=>{
+                              setTreeCollapsed(prev=>{const s=new Set(prev); if(s.has(name)) s.delete(name); else s.add(name); return s;});
+                            }}>{collapsed? '▶' : '▼'}</button>
+                          )}
+                          {!hasChildren && <span className="text-xs mr-1 opacity-50">•</span>}
+                          <span className="text-xs font-medium truncate" title={name}>{name}</span>
+                          <span className="ml-auto text-[10px] text-gray-500">{fmtDur(node.start, node.end)}</span>
+                        </div>
+                        {!collapsed && hasChildren && (
+                          <div className="pl-4 border-l border-gray-200 dark:border-gray-700 mt-1">
+                            {Array.from(node.children).map(child => renderNode(child, depth+1))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  };
+                  if (nodes.size===0) return <div className="text-xs text-gray-500">No agents yet</div>;
+                  return roots.map(r => renderNode(r));
+                })()}
+              </div>
+            ) : (
+              <div>
+                {/* Timeline view (existing) */}
+                {Array.from(new Set(subTimeline.map(t => t.parent))).map(parent => (
+                  <div key={parent} className="mb-4">
+                    <div className="text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">{parent}</div>
+                    <div className="pl-2 border-l border-gray-300 dark:border-gray-700 space-y-1">
+                      {subTimeline.filter(t => t.parent===parent).map(item => (
+                        <div key={item.id} className="text-xs text-gray-700 dark:text-gray-300">
+                          <span className={`inline-block w-2 h-2 rounded-full mr-2 ${item.type==='start'?'bg-blue-500':item.type==='done'?'bg-green-500':'bg-purple-500'}`}></span>
+                          <span className="font-medium">{item.agent}</span>
+                          {item.type==='token' && item.preview ? <span className="text-gray-500 ml-1">{item.preview}</span> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {subTimeline.length===0 && (
+                  <div className="text-xs text-gray-500">No subtasks yet</div>
+                )}
+              </div>
             )}
           </div>
           <div className="flex-1 relative">

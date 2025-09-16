@@ -205,7 +205,23 @@ class AgentPoolManager:
                 
                 # Check execution timeout
                 if self._execution_time_exceeded():
-                    logger.error("⏰ Execution time exceeded - forcing stop")
+                    logger.error(f"⏰ Execution time exceeded ({self.max_execution_time}s) - forcing stop")
+                    # Send timeout notification before stopping
+                    try:
+                        # Notify any listeners about timeout
+                        if hasattr(self, 'streaming_callback') and self.streaming_callback:
+                            await self.streaming_callback(
+                                type="execution_timeout",
+                                agent=None,
+                                data={
+                                    "timeout": self.max_execution_time,
+                                    "message": f"Execution time limit of {self.max_execution_time}s reached",
+                                    "execution_id": self.execution_id
+                                }
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to send timeout notification: {e}")
+                    
                     await self.stop_execution(force=True)
                     break
                 
@@ -214,7 +230,21 @@ class AgentPoolManager:
                 for agent_id, agent in list(self.active_agents.items()):
                     agent_runtime = current_time - agent.start_time
                     if agent_runtime > self.max_agent_runtime:
-                        logger.error(f"⏰ Agent {agent_id} exceeded runtime limit - killing")
+                        logger.error(f"⏰ Agent {agent_id} exceeded runtime limit ({self.max_agent_runtime}s) - killing")
+                        # Notify about agent timeout before killing
+                        try:
+                            if hasattr(self, 'streaming_callback') and self.streaming_callback:
+                                await self.streaming_callback(
+                                    type="agent_timeout",
+                                    agent=agent_id,
+                                    data={
+                                        "runtime": int(agent_runtime),
+                                        "limit": self.max_agent_runtime,
+                                        "agent_id": agent_id
+                                    }
+                                )
+                        except Exception:
+                            pass
                         await self._kill_agent(agent_id)
                 
                 # Monitor system resources
