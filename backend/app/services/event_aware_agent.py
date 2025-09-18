@@ -90,7 +90,10 @@ class EventAwareAgent:
                 "agent": self.name,
                 "role": self.role,
                 "task": self.current_task,
-                "triggered_by": event.type
+                "triggered_by": event.type,
+                # Propagate execution context for downstream controllers/UI
+                "execution_id": event.data.get("execution_id"),
+                "parent": event.data.get("parent")
             },
             source=self.name
         )
@@ -106,7 +109,10 @@ class EventAwareAgent:
                     "agent": self.name,
                     "role": self.role,
                     "output": result,
-                    "task": self.current_task
+                    "task": self.current_task,
+                    # Include execution context for routing/sequencing
+                    "execution_id": event.data.get("execution_id"),
+                    "parent": event.data.get("parent")
                 },
                 source=self.name
             )
@@ -331,33 +337,34 @@ class EventAwareAgent:
             
             decision_prompt = f"""You are coordinating a dynamic swarm of specialized AI agents. Based on the output below from the '{self.role}' agent, decide what should happen next.
 
-IMPORTANT: Do NOT use generic agent roles. Create SPECIFIC specialist roles based on what is actually needed.
+The agent output is: "{output}"
 
-Examples of GOOD specific roles:
-- "satellite orbital dynamics researcher"
-- "aerospace technical paper writer" 
-- "small satellite systems design engineer"
-- "academic peer review specialist for space technology"
-- "Python orbital mechanics simulation developer"
+COMPLETION RULES:
+1. SIMPLE GREETINGS: If the user just said "Hi", "Hello", "How are you", or similar greeting, create ONLY ONE agent to respond. After that agent responds, the task is COMPLETE.
+2. USER STOPPED: If the output is "Stopped by user" or contains "stopped by user", the task is COMPLETE - do NOT create more agents.
+3. SINGLE CONVERSATIONAL EXCHANGES: Basic questions, greetings, or simple requests need only ONE agent response to be complete.
+4. COMPLEX PROJECTS: If the user requested building, creating, developing, or implementing something (like an app, website, system), this typically requires MULTIPLE specialists and should NOT be marked complete after just one agent.
+5. PARTIAL WORK: If this appears to be just the first part of a larger project (like UI design for an app), more agents are likely needed.
 
-Examples of BAD generic roles:
-- "researcher" 
-- "writer"
-- "developer"
-- "reviewer"
+CRITICAL: Simple conversational tasks like greetings should use MINIMAL agents (usually just 1).
 
-Current output from {self.role} agent:
-"{output}"
+ONLY mark as complete if:
+- Simple conversational exchange (greetings, basic questions) after ONE agent response
+- Single, self-contained request that was fully addressed
+- User explicitly asked for only one specific thing and got it
+- Output contains "Stopped by user" (user intervention)
 
-Critical Analysis Rules:
-1. If this is just an OUTLINE or PLAN, the task is NOT complete - actual work still needs to be done
-2. If this is a SUMMARY or ANALYSIS, specialists are needed to do the real work
-3. Be specific about what type of specialist is needed based on the domain and task
-4. Consider the full pipeline: research → creation → review → refinement
+CREATE MORE AGENTS if:
+- User requested building/creating/developing something complex
+- This output is clearly just one component (like UI design for an app)
+- Multiple specialties are obviously needed to complete the user's request
+- The output mentions "next steps" or implies more work needed
+
+AVOID creating multiple agents for simple greetings or basic conversational exchanges.
 
 Respond in this exact JSON format:
 {{
-    "task_complete": false,
+    "task_complete": true_or_false,
     "reasoning": "explanation of why more work is needed or why task is complete",
     "needed_agents": [
         {{
@@ -367,20 +374,32 @@ Respond in this exact JSON format:
         }}
     ],
     "next_phase": "what specific work happens next"
-}}"""
+}}
+
+CRITICAL: Each agent role in the "needed_agents" array MUST be unique. Do NOT repeat the same role multiple times. If you need multiple specialists of the same type, use different specific role names (e.g., "frontend_ui_developer" and "backend_api_developer" instead of two "developer" entries)."""
             
             decision_agent = Agent(
                 name="dynamic_swarm_coordinator",
-                system_prompt="""You are an advanced swarm coordination AI that creates highly specialized agents dynamically. Your mission is to analyze what work has been done and determine what specific expert specialists are needed next.
+                system_prompt="""You are an advanced swarm coordination AI that manages multi-agent workflows. Your role is to determine when tasks are truly complete versus when more specialized agents are needed.
 
-Key principles:
-- Never use generic roles - always create specific specialist descriptions
-- If something is just outlined or planned, the actual work still needs specialists
-- Consider the full workflow: research → creation → review → improvement
-- Be ambitious about creating the right specialists for high-quality results
-- Think about domain expertise, not just task categories
+BALANCE RULES:
+1. SIMPLE TASKS: Conversational exchanges, greetings, and basic questions are usually complete after one response.
+2. USER INTERRUPTION: If an agent output is "Stopped by user", ALWAYS mark the task as complete - do NOT create more agents.
+3. COMPLEX PROJECTS: Building, creating, or developing things (apps, websites, systems) typically require multiple specialized agents working together.
+4. PARTIAL COMPLETION: If an agent only handles one aspect of a larger project (like UI design for an app), the task is NOT complete.
 
-You excel at recognizing when preliminary work (analysis, outlines, plans) needs to transition into specialized execution by expert agents.""",
+Be CONSERVATIVE about marking complex projects as complete. If the user requested building something substantial, multiple specialists are usually needed.
+
+Only mark tasks complete when:
+- It's a simple conversational exchange
+- A single, specific request was fully addressed
+- No additional work is clearly needed
+- User stopped the agent (output contains "Stopped by user")
+
+Create more agents when:
+- Complex projects require multiple specialties
+- Only one component of a larger system has been addressed
+- The user's request implies multi-step development work""",
                 model=model
             )
             
@@ -486,12 +505,23 @@ You excel at recognizing when preliminary work (analysis, outlines, plans) needs
                 return
             
             # Spawn needed agents based on AI decision (sequentially by controller)
+            # CRITICAL: Deduplicate agent roles to prevent creating multiple identical agents
+            seen_roles = set()
             for agent_spec in needed_agents:
                 if isinstance(agent_spec, dict) and "role" in agent_spec:
+                    role = agent_spec["role"]
+                    
+                    # Skip if we've already requested this role
+                    if role in seen_roles:
+                        logger.warning(f"🚫 Skipping duplicate agent role request: {role}")
+                        continue
+                    
+                    seen_roles.add(role)
+                    
                     await event_bus.emit(
                         "agent.needed",
                         {
-                            "role": agent_spec["role"],
+                            "role": role,
                             "reason": agent_spec.get("reason", "AI determined this agent is needed"),
                             "priority": agent_spec.get("priority", "medium"),
                             "context": original_output[:500],
@@ -500,7 +530,7 @@ You excel at recognizing when preliminary work (analysis, outlines, plans) needs
                         },
                         source=self.name
                     )
-                    logger.info(f"AI requested {agent_spec['role']}: {agent_spec.get('reason')}")
+                    logger.info(f"AI requested {role}: {agent_spec.get('reason')}")
             
             # Emit progress event
             await event_bus.emit(

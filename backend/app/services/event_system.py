@@ -73,6 +73,13 @@ class EventBus:
             self.listeners[event_type].remove(wrapper)
         self.listeners[event_type].append(wrapper)
     
+    def off(self, event_pattern: str, callback: Callable):
+        """Remove a listener for an event pattern"""
+        if event_pattern in self.listeners:
+            if callback in self.listeners[event_pattern]:
+                self.listeners[event_pattern].remove(callback)
+                logger.debug(f"Removed listener for: {event_pattern}")
+    
     async def _safe_invoke(self, callback: Callable, event: SwarmEvent):
         """Safely invoke a callback with error handling"""
         try:

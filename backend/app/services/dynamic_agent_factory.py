@@ -1,6 +1,7 @@
 """
 Dynamic Agent Factory for Event-Driven Swarm
 """
+import asyncio
 import uuid
 import logging
 from typing import Dict, List, Optional
@@ -14,9 +15,12 @@ logger = logging.getLogger(__name__)
 class DynamicAgentFactory:
     """Create agents on-the-fly based on needs"""
     
-    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None):
+    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None, callback_handler=None):
+        logger.info(f"🏭 DynamicAgentFactory __init__ called with callback_handler type={type(callback_handler).__name__}, is_callable={callable(callback_handler) if callback_handler else False}")
         self.human_loop_enabled = human_loop_enabled
         self.execution_id = execution_id
+        self.callback_handler = callback_handler
+        logger.info(f"🏭 self.callback_handler after assignment: type={type(self.callback_handler).__name__}, is_callable={callable(self.callback_handler) if self.callback_handler else False}")
         self.memory_store = get_memory_store() if human_loop_enabled else None
         # No more hardcoded agent templates - everything is AI-driven now
         self.ai_role_analyzer = None  # Will be initialized when needed
@@ -35,11 +39,15 @@ class DynamicAgentFactory:
     
     async def _handle_agent_needed(self, event):
         """Handle request for a new agent"""
+        # Store current event data for sequential execution tracking
+        self._current_event_data = event.data
+        
         role = event.data.get("role")
         reason = event.data.get("reason", "")
         context = event.data.get("context", "")
         
         logger.info(f"📋 Agent needed: {role} - {reason}")
+        logger.info(f"📋 Handler called for agent.needed event - Role: {role}")
         
         # Check if we already have this type of agent
         for agent in self.active_agents.values():
@@ -78,6 +86,8 @@ class DynamicAgentFactory:
     
     async def spawn_agent(self, role: str, context: dict = None) -> Optional[EventAwareAgent]:
         """Create a new agent dynamically based on specific needs"""
+        
+        logger.info(f"🚀 SPAWNING AGENT: {role}")
         
         # Extract detailed requirements from context/role
         requirements = context.get("context", "") if context else ""
@@ -121,6 +131,54 @@ class DynamicAgentFactory:
                 execution_id=self.execution_id,
                 memory_store=self.memory_store
             )
+            # Wire streaming callback so UI receives tokens and completion
+            # IMPORTANT: Create an agent-specific wrapper to prevent cross-agent interference
+            try:
+                if self.callback_handler and callable(self.callback_handler):
+                    # Create a wrapper that ensures agent isolation
+                    original_callback = self.callback_handler
+                    
+                    # Create agent-specific callback wrapper based on original type
+                    if asyncio.iscoroutinefunction(original_callback):
+                        # Async version
+                        async def agent_specific_callback(**kwargs):
+                            # Ensure this callback is only for this specific agent
+                            callback_agent = kwargs.get("agent")
+                            if callback_agent and callback_agent != agent_name:
+                                # Skip if this callback is for a different agent
+                                logger.debug(f"Skipping callback for {callback_agent}, expected {agent_name}")
+                                return
+                            
+                            # Ensure agent name is set correctly
+                            kwargs["agent"] = agent_name
+                            
+                            # Call original async callback
+                            await original_callback(**kwargs)
+                    else:
+                        # Sync version
+                        def agent_specific_callback(**kwargs):
+                            # Ensure this callback is only for this specific agent
+                            callback_agent = kwargs.get("agent")
+                            if callback_agent and callback_agent != agent_name:
+                                # Skip if this callback is for a different agent
+                                logger.debug(f"Skipping callback for {callback_agent}, expected {agent_name}")
+                                return
+                            
+                            # Ensure agent name is set correctly
+                            kwargs["agent"] = agent_name
+                            
+                            # Call original sync callback
+                            original_callback(**kwargs)
+                    
+                    agent.callback_handler = agent_specific_callback
+                    logger.info(f"✅ CALLBACK WIRED: Set agent-specific callback for {agent_name}")
+                else:
+                    if self.callback_handler is not None:
+                        logger.error(f"❌ INVALID CALLBACK: Factory has callback_handler of type {type(self.callback_handler).__name__} (not callable) for {agent_name}")
+                    else:
+                        logger.warning(f"⚠️ NO CALLBACK: Factory has no callback_handler to wire to {agent_name}")
+            except Exception as e:
+                logger.error(f"❌ CALLBACK WIRE FAILED for {agent_name}: {e}")
             logger.info(f"🤖✨ Created HumanLoopAgent: {agent_name} for execution {self.execution_id}")
         else:
             agent = EventAwareAgent(
@@ -135,18 +193,26 @@ class DynamicAgentFactory:
         self.active_agents[agent_name] = agent
         
         # Announce agent creation
-        await event_bus.emit(
-            "agent.spawned",
-            {
-                "agent": agent_name,
-                "role": role,
-                "capabilities": {
-                    "skills": capabilities.skills,
-                    "tools": capabilities.tools
-                }
-            },
-            source="factory"
-        )
+        spawn_data = {
+            "agent": agent_name,
+            "role": role,
+            "capabilities": {
+                "skills": capabilities.skills,
+                "tools": capabilities.tools
+            }
+        }
+        
+        # Include execution_id and parent if available (for sequential execution tracking)
+        if hasattr(self, '_current_event_data') and self._current_event_data:
+            if "execution_id" in self._current_event_data:
+                spawn_data["execution_id"] = self._current_event_data["execution_id"]
+            if "parent" in self._current_event_data:
+                spawn_data["parent"] = self._current_event_data["parent"]
+        
+        await event_bus.emit("agent.spawned", spawn_data, source="factory")
+        
+        # Clear current event data after spawning
+        self._current_event_data = None
         
         logger.info(f"✨ Spawned agent: {agent_name} ({role})")
         return agent
@@ -237,6 +303,17 @@ Generate the template now."""
             # Use the accumulated content from streaming
             response = result_content.strip()
             
+            # Strip markdown code blocks if present
+            if response.startswith("```json"):
+                response = response[7:]  # Remove ```json
+            elif response.startswith("```"):
+                response = response[3:]  # Remove ```
+            
+            if response.endswith("```"):
+                response = response[:-3]  # Remove closing ```
+            
+            response = response.strip()
+            
             # Parse JSON response with error resilience
             import json
             try:
@@ -246,7 +323,7 @@ Generate the template now."""
                 return template
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse template JSON: {e}")
-                logger.error(f"Raw response: {response[:200]}...")
+                logger.error(f"Cleaned response that failed to parse: {response[:500]}...")
                 return self._minimal_fallback_template(role, requirements)
                 
         except Exception as e:
@@ -287,10 +364,18 @@ Generate the template now."""
             # Analyze task with AI
             analysis_prompt = f"""Analyze this task and determine what specialized agents are needed: "{task}"
 
+CRITICAL RULES:
+1. SIMPLE GREETINGS: If the task is just "Hi", "Hello", "How are you", or similar basic greetings, return ONLY ONE agent with role "conversational_agent".
+2. SIMPLE QUESTIONS: For basic questions or simple conversational exchanges, use only ONE agent.
+3. COMPLEX PROJECTS: Only use multiple agents for complex tasks like building apps, websites, or systems.
+
 Respond with a JSON array of agent requirements, each with:
 {{"role": "specific_role_description", "reason": "why this agent is needed", "priority": "high/medium/low"}}
 
-Focus on:
+For simple greetings, respond with:
+[{{"role": "conversational_agent", "reason": "Handle simple greeting and conversation", "priority": "high"}}]
+
+For complex tasks, focus on:
 - What SPECIFIC expertise is needed (not generic roles)
 - Break complex tasks into specialized capabilities
 - Consider the full workflow from start to finish
@@ -328,6 +413,17 @@ Return ONLY the JSON array, no other text."""
             response = analysis_content.strip()
             logger.info(f"AI role analyzer response: {response[:200]}...")
             
+            # Strip markdown code blocks if present
+            if response.startswith("```json"):
+                response = response[7:]  # Remove ```json
+            elif response.startswith("```"):
+                response = response[3:]  # Remove ```
+            
+            if response.endswith("```"):
+                response = response[:-3]  # Remove closing ```
+            
+            response = response.strip()
+            
             # Parse AI response
             import json
             try:
@@ -336,6 +432,7 @@ Return ONLY the JSON array, no other text."""
                 return agent_needs
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse AI task analysis: {e}")
+                logger.error(f"Cleaned response that failed to parse: {response[:500]}...")
                 return [{"role": "general_analyst", "reason": "Parse AI analysis of task", "priority": "high"}]
                 
         except Exception as e:
@@ -365,15 +462,21 @@ Return ONLY the JSON array, no other text."""
             
             self.ai_role_analyzer = Agent(
                 name="ai_role_analyzer",
-                system_prompt="""You are an intelligent task analysis specialist that determines what specialized AI agents are needed for complex tasks.
+                system_prompt="""You are an intelligent task analysis specialist that determines what specialized AI agents are needed for tasks.
+
+CRITICAL RULES FIRST:
+1. SIMPLE GREETINGS ("Hi", "Hello", "How are you"): Return ONLY ONE "conversational_agent"
+2. SIMPLE QUESTIONS/CONVERSATIONS: Use only ONE agent unless truly complex
+3. COMPLEX PROJECTS (building apps, systems): Use multiple specialized agents
 
 Your job is to:
-1. Break down tasks into specific expertise areas
-2. Identify what specialized capabilities are needed
-3. Suggest agent roles that are SPECIFIC, not generic
-4. Consider the full workflow and all steps needed
+1. Recognize simple conversational tasks and use minimal agents
+2. Break down complex tasks into specific expertise areas
+3. Identify what specialized capabilities are needed
+4. Suggest agent roles that are SPECIFIC, not generic
+5. Consider the full workflow and all steps needed
 
-Always be specific about agent roles:
+Always be specific about agent roles for complex tasks:
 - "satellite orbital mechanics specialist" not "researcher"  
 - "Python web application developer" not "developer"
 - "academic paper formatting expert" not "writer"

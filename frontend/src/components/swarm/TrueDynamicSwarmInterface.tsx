@@ -141,10 +141,11 @@ export const TrueDynamicSwarmInterface: React.FC = () => {
         break;
         
       case 'agent.spawned':
-        if (event.data?.agent_name) {
+        // Support both {agent_name} and {agent}
+        if (event.data?.agent_name || event.data?.agent) {
           setMessages(prev => [...prev, {
-            agent: event.data.agent_name,
-            content: `✨ Spawned by ${event.data.requesting_agent}: ${event.data.role}`,
+            agent: event.data.agent_name || event.data.agent,
+            content: `✨ Spawned${event.data?.requesting_agent ? ` by ${event.data.requesting_agent}` : ''}: ${typeof event.data.role === 'string' ? event.data.role : (event.data.role?.role || 'agent')}`,
             timestamp: new Date()
           }]);
           
@@ -167,10 +168,11 @@ export const TrueDynamicSwarmInterface: React.FC = () => {
         
       case 'agent.completed':
         console.log('✅ Processing agent.completed event:', event.data);
-        if (event.data?.agent_name) {
+        // Backend may send {agent} or {agent_name}; output may be in {output|result}
+        if (event.data?.agent_name || event.data?.agent) {
           const message = {
-            agent: event.data.agent_name,
-            content: event.data.response || `✅ Completed task: ${event.data.result || 'Task finished'}`,
+            agent: event.data.agent_name || event.data.agent,
+            content: event.data.response || event.data.output || `✅ Completed task: ${event.data.result || 'Task finished'}`,
             timestamp: new Date()
           };
           console.log('📝 Adding message to UI:', message);

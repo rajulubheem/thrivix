@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 import asyncio
+import time
 from datetime import datetime
 import uuid
 
@@ -56,6 +57,333 @@ async def execute_event_swarm(
     except Exception as e:
         logger.error(f"Event swarm execution failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/stream")
+async def stream_event_swarm(
+    request: SwarmExecutionRequest
+    # Temporarily disabled for testing: current_user: dict = Depends(get_current_user)
+):
+    """Stream swarm execution with Server-Sent Events"""
+    logger.info(f"Starting SSE stream for execution: {request.task}")
+    
+    async def event_generator():
+        logger.info("SSE generator started")
+        try:
+            # Set execution mode
+            request.execution_mode = "event_driven"
+            execution_id = request.execution_id or str(uuid.uuid4())
+            request.execution_id = execution_id
+            logger.info(f"Execution ID: {execution_id}")
+            
+            # Send initial connection event
+            yield f"data: {json.dumps({'type': 'connected', 'execution_id': execution_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+            logger.info("Sent initial connection event")
+            
+            # Create a queue for streaming events
+            event_queue = asyncio.Queue()
+            
+            # Track events from global event bus
+            event_listener_task = None
+            
+            # Register listener for all events from the global event bus
+            async def forward_bus_events(event):
+                """Forward events from the global event bus to the SSE stream"""
+                try:
+                    logger.info(f"Forwarding event: {event.type} from {event.source}")
+                    
+                    # Forward all event bus events to the SSE stream
+                    event_data = {
+                        "type": event.type,
+                        "data": event.data,
+                        "source": event.source,
+                        "timestamp": event.timestamp
+                    }
+                    
+                    # Special handling for agent.completed events
+                    if event.type == "agent.completed":
+                        logger.info(f"Agent completed event detected: {event.data}")
+                        # Don't send output again - it was already streamed
+                        # The output field should not be in agent.completed anymore
+                    
+                    # Forward the original event without blocking
+                    asyncio.create_task(event_queue.put(event_data))
+                except Exception as e:
+                    logger.error(f"Error forwarding bus event: {e}", exc_info=True)
+            
+            # Register the event listener
+            global_event_bus.on("*", forward_bus_events)
+            
+            # Track pending events
+            pending_events = []
+            
+            # Track recent events to avoid duplicates
+            recent_event_hashes = set()
+            event_dedup_window = 100  # Keep last 100 event hashes
+            
+            # Create async streaming callback to handle events from swarm
+            async def streaming_callback(**kwargs):
+                # Log what we receive for debugging - but only log the keys, not the values
+                received_keys = list(kwargs.keys())
+                if received_keys:
+                    logger.debug(f"Streaming callback received keys: {received_keys}")
+                
+                # IMPORTANT: Process ONLY the expected fields from HumanLoopAgent
+                # HumanLoopAgent sends: type, agent, data (containing chunk)
+                event_type = kwargs.get("type", None)
+                agent = kwargs.get("agent", None)
+                data = kwargs.get("data", None)
+                
+                # Skip if missing required fields
+                if not event_type or not agent:
+                    logger.debug(f"Missing required fields: type={event_type}, agent={agent}")
+                    return
+                
+                content = ""
+                
+                # Create hash for deduplication - be more specific to avoid false positives
+                # For text_generation events, include timestamp to avoid blocking similar chunks
+                chunk_text = ""
+                if event_type == "text_generation" and isinstance(data, dict):
+                    chunk_text = data.get("chunk", "")
+                
+                # Include a timestamp component to ensure we don't block similar chunks
+                import time
+                timestamp_bucket = int(time.time() * 10)  # 100ms buckets
+                
+                event_hash = hash((
+                    event_type,
+                    agent,
+                    chunk_text if chunk_text else str(data),  # Use full text for uniqueness
+                    timestamp_bucket  # Different time buckets won't clash
+                ))
+                
+                # Skip if we've seen this exact event recently
+                if event_hash in recent_event_hashes:
+                    logger.debug(f"Skipping duplicate event from {agent}")
+                    return
+                
+                # Add to recent events (use deque for proper FIFO)
+                recent_event_hashes.add(event_hash)
+                # Don't limit the dedup window - just clear it periodically
+                if len(recent_event_hashes) > event_dedup_window * 2:
+                    # Clear half the hashes to prevent memory growth
+                    recent_event_hashes.clear()
+                
+                # Handle different event types based on what HumanLoopAgent sends
+                # text_generation events contain streaming chunks
+                if event_type == "text_generation" and data:
+                    # Extract chunk content from data dict
+                    if isinstance(data, dict):
+                        content = data.get("chunk", "")
+                    else:
+                        content = str(data) if data else ""
+                    
+                    # Also queue this as agent output event  
+                    if content and agent:
+                        agent_output_event = {
+                            "type": "text_generation",
+                            "agent": agent,
+                            "data": {
+                                "chunk": content,
+                                "text": content,
+                                "content": content
+                            },
+                            "output": content,  # Keep for backwards compatibility
+                            "role": "assistant",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        # Queue the event properly using async put (will wait if needed)
+                        try:
+                            # Use asyncio.create_task to queue without blocking the callback
+                            asyncio.create_task(event_queue.put(agent_output_event))
+                            logger.info(f"Immediately queued text_generation from {agent}")
+                        except Exception as e:
+                            logger.error(f"Failed to queue text_generation from {agent}: {e}")
+                            # Store as fallback
+                            pending_events.append(agent_output_event)
+                    return  # IMPORTANT: Return here to avoid processing the same data again
+                        
+                elif event_type == "agent_completed":
+                    # Agent has completed - don't send content (already streamed)
+                    # Just send completion signal
+                    agent_output_event = {
+                        "type": "agent_completed",
+                        "agent": agent or kwargs.get("source", "unknown"),
+                        # Don't include content - it was already streamed chunk by chunk
+                        "role": "assistant", 
+                        "complete": True,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    # Store event to be queued later
+                    pending_events.append(agent_output_event)
+                    # Also try to push immediately to queue (non-blocking)
+                    try:
+                        event_queue.put_nowait(agent_output_event)
+                        logger.info(f"Immediately queued agent_completed from {agent}")
+                    except asyncio.QueueFull:
+                        logger.warning(f"Queue full for immediate push from {agent}")
+                    return  # IMPORTANT: Return here to avoid further processing
+                    
+                elif "current_tool_use" in kwargs and kwargs["current_tool_use"]:
+                    tool = kwargs["current_tool_use"]
+                    event_type = "tool"
+                    agent = tool.get("name", "unknown")
+                    content = json.dumps(tool.get("input", {}))
+                elif "message" in kwargs:
+                    msg = kwargs["message"]
+                    event_type = "message"
+                    content = msg.get("content", "")
+                    agent = msg.get("role", "assistant")
+                elif "result" in kwargs:
+                    event_type = "complete"
+                    result = kwargs["result"]
+                    if hasattr(result, "output"):
+                        content = result.output
+                    else:
+                        content = str(result)
+                else:
+                    # No recognized event type, skip
+                    return
+                        
+                # Get agent name from various sources
+                if not agent:
+                    agent = kwargs.get("agent", kwargs.get("source", "coordinator"))
+                
+                # Create event for non-delta types (delta already handled above)
+                if event_type != "delta":
+                    event = {
+                        "type": event_type,
+                        "agent": agent,
+                        "content": content,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    # Queue the event (non-blocking)
+                    try:
+                        event_queue.put_nowait(event)
+                        logger.info(f"Queued event type: {event_type} from {agent}")
+                    except asyncio.QueueFull:
+                        logger.warning(f"Queue full, dropping event: {event_type} from {agent}")
+                        # Still append to pending_events for later flush
+                        pending_events.append(event)
+            
+            # Flush pending events periodically
+            async def flush_pending_events():
+                while True:
+                    await asyncio.sleep(0.1)  # Check every 100ms
+                    while pending_events:
+                        event = pending_events.pop(0)
+                        try:
+                            await event_queue.put(event)
+                            logger.info(f"Flushed pending event for agent: {event.get('agent')}")
+                        except Exception as e:
+                            logger.error(f"Failed to flush event: {e}")
+            
+            # Start the event flusher
+            flusher_task = asyncio.create_task(flush_pending_events())
+            
+            # Start swarm execution in background
+            async def run_swarm():
+                try:
+                    result = await event_swarm_service.execute_swarm_async(
+                        request,
+                        "test_user",  # Using test user for now
+                        streaming_callback,
+                        None  # conversation history
+                    )
+                    
+                    # Queue completion event
+                    await event_queue.put({
+                        'type': 'complete',
+                        'result': str(result.result if hasattr(result, 'result') else result),
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    
+                    # Signal end of stream
+                    await event_queue.put(None)
+                    
+                except Exception as e:
+                    # Queue error event
+                    await event_queue.put({
+                        'type': 'error',
+                        'message': str(e),
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    await event_queue.put(None)
+            
+            # Start swarm execution
+            logger.info("Starting swarm execution task")
+            swarm_task = asyncio.create_task(run_swarm())
+            
+            # Stream events from queue
+            logger.info("Starting event streaming loop")
+            event_count = 0
+            last_keepalive = time.time()
+            
+            while True:
+                # Process events efficiently
+                try:
+                    # Try to get event with short timeout
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                    
+                    if event is None:
+                        logger.info("Received None event, ending stream")
+                        return
+                    
+                    event_count += 1
+                    event_type = event.get('type', 'unknown')
+                    
+                    # Log streaming events
+                    if event_type == 'text_generation':
+                        logger.info(f"Streaming text_generation event {event_count} from {event.get('agent', 'unknown')}")
+                    else:
+                        logger.debug(f"Streaming event {event_count}: {event_type}")
+                    
+                    # Send event immediately
+                    yield f"data: {json.dumps(event)}\n\n"
+                    
+                except asyncio.TimeoutError:
+                    # Send keepalive every second to maintain connection
+                    current_time = time.time()
+                    if current_time - last_keepalive >= 1.0:
+                        logger.debug("Sending keepalive")
+                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.now().isoformat()})}\n\n"
+                        last_keepalive = current_time
+                    
+                    # Check if swarm is done
+                    if swarm_task.done():
+                        # Give a bit more time for remaining events
+                        await asyncio.sleep(0.5)
+                        if event_queue.empty():
+                            logger.info("Swarm task completed and queue empty, ending stream")
+                            break
+                        
+        except Exception as e:
+            logger.error(f"Streaming failed: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'timestamp': datetime.now().isoformat()})}\n\n"
+        finally:
+            # Clean up
+            try:
+                flusher_task.cancel()
+            except:
+                pass
+            try:
+                global_event_bus.off("*", forward_bus_events)
+            except:
+                pass
+            logger.info("Cleaned up event stream resources")
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable Nginx buffering
+            "X-Content-Type-Options": "nosniff"
+        }
+    )
 
 
 @router.get("/events")
@@ -114,9 +442,10 @@ async def stream_swarm_events(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
+            "X-Accel-Buffering": "no",  # Disable Nginx buffering
+            "X-Content-Type-Options": "nosniff"
         }
     )
 
@@ -466,3 +795,46 @@ async def list_active_executions(
     except Exception as e:
         logger.error(f"Failed to list active executions: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list executions: {str(e)}")
+
+
+# Sequential Execution Control Endpoints
+
+class SequentialControlRequest(BaseModel):
+    execution_id: str
+    enabled: bool
+
+@router.post("/sequential/control")
+async def control_sequential_execution(request: SequentialControlRequest):
+    """Enable or disable sequential hierarchical execution for specific execution"""
+    try:
+        if request.enabled:
+            success = event_swarm_service.enable_sequential_execution(request.execution_id)
+            message = f"Sequential execution enabled for {request.execution_id}"
+        else:
+            success = event_swarm_service.disable_sequential_execution(request.execution_id)
+            message = f"Sequential execution disabled for {request.execution_id}"
+            
+        return {
+            "success": success,
+            "message": message,
+            "execution_id": request.execution_id,
+            "sequential_enabled": request.enabled
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to control sequential execution: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to control sequential execution: {str(e)}")
+
+@router.get("/sequential/status/{execution_id}")
+async def get_sequential_status(execution_id: str):
+    """Get sequential execution status for specific execution"""
+    try:
+        status = event_swarm_service.get_sequential_status(execution_id)
+        return {
+            "execution_id": execution_id,
+            "sequential_status": status
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get sequential status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get sequential status: {str(e)}")

@@ -61,9 +61,10 @@ app = FastAPI(
 
 # Add middlewares - ORDER MATTERS! CORS must be last (processed first)
 # Increase rate limit for development/testing
-app.add_middleware(RateLimitMiddleware, requests_per_minute=200)
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(RequestIdMiddleware)
+# TEMPORARILY DISABLED TO TEST SSE
+# app.add_middleware(RateLimitMiddleware, requests_per_minute=200)
+# app.add_middleware(LoggingMiddleware)
+# app.add_middleware(RequestIdMiddleware)
 # IMPORTANT: Disable GZip for compatibility with Server-Sent Events (SSE)
 # Compressing SSE can introduce buffering and break real-time streaming.
 # If compression is needed elsewhere, add conditional logic to skip SSE paths.
@@ -84,15 +85,26 @@ from starlette.responses import Response, StreamingResponse
 class SelectiveGZipMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
+        
+        # IMPORTANT: Don't process StreamingResponse at all - return immediately
+        if isinstance(response, StreamingResponse):
+            return response
+            
+        # Skip SSE or already encoded
+        if getattr(response, 'media_type', None) == 'text/event-stream':
+            return response
+            
+        # Skip if already encoded
+        if response.headers.get('Content-Encoding'):
+            return response
+            
+        # For non-streaming responses, try to compress
         try:
-            # Skip SSE or already encoded
-            if getattr(response, 'media_type', None) == 'text/event-stream':
+            # Only process regular responses with body_iterator
+            if not hasattr(response, 'body_iterator'):
                 return response
-            if isinstance(response, StreamingResponse):
-                return response
-            if response.headers.get('Content-Encoding'):
-                return response
-            body = b"".join([chunk async for chunk in response.body_iterator]) if hasattr(response, 'body_iterator') else await response.body()
+                
+            body = b"".join([chunk async for chunk in response.body_iterator])
             # Only compress JSON/text larger than threshold
             ctype = response.headers.get('content-type', '')
             if ('application/json' in ctype or 'text/' in ctype) and body and len(body) > 1024:
@@ -106,7 +118,8 @@ class SelectiveGZipMiddleware(BaseHTTPMiddleware):
         except Exception:
             return response
 
-app.add_middleware(SelectiveGZipMiddleware)
+# DISABLED: Breaking SSE streaming
+# app.add_middleware(SelectiveGZipMiddleware)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -116,6 +129,29 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 async def options_handler(full_path: str):
     """Handle OPTIONS requests for CORS preflight"""
     return {"message": "OK"}
+
+# Test SSE endpoint
+@app.get("/test-sse-simple")
+async def test_sse_simple():
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    import json
+    from datetime import datetime
+    
+    async def generate():
+        for i in range(5):
+            yield f"data: {json.dumps({'count': i, 'time': datetime.now().isoformat()})}\n\n"
+            await asyncio.sleep(1)
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 # Health check endpoints
 @app.get("/health")

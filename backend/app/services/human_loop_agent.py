@@ -94,6 +94,18 @@ class HumanLoopAgent(EventAwareAgent):
     async def _process_task(self, event: SwarmEvent) -> str:
         """Enhanced task processing with memory and human interaction"""
         logger.info(f"🤖 HumanLoopAgent {self.name} processing task: {event.data.get('task', 'Unknown')}")
+        
+        # Emit agent.started event
+        try:
+            await event_bus.emit("agent.started", {
+                "agent": self.name,
+                "execution_id": self.execution_id,
+                "task": event.data.get('task', 'Unknown')
+            }, source=self.name)
+            logger.info(f"🚀 EVENT BUS: Emitted agent.started for {self.name}")
+        except Exception as e:
+            logger.error(f"❌ EVENT BUS ERROR for agent.started {self.name}: {e}")
+        
         if self._is_stopped():
             logger.info(f"🛑 HumanLoopAgent {self.name} stop requested; skipping processing")
             return "Stopped by user"
@@ -133,19 +145,54 @@ class HumanLoopAgent(EventAwareAgent):
             return "Stopped by user"
         result = await self._process_task_with_context(event, context)
         
-        # Send completion signal (result already streamed in real-time via callback)
+        # Send completion signal WITHOUT the full output (already streamed chunk by chunk)
+        # This prevents the entire text from appearing twice
         if self.callback_handler:
             logger.info(f"🔄 Agent {self.name} completed with {len(result)} characters")
-            await self.callback_handler(
-                type="agent_completed",
-                agent=self.name,
-                data={
-                    "output": result,
-                    "execution_id": self.execution_id,
-                    "tokens": len(result.split()) if result else 0
-                }
-            )
-        else:
+            try:
+                if asyncio.iscoroutinefunction(self.callback_handler):
+                    # Async callback
+                    await self.callback_handler(
+                        type="agent_completed",
+                        agent=self.name,
+                        data={
+                            # Don't send output - it was already streamed
+                            # "output": result,  # REMOVED to prevent duplication
+                            "execution_id": self.execution_id,
+                            "tokens": len(result.split()) if result else 0,
+                            "completed": True
+                        }
+                    )
+                else:
+                    # Sync callback - call directly
+                    self.callback_handler(
+                        type="agent_completed",
+                        agent=self.name,
+                        data={
+                            # Don't send output - it was already streamed
+                            # "output": result,  # REMOVED to prevent duplication
+                            "execution_id": self.execution_id,
+                            "tokens": len(result.split()) if result else 0,
+                            "completed": True
+                        }
+                    )
+                logger.info(f"✅ STREAMING CALLBACK: Sent agent_completed for {self.name}")
+            except Exception as e:
+                logger.error(f"❌ STREAMING CALLBACK ERROR for {self.name}: {e}")
+        
+        # BACKUP: Also emit via event bus to ensure UI receives the event
+        try:
+            await event_bus.emit("agent.completed", {
+                "agent": self.name,
+                "output": result,
+                "execution_id": self.execution_id,
+                "tokens": len(result.split()) if result else 0
+            }, source=self.name)
+            logger.info(f"🔄 EVENT BUS: Emitted agent.completed for {self.name}")
+        except Exception as e:
+            logger.error(f"❌ EVENT BUS ERROR for {self.name}: {e}")
+        
+        if not self.callback_handler:
             logger.warning(f"⚠️ No callback handler available for completion signal")
         
         # Check if the agent's response indicates they need human input
@@ -824,31 +871,86 @@ IMPORTANT: Work specifically on the original user request about "{original_query
                 
                 # Create streaming callback that captures tokens in real-time
                 def capture_streaming_callback(**kwargs):
-                    """Capture streaming from Strands and relay to our callback"""
+                    """Capture streaming from Strands and relay to our callback
+                    
+                    Based on Strands docs, the callback receives different event types:
+                    - 'data': Text chunk from model (this is what we want for streaming)
+                    - 'event': Raw event from model (contains internal format details)
+                    - 'delta': Raw delta content
+                    - 'current_tool_use': Tool usage information
+                    - Other lifecycle events
+                    
+                    We should ONLY process 'data' for text streaming, not 'event'!
+                    """
                     if self._is_stopped():
                         return
-                    if "data" in kwargs and self.callback_handler:
-                        chunk_data = kwargs["data"]
-                        
-                        # CRITICAL FIX: Add sequence number to maintain order
+                    
+                    # CRITICAL: Only process 'data' field, nothing else
+                    # Ignore 'event', 'delta', and all other fields
+                    if "data" not in kwargs:
+                        # Log what we're ignoring for debugging
+                        ignored_keys = list(kwargs.keys())
+                        if ignored_keys and ignored_keys != ['event']:  # Don't spam logs with 'event' keys
+                            logger.debug(f"🔍 Ignoring non-data event keys: {ignored_keys}")
+                        return
+                    
+                    # Get the text chunk
+                    chunk_text = kwargs.get("data")
+                    if not chunk_text:
+                        return
+                    
+                    # Handle tool usage events separately
+                    if "current_tool_use" in kwargs and kwargs["current_tool_use"].get("name"):
+                        tool_name = kwargs["current_tool_use"]["name"]
+                        logger.debug(f"🔧 Agent {self.name} using tool: {tool_name}")
+                        return  # Don't process tool events as text
+                    
+                    # Process the text chunk
+                    logger.debug(f"🔄 STREAMING: Agent {self.name} chunk: {chunk_text[:50]}...")
+                    
+                    # Process the chunk if we have text and a callback
+                    if chunk_text and self.callback_handler:
                         try:
                             self._chunk_sequence += 1
                             sequence_num = self._chunk_sequence
                             
-                            # Run callback in event loop with sequence number
-                            loop = asyncio.get_event_loop()
-                            if loop.is_running():
-                                asyncio.create_task(self.callback_handler(
+                            # Run callback - check if it's async or sync
+                            if asyncio.iscoroutinefunction(self.callback_handler):
+                                # Async callback
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    asyncio.create_task(self.callback_handler(
+                                        type="text_generation",
+                                        agent=self.name,
+                                        data={
+                                            "chunk": chunk_text, 
+                                            "execution_id": self.execution_id,
+                                            "sequence": sequence_num
+                                        }
+                                    ))
+                            else:
+                                # Sync callback - just call it directly
+                                self.callback_handler(
                                     type="text_generation",
                                     agent=self.name,
                                     data={
-                                        "chunk": chunk_data, 
+                                        "chunk": chunk_text, 
                                         "execution_id": self.execution_id,
-                                        "sequence": sequence_num  # Add sequence for ordering
+                                        "sequence": sequence_num
                                     }
-                                ))
+                                )
                         except Exception as e:
-                            logger.error(f"Streaming callback error: {e}")
+                            logger.error(f"❌ Callback error: {e}")
+                    elif not chunk_text and not self.callback_handler:
+                        logger.warning(f"⚠️ No callback_handler set for agent {self.name}")
+                    elif not chunk_text:
+                        logger.debug(f"🔍 No streaming chunk in kwargs: {kwargs.keys()}")
+                
+                # Check if callback_handler is set before creating the agent
+                if not self.callback_handler:
+                    logger.warning(f"⚠️ WARNING: No callback_handler set for HumanLoopAgent {self.name}")
+                else:
+                    logger.info(f"✅ HumanLoopAgent {self.name} has callback_handler set")
                 
                 # Create agent with streaming callback
                 strands_agent = Agent(

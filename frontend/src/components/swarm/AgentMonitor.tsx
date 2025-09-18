@@ -13,7 +13,8 @@ import {
   CheckCircle,
   Pause,
   RotateCcw,
-  Maximize2
+  Maximize2,
+  Users
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';
@@ -252,86 +253,143 @@ const AgentMonitor: React.FC<AgentMonitorProps> = ({ agents, events, isExecuting
     : thoughts;
 
   return (
-    <Card className={cn(
-      "flex flex-col h-full bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20 border-2 border-blue-200 dark:border-blue-800",
+    <div className={cn(
+      "flex flex-col h-full bg-white dark:bg-gray-800",
       isMaximized && "fixed inset-4 z-50 shadow-2xl",
       className
     )}>
-      <CardHeader className="pb-3 border-b border-blue-200 dark:border-blue-800">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
-            <Brain className="h-5 w-5 text-blue-600" />
-            Agent Monitor
-            <Badge variant="outline" className="ml-2">
-              {agentStatuses.size} Active
-            </Badge>
-          </CardTitle>
-          
+      {/* Header Section */}
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
+            <div className="p-1.5 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg">
+              <Brain className="h-4 w-4 text-white" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                Agent Intelligence Monitor
+              </h3>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                Real-time agent reasoning & decisions
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setAutoScroll(!autoScroll)}
-              className={cn("h-7 px-2", autoScroll && "bg-blue-100 dark:bg-blue-900")}
+              className={cn(
+                "h-6 px-2 text-xs",
+                autoScroll && "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300"
+              )}
             >
-              <RotateCcw className="h-3 w-3 mr-1" />
+              <RotateCcw className={cn(
+                "h-3 w-3 mr-1",
+                autoScroll && "animate-spin"
+              )} />
               Auto
             </Button>
             
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsMaximized(!isMaximized)}
-              className="h-7 px-2"
-            >
-              <Maximize2 className="h-3 w-3" />
-            </Button>
+            {isMaximized && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsMaximized(false)}
+                className="h-6 px-2"
+              >
+                <Maximize2 className="h-3 w-3" />
+              </Button>
+            )}
           </div>
         </div>
 
-        {/* Agent Status Bar */}
-        <div className="flex flex-wrap gap-2 mt-3">
-          <Button
-            variant={selectedAgent === null ? "default" : "outline"}
-            size="sm"
-            onClick={() => setSelectedAgent(null)}
-            className="h-7 px-3 text-xs"
-          >
-            All Agents
-          </Button>
-          {Array.from(agentStatuses.values()).map(agent => (
-            <Button
-              key={agent.name}
-              variant={selectedAgent === agent.name ? "default" : "outline"}
-              size="sm"
-              onClick={() => setSelectedAgent(agent.name)}
-              className="h-7 px-3 text-xs flex items-center gap-1.5"
+        {/* Agent Filter Pills */}
+        {agentStatuses.size > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              onClick={() => setSelectedAgent(null)}
+              className={cn(
+                "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all",
+                selectedAgent === null
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                  : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
+              )}
             >
-              {getStatusIcon(agent.status)}
-              {agent.name}
-              <Badge variant="secondary" className="ml-1 h-4 px-1 text-xs">
-                {agent.thoughtCount}
-              </Badge>
-            </Button>
-          ))}
-        </div>
-      </CardHeader>
+              All
+              <span className={cn(
+                "ml-1 px-1 rounded-full",
+                selectedAgent === null
+                  ? "bg-blue-200 dark:bg-blue-800"
+                  : "bg-gray-200 dark:bg-gray-600"
+              )}>
+                {agentStatuses.size}
+              </span>
+            </button>
+            {Array.from(agentStatuses.values()).map(agent => {
+              const extractRole = (name: string) => {
+                const parts = name.split('_');
+                if (parts.length > 1 && /^[a-f0-9]{8}$/.test(parts[parts.length - 1])) {
+                  return parts.slice(0, -1).join(' ');
+                }
+                return name;
+              };
+              
+              return (
+                <button
+                  key={agent.name}
+                  onClick={() => setSelectedAgent(agent.name)}
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all",
+                    selectedAgent === agent.name
+                      ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                      : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  )}
+                >
+                  {getStatusIcon(agent.status)}
+                  <span className="truncate max-w-[100px]">{extractRole(agent.name)}</span>
+                  {agent.thoughtCount > 0 && (
+                    <span className={cn(
+                      "ml-1 px-1 rounded-full text-[10px]",
+                      selectedAgent === agent.name
+                        ? "bg-blue-200 dark:bg-blue-800"
+                        : "bg-gray-200 dark:bg-gray-600"
+                    )}>
+                      {agent.thoughtCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
-      <CardContent className="flex-1 p-4 overflow-hidden">
+      {/* Content Area */}
+      <div className="flex-1 overflow-hidden">
         <div 
           ref={scrollRef}
-          className="h-full overflow-y-auto space-y-4 pr-2"
-          style={{ maxHeight: 'calc(100vh - 200px)' }}
+          className="h-full overflow-y-auto p-4 space-y-3"
         >
           {filteredThoughts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Eye className="h-12 w-12 text-gray-400 mb-3" />
-              <p className="text-gray-600 dark:text-gray-400 font-medium">
-                No agent thoughts yet
-              </p>
-              <p className="text-sm text-gray-500 mt-1">
-                Agent reasoning and decisions will appear here
-              </p>
+            <div className="flex flex-col items-center justify-center h-full">
+              <div className="relative">
+                <div className="absolute inset-0 bg-gradient-to-br from-blue-400 to-purple-600 rounded-full blur-3xl opacity-20 animate-pulse" />
+                <div className="relative bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 rounded-2xl p-8">
+                  <div className="flex justify-center mb-4">
+                    <div className="p-3 bg-gradient-to-br from-blue-500/10 to-purple-600/10 rounded-xl">
+                      <Brain className="h-8 w-8 text-gray-400" />
+                    </div>
+                  </div>
+                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+                    No Agent Activity Yet
+                  </h4>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[200px]">
+                    Agent thoughts and reasoning will appear here as they process tasks
+                  </p>
+                </div>
+              </div>
             </div>
           ) : (
             filteredThoughts.map(thought => {
@@ -477,8 +535,8 @@ const AgentMonitor: React.FC<AgentMonitorProps> = ({ agents, events, isExecuting
             })
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 };
 

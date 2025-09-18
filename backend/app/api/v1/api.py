@@ -31,7 +31,7 @@ except ImportError as e:
 # Include human-in-the-loop endpoints
 try:
     from app.api.v1.endpoints import human_loop
-    api_router.include_router(human_loop.router, prefix="/event-swarm", tags=["human-loop"])
+    api_router.include_router(human_loop.router, prefix="/human-loop", tags=["human-loop"])
 except ImportError as e:
     print(f"Warning: Could not import human-loop endpoints: {e}")
 api_router.include_router(swarm_dag.router, prefix="/swarm-dag", tags=["swarm-dag"])

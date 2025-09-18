@@ -18,7 +18,7 @@ import TrueSwarmRadix from './pages/TrueSwarmRadix';
 import ToolSettingsV2 from './pages/ToolSettingsV2';
 import SettingsPage from './pages/SettingsPage';
 import VercelResearch from './components/research/VercelResearch';
-import { EventDrivenSwarmInterface } from './components/swarm/EventDrivenSwarmInterface';
+import EventDrivenSwarmInterface from './components/swarm/EventDrivenSwarmInterface';
 import { TrueDynamicSwarmChatInterface } from './components/swarm/TrueDynamicSwarmChatInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';

@@ -56,13 +56,15 @@ class EventBus:
             source=source
         )
         
-        # Check for duplicate events
+        # Check for duplicate events - but allow agent.needed events to pass through
+        # Multiple agents of the same type might be needed
         with self._deduplication_lock:
-            event_signature = f"{event_type}:{hash(str(sorted(data.items())))}"
-            if event_signature in self._processed_events:
-                logger.debug(f"🔄 Duplicate event detected, skipping: {event_type}")
-                return
-            self._processed_events.add(event_signature)
+            if event_type != "agent.needed" and event_type != "specialist.needed":
+                event_signature = f"{event_type}:{hash(str(sorted(data.items())))}"
+                if event_signature in self._processed_events:
+                    logger.debug(f"🔄 Duplicate event detected, skipping: {event_type}")
+                    return
+                self._processed_events.add(event_signature)
         
         async with self._lock:
             self.event_history.append(event)

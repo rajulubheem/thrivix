@@ -28,9 +28,13 @@ try:
 except ImportError:
     # Use our new components
     global_event_bus = event_bus
-    HumanInLoopCoordinator = None
-    DynamicAgentSpawner = None
-    EventAnalyzer = None
+
+# Import sequential controller (optional - only used when enabled)
+try:
+    from app.services.sequential_spawn_controller import get_sequential_controller
+    SEQUENTIAL_CONTROLLER_AVAILABLE = True
+except ImportError:
+    SEQUENTIAL_CONTROLLER_AVAILABLE = False
 from app.schemas.swarm import (
     SwarmExecutionRequest,
     SwarmExecutionResponse,
@@ -94,9 +98,10 @@ std_logger = logging.getLogger(__name__)
 class SwarmEventHooks(HookProvider):
     """Event hooks for Strands agents"""
     
-    def __init__(self, event_bus, agent_name: str):
+    def __init__(self, event_bus, agent_name: str, execution_id: str = None):
         self.event_bus = event_bus
         self.agent_name = agent_name
+        self.execution_id = execution_id
         self.event_analyzer = EventAnalyzer(event_bus) if EventAnalyzer else None
     
     def register_hooks(self, registry: HookRegistry):
@@ -126,12 +131,18 @@ class SwarmEventHooks(HookProvider):
         """Process agent completion and analyze output for events"""
         output = event.response if hasattr(event, 'response') else ""
         
-        # Emit completion event
-        await self.event_bus.emit("agent.completed", {
+        # Emit completion event with execution_id for session isolation
+        event_data = {
             "agent": self.agent_name,
             "output": str(output)[:500],  # Truncate for event
             "timestamp": time.time()
-        }, source=self.agent_name)
+        }
+        
+        # Include execution_id if available for proper session isolation
+        if self.execution_id:
+            event_data["execution_id"] = self.execution_id
+            
+        await self.event_bus.emit("agent.completed", event_data, source=self.agent_name)
         
         # Analyze output for triggered events
         if output and self.event_analyzer:
@@ -172,6 +183,14 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
         else:
             self.event_analyzer = None
             
+        # Initialize optional sequential spawn controller
+        if SEQUENTIAL_CONTROLLER_AVAILABLE:
+            self.sequential_controller = get_sequential_controller()
+            self.sequential_enabled = False  # Start disabled, can be enabled per execution
+        else:
+            self.sequential_controller = None
+            self.sequential_enabled = False
+            
         self.active_executions = {}  # Track active executions
         self.agent_cancellations = {}  # execution_id -> set(agent_names)
         self.agent_timeouts = {}  # execution_id -> default seconds
@@ -201,6 +220,32 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
         self.agent_timeout_overrides[execution_id][agent_name] = max(5, int(seconds))
         logger.info(f"⏱️ Set timeout for {agent_name} in {execution_id} to {seconds}s")
         return True
+    
+    def enable_sequential_execution(self, execution_id: str):
+        """Enable sequential hierarchical execution for specific execution ID"""
+        if self.sequential_controller:
+            self.sequential_controller.enable_for_execution(execution_id)
+            logger.info(f"🔄 Sequential execution ENABLED for {execution_id}")
+            return True
+        else:
+            logger.warning("🔄 Sequential controller not available")
+            return False
+    
+    def disable_sequential_execution(self, execution_id: str):
+        """Disable sequential execution for specific execution ID"""
+        if self.sequential_controller:
+            self.sequential_controller.disable_for_execution(execution_id)
+            logger.info(f"🔄 Sequential execution DISABLED for {execution_id}")
+            return True
+        else:
+            return False
+    
+    def get_sequential_status(self, execution_id: str):
+        """Get sequential execution status for execution ID"""
+        if self.sequential_controller:
+            return self.sequential_controller.get_execution_status(execution_id)
+        else:
+            return {"enabled": False, "available": False}
     
     def _setup_event_handlers(self):
         """Set up core event handlers"""
@@ -276,13 +321,12 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             # Calculate session_id early for consistency
             session_id = getattr(request, 'session_id', None) or execution_id
             
-            # Emit task started event with streaming callback and session_id
+            # Emit task started event with session_id (don't include callback in event data)
             await self.event_bus.emit("task.started", {
                 "task": request.task,
                 "execution_id": execution_id,
                 "session_id": session_id,
-                "user_id": user_id,
-                "streaming_callback": callback_handler  # Pass callback to agents
+                "user_id": user_id
             }, source="system")
             
             # Initialize with smart agent selection if needed
@@ -413,7 +457,7 @@ Example: [{{"role": "researcher", "reason": "need to gather requirements"}}]"""
             
             # Add event hooks if available
             if STRANDS_AVAILABLE and HOOKS_AVAILABLE and hasattr(agent, 'hooks'):
-                event_hooks = SwarmEventHooks(self.event_bus, config.name)
+                event_hooks = SwarmEventHooks(self.event_bus, config.name, execution_id)
                 agent.hooks.add_hook(event_hooks)
             
             strands_agents.append(agent)
@@ -458,31 +502,56 @@ EVENT-DRIVEN COORDINATION:
         logger.info(f"🔗 Using execution_id: {actual_execution_id} (session_id: {session_id})")
         
         # Initialize factory for this execution - use new instance with human loop enabled
-        factory = DynamicAgentFactory(human_loop_enabled=True, execution_id=actual_execution_id)
+        # IMPORTANT: pass streaming callback so HumanLoopAgent can forward tokens and completion
+        logger.info(f"🔍 Creating DynamicAgentFactory with callback_handler type={type(callback_handler).__name__}, is_callable={callable(callback_handler) if callback_handler else False}")
+        factory = DynamicAgentFactory(human_loop_enabled=True, execution_id=actual_execution_id, callback_handler=callback_handler)
+        logger.info(f"✅ DynamicAgentFactory created with callback_handler type: {type(factory.callback_handler).__name__}")
+        
+        # Sequential execution is DISABLED to allow parallel agent execution
+        # The frontend will handle proper display of multiple agent outputs
+        logger.info(f"Sequential execution disabled (parallel mode) for {actual_execution_id}")
         
         # Set up event streaming
         async def stream_event(event: SwarmEvent):
             """Stream events to frontend"""
             if callback_handler:
-                # Map event types to streaming callback format
-                event_type = event.type
-                if event.type == "agent.started":
-                    event_type = "agent_started"
-                elif event.type == "agent.completed":
-                    event_type = "agent_completed"
-                elif event.type == "task.complete":
-                    event_type = "task_complete"
-                
-                await callback_handler(
-                    type=event_type,
-                    agent=event.source,
-                    content=json.dumps(event.data),
-                    data=event.data,
-                    timestamp=datetime.now().isoformat()
-                )
+                # Keep original event type for frontend compatibility
+                # The frontend expects exact event types like "agent.spawned", "agent.needed", etc.
+                try:
+                    if asyncio.iscoroutinefunction(callback_handler):
+                        # Async callback
+                        await callback_handler(
+                            type=event.type,  # Use original event type
+                            agent=event.source,
+                            content=json.dumps(event.data) if event.data else "",
+                            data=event.data,
+                            timestamp=datetime.now().isoformat()
+                        )
+                    else:
+                        # Sync callback - call directly
+                        callback_handler(
+                            type=event.type,  # Use original event type
+                            agent=event.source,
+                            content=json.dumps(event.data) if event.data else "",
+                            data=event.data,
+                            timestamp=datetime.now().isoformat()
+                        )
+                except Exception as e:
+                    logger.error(f"Callback error in stream_event: {e}")
         
-        # Register event streamer for all events
-        event_bus.on("*", lambda e: asyncio.create_task(stream_event(e)))
+        # Register event streamer for all events on BOTH buses (prevent split-bus issues)
+        # self.event_bus comes from event_system (global_event_bus) when available
+        try:
+            self.event_bus.on("*", lambda e: asyncio.create_task(stream_event(e)))
+        except Exception:
+            pass
+        # Also listen to app.services.event_bus.event_bus if it's a different instance
+        try:
+            from app.services.event_bus import event_bus as local_bus
+            if local_bus is not self.event_bus:
+                local_bus.on("*", lambda e: asyncio.create_task(stream_event(e)))
+        except Exception:
+            pass
         
         # Emit task start event with session_id for human-loop compatibility
         await event_bus.emit(
@@ -502,30 +571,44 @@ EVENT-DRIVEN COORDINATION:
             logger.info(f"Spawning first agent: {first_role}")
             agent = await factory.spawn_agent(first_role)
             
-            # Activate the first agent with the task
-            if agent:
-                logger.info(f"Activating agent {agent.name} with task")
-                await agent.activate(SwarmEvent(
-                    type="task.started",
-                    data={"task": task, "message": task, "session_id": session_id, "execution_id": execution_id},
-                    source="system"
-                ))
-                logger.info(f"Agent {agent.name} activated")
-            else:
-                logger.error("Failed to create first agent")
-                return SwarmExecutionResponse(
-                    status=ExecutionStatus.FAILED,
-                    result="Failed to spawn initial agent",
-                    execution_id=execution_id,
-                    session_id=session_id,
-                    agents_used=[],
-                    total_time=time.time() - start_time
-                )
+            # Queue remaining agents for sequential spawning if enabled
+            if len(needed_roles) > 1 and SEQUENTIAL_CONTROLLER_AVAILABLE:
+                controller = get_sequential_controller()
+                if actual_execution_id in controller.enabled_executions:
+                    logger.info(f"🔄 Queueing {len(needed_roles) - 1} additional agents for sequential execution")
+                    # Emit agent.needed events for remaining agents (they'll be queued by controller)
+                    for role_info in needed_roles[1:]:
+                        await self.event_bus.emit("agent.needed", {
+                            "role": role_info.get("role"),
+                            "reason": role_info.get("reason"),
+                            "priority": role_info.get("priority", "medium"),
+                            "execution_id": actual_execution_id,
+                            "context": f"Initial task analysis identified need for {role_info.get('role')}"
+                        }, source="system")
         else:
-            logger.error("No roles identified for task")
+            # No specific roles needed - create a general conversational agent for simple interactions
+            logger.info("No specialized agents needed, creating general conversational agent")
+            first_role = {
+                "role": "general_conversational_agent", 
+                "reason": "Handle simple interactions and conversations", 
+                "priority": "high"
+            }
+            agent = await factory.spawn_agent(first_role)
+        
+        # Activate the first agent with the task
+        if agent:
+            logger.info(f"Activating agent {agent.name} with task")
+            await agent.activate(SwarmEvent(
+                type="task.started",
+                data={"task": task, "message": task, "session_id": session_id, "execution_id": execution_id},
+                source="system"
+            ))
+            logger.info(f"Agent {agent.name} activated")
+        else:
+            logger.error("Failed to create first agent")
             return SwarmExecutionResponse(
                 status=ExecutionStatus.FAILED,
-                result="Could not determine required agent roles",
+                result="Failed to spawn initial agent",
                 execution_id=execution_id,
                 session_id=session_id,
                 agents_used=[],
@@ -537,9 +620,11 @@ EVENT-DRIVEN COORDINATION:
         task_completed = False
         timeout_counter = 0
         processed_completions = set()  # Track which agent completions we've already processed
+        max_agents = 10  # Limit number of agents to prevent overwhelming
+        agents_spawned = 1  # Already spawned first agent
         
         while not task_completed:
-            await asyncio.sleep(0.5)  # Check every 500ms
+            await asyncio.sleep(0.2)  # Check every 200ms for faster response
             timeout_counter += 1
             
             # Check if execution was stopped by user
@@ -551,8 +636,39 @@ EVENT-DRIVEN COORDINATION:
                     break
             
             # Check if task is complete
-            recent_events = event_bus.get_recent_events(20)  # Check more events
+            # Merge recent events from both buses and de-duplicate by event id
+            def _merged_recent_events(limit: int = 50):
+                seen = set()
+                merged = []
+                try:
+                    evs1 = self.event_bus.get_recent_events(limit) if hasattr(self.event_bus, 'get_recent_events') else []
+                except Exception:
+                    evs1 = []
+                try:
+                    from app.services.event_bus import event_bus as local_bus
+                    evs2 = local_bus.get_recent_events(limit) if hasattr(local_bus, 'get_recent_events') else []
+                except Exception:
+                    evs2 = []
+                for e in (evs1 + evs2):
+                    if getattr(e, 'id', None) and e.id in seen:
+                        continue
+                    seen.add(getattr(e, 'id', str(len(seen)+1)))
+                    merged.append(e)
+                return merged
+
+            recent_events = _merged_recent_events(50)
             
+            # CHECK TASK COMPLETION FIRST before processing any new agent requests
+            for event in recent_events:
+                if event.type == "task.complete":
+                    logger.info("✅ Task marked as complete by agent - stopping immediately")
+                    task_completed = True
+                    break
+            
+            # If task is complete, don't process any more events
+            if task_completed:
+                break
+                
             for event in recent_events:
                 # Forward agent completions to streaming callback
                 if (event.type == "agent.completed" and 
@@ -563,53 +679,97 @@ EVENT-DRIVEN COORDINATION:
                     output = event.data.get("output", "")
                     agent_name = event.data.get("agent", "unknown")
                     
-                    # Send the agent output as streaming chunks
-                    if output:
-                        std_logger.info(f"🔄 STREAMING CALLBACK: Forwarding agent.completed to streaming callback for {agent_name}")
-                        std_logger.info(f"🔄 OUTPUT LENGTH: {len(output)} characters")
-                        
-                        await callback_handler(
-                            type="text_generation",
-                            agent=agent_name,
-                            data={"chunk": output, "execution_id": execution_id}
-                        )
-                        
-                        std_logger.info(f"✅ STREAMING CALLBACK: text_generation sent")
-                        
-                        await callback_handler(
-                            type="agent_completed",
-                            agent=agent_name,
-                            data={
-                                "output": output,
-                                "execution_id": execution_id,
-                                "tokens": len(output.split()) if output else 0
-                            }
-                        )
-                        
-                        std_logger.info(f"✅ STREAMING CALLBACK: agent_completed sent")
-            
-            for event in recent_events:
-                if event.type == "task.complete":
-                    logger.info("✅ Task marked as complete by agent")
-                    task_completed = True
-                    break
+                    # Don't send the output again - it was already streamed chunk by chunk
+                    # Just send the completion signal
+                    std_logger.info(f"🔄 STREAMING CALLBACK: Agent {agent_name} completed, sending completion signal only")
                     
-                # Check if analyzer explicitly says the ENTIRE SWARM TASK is complete (not just analysis)
-                elif event.type == "agent.completed" and event.source.startswith("analyzer"):
-                    output = event.data.get("output", "")
-                    # Only consider it complete if analyzer explicitly says entire task/project is done
-                    # AND there are no pending agent spawn requests
-                    if ("entire task complete" in output.lower() or 
-                        "project complete" in output.lower() or
-                        "swarm task complete" in output.lower()):
-                        logger.info("✅ Entire task completion detected from analyzer output")
-                        await event_bus.emit("task.complete", {
-                            "agent": event.source,
-                            "reason": "analyzer_full_completion_detected",
-                            "final_output": output
-                        }, source="system")
-                        task_completed = True
-                        break
+                    await callback_handler(
+                        type="agent_completed",
+                        agent=agent_name,
+                        data={
+                            # Don't include output - already streamed
+                            "execution_id": execution_id,
+                            "tokens": len(output.split()) if output else 0,
+                            "completed": True
+                        }
+                    )
+                    
+                    std_logger.info(f"✅ STREAMING CALLBACK: agent_completed signal sent (no duplicate content)")
+            
+            # Only process agent spawn requests if task is not complete
+            if not task_completed:
+                for event in recent_events:
+                    # Handle agent.needed events directly in the loop
+                    if event.type == "agent.needed" and event.id not in processed_completions:
+                        processed_completions.add(event.id)
+                        role = event.data.get("role")
+                        # Also track processed roles to avoid duplicates
+                        role_key = f"{role}:{event.data.get('reason', '')}"
+                        if role and role_key not in processed_completions and agents_spawned < max_agents:
+                            processed_completions.add(role_key)
+                            agents_spawned += 1
+                            logger.info(f"🔧 Spawning requested agent {agents_spawned}/{max_agents}: {role}")
+                            
+                            # Check if this is a sequential execution that was already handled by the controller
+                            is_sequential = event.data.get("sequential", False)
+                            if is_sequential:
+                                # Sequential controller already handled this - skip duplicate spawning
+                                logger.info(f"🔄 Skipping duplicate spawn for sequential agent: {role}")
+                                continue
+                            
+                            # Create task to spawn and execute agent asynchronously
+                            async def execute_agent(role, context):
+                                # Create a new factory instance for each agent to avoid callback conflicts
+                                agent_factory = DynamicAgentFactory(
+                                    human_loop_enabled=True, 
+                                    execution_id=actual_execution_id, 
+                                    callback_handler=callback_handler
+                                )
+                                agent = await agent_factory.spawn_agent(role, {"context": context})
+                                if agent:
+                                    logger.info(f"🚀 Executing spawned agent: {agent.name}")
+                                    try:
+                                        result = await self._stream_agent_execution(
+                                            agent=agent,
+                                            task=task,
+                                            previous_work=[],
+                                            execution_id=actual_execution_id,
+                                            callback_handler=callback_handler
+                                        )
+                                        logger.info(f"✅ Agent {agent.name} completed with output length: {len(result.get('output', ''))}")
+                                    except Exception as e:
+                                        logger.error(f"❌ Agent {agent.name} failed: {e}")
+                            
+                            # Check if sequential execution is enabled for this execution_id
+                            if SEQUENTIAL_CONTROLLER_AVAILABLE:
+                                controller = get_sequential_controller()
+                                if actual_execution_id in controller.enabled_executions:
+                                    # Sequential mode: execute immediately (controller already queued it)
+                                    logger.info(f"🔄 Sequential mode: executing agent {role} immediately")
+                                    await execute_agent(role, event.data.get("context", ""))
+                                else:
+                                    # Parallel mode: create async task
+                                    asyncio.create_task(execute_agent(role, event.data.get("context", "")))
+                            else:
+                                # No controller available, use parallel mode
+                                asyncio.create_task(execute_agent(role, event.data.get("context", "")))
+                    
+                    # Check if analyzer explicitly says the ENTIRE SWARM TASK is complete (not just analysis)
+                    elif event.type == "agent.completed" and event.source.startswith("analyzer"):
+                        output = event.data.get("output", "")
+                        # Only consider it complete if analyzer explicitly says entire task/project is done
+                        # AND there are no pending agent spawn requests
+                        if ("entire task complete" in output.lower() or 
+                            "project complete" in output.lower() or
+                            "swarm task complete" in output.lower()):
+                            logger.info("✅ Entire task completion detected from analyzer output")
+                            await self.event_bus.emit("task.complete", {
+                                "agent": event.source,
+                                "reason": "analyzer_full_completion_detected",
+                                "final_output": output
+                            }, source="system")
+                            task_completed = True
+                            break
             
             if task_completed:
                 break
@@ -619,7 +779,7 @@ EVENT-DRIVEN COORDINATION:
             if len(active_agents) > 0:
                 all_idle = all(agent.state == "idle" for agent in active_agents.values())
                 
-                if all_idle and timeout_counter > 10:  # After 5 seconds of idle
+                if all_idle and timeout_counter > 50:  # After 10 seconds of idle (50 * 0.2s)
                     # Check if we have any completed work AND no pending agent spawn requests
                     completed_events = [
                         e for e in recent_events 
@@ -631,7 +791,7 @@ EVENT-DRIVEN COORDINATION:
                     
                     if len(completed_events) > 0 and len(spawn_requests) == 0:
                         logger.info("All agents idle with completed work and no pending spawn requests - marking task complete")
-                        await event_bus.emit("task.complete", {
+                        await self.event_bus.emit("task.complete", {
                             "reason": "all_agents_idle_with_work_no_pending_requests",
                             "completed_agents": len(completed_events)
                         }, source="system")
@@ -639,13 +799,13 @@ EVENT-DRIVEN COORDINATION:
                         break
                     elif len(spawn_requests) > 0:
                         logger.info(f"All agents idle but have {len(spawn_requests)} pending spawn requests - continuing execution")
-                    elif timeout_counter > 40:  # After 20 seconds
+                    elif timeout_counter > 300:  # After 60 seconds (300 * 0.2s)
                         logger.warning("Agents idle too long without substantial work")
                         break
         
         if task_completed:
-            # Compile results
-            final_result = self._compile_event_results(factory)
+            # Compile results with session isolation
+            final_result = self._compile_event_results(factory, execution_id)
             logger.info(f"Task completed successfully. Result length: {len(final_result)}")
             
             return SwarmExecutionResponse(
@@ -659,7 +819,7 @@ EVENT-DRIVEN COORDINATION:
         else:
             # Timeout or failure
             logger.warning(f"Execution ended: timeout_counter={timeout_counter}, elapsed={time.time() - start_time}")
-            partial_result = self._compile_event_results(factory)
+            partial_result = self._compile_event_results(factory, execution_id)
             
             return SwarmExecutionResponse(
                 status=ExecutionStatus.FAILED,
@@ -670,16 +830,27 @@ EVENT-DRIVEN COORDINATION:
                 total_time=time.time() - start_time
             )
     
-    def _compile_event_results(self, factory: DynamicAgentFactory) -> str:
-        """Compile results from event-driven execution"""
+    def _compile_event_results(self, factory: DynamicAgentFactory, execution_id: str = None) -> str:
+        """Compile results from event-driven execution with proper session isolation"""
         results = []
         
-        # Get outputs from event history
-        for event in event_bus.get_recent_events(100):
+        # Get recent events from the current execution
+        all_events = event_bus.get_recent_events(50)  # Reduced to get more recent events
+        
+        # Filter for agent.completed events and use factory's active agents for session isolation
+        factory_agent_names = set(factory.active_agents.keys()) if factory else set()
+        
+        for event in all_events:
             if event.type == "agent.completed":
+                agent = event.data.get("agent", "Unknown")
                 output = event.data.get("output", "")
+                
+                # Use factory's active agents for session isolation instead of execution_id
+                # This ensures we only get results from agents in THIS execution
+                if factory_agent_names and agent not in factory_agent_names:
+                    continue  # Skip events from agents not in this execution
+                    
                 if output:
-                    agent = event.data.get("agent", "Unknown")
                     results.append(f"[{agent}]: {output}")
         
         return "\n\n".join(results) if results else "No outputs generated"
@@ -935,60 +1106,106 @@ EVENT-DRIVEN COORDINATION:
                     model=model
                 )
                 
-                # Execute with TRUE streaming via async iterator
+                # Execute with Strands streaming and suppress OpenTelemetry context errors
+                result_output = ""
+                sequence = 0
+                start_time = time.time()
+                
+                # Temporarily suppress OpenTelemetry context errors during stream processing
+                import logging
+                import warnings
+                import contextlib
+                
+                @contextlib.contextmanager
+                def suppress_otel_warnings():
+                    # Suppress specific OpenTelemetry context errors
+                    otel_logger = logging.getLogger("opentelemetry.context")
+                    original_level = otel_logger.level
+                    otel_logger.setLevel(logging.CRITICAL)
+                    
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", message=".*was created in a different Context.*")
+                        try:
+                            yield
+                        finally:
+                            otel_logger.setLevel(original_level)
+                
                 try:
-                    result_output = ""
-                    sequence = 0
-                    start_time = time.time()
-                    async for evt in strands_agent.stream_async(full_task):
-                        # Check cancellation or timeout
-                        if execution_id in self.agent_cancellations and agent.name in self.agent_cancellations[execution_id]:
-                            logger.info(f"🛑 Agent {agent.name} cancelled in execution {execution_id}")
-                            break
-                        # Determine effective timeout
-                        eff_to = self.agent_timeouts.get(execution_id, 90)
-                        if execution_id in self.agent_timeout_overrides:
-                            eff_to = self.agent_timeout_overrides[execution_id].get(agent.name, eff_to)
-                        if time.time() - start_time > eff_to:
-                            logger.info(f"⏱️ Agent {agent.name} timed out in execution {execution_id}")
-                            break
-                        if "data" in evt:
-                            chunk = evt["data"]
-                            result_output += chunk
-                            if callback_handler and chunk:
-                                await callback_handler(
-                                    type="text_generation",
-                                    agent=agent.name,
-                                    data={
-                                        "chunk": chunk,
-                                        "execution_id": execution_id,
-                                        "sequence": sequence
-                                    }
-                                )
-                                sequence += 1
-                        elif "current_tool_use" in evt:
-                            tool_info = evt["current_tool_use"]
-                            tool_name = tool_info.get("name", "")
-                            if callback_handler and tool_name:
-                                await callback_handler(
-                                    type="tool_call",
-                                    agent=agent.name,
-                                    data={
-                                        "tool": tool_name,
-                                        "parameters": tool_info.get("input", {})
-                                    }
-                                )
-                        elif "result" in evt:
-                            res = evt["result"]
-                            if hasattr(res, 'content') and res.content:
-                                result_output = res.content
+                    with suppress_otel_warnings():
+                        async for evt in strands_agent.stream_async(full_task):
+                            # Check cancellation or timeout
+                            if execution_id in self.agent_cancellations and agent.name in self.agent_cancellations[execution_id]:
+                                logger.info(f"🛑 Agent {agent.name} cancelled in execution {execution_id}")
+                                break
+                            # Determine effective timeout
+                            eff_to = self.agent_timeouts.get(execution_id, 90)
+                            if execution_id in self.agent_timeout_overrides:
+                                eff_to = self.agent_timeout_overrides[execution_id].get(agent.name, eff_to)
+                            if time.time() - start_time > eff_to:
+                                logger.info(f"⏱️ Agent {agent.name} timed out in execution {execution_id}")
+                                break
+                            
+                            # Process different event types
+                            if "data" in evt:
+                                chunk = evt["data"]
+                                result_output += chunk
+                                if callback_handler and chunk:
+                                    await callback_handler(
+                                        type="text_generation",
+                                        agent=agent.name,
+                                        data={
+                                            "chunk": chunk,
+                                            "execution_id": execution_id,
+                                            "sequence": sequence
+                                        }
+                                    )
+                                    sequence += 1
+                            elif "event" in evt:
+                                # Handle Anthropic-style event envelopes
+                                try:
+                                    ev = evt.get("event") or {}
+                                    delta = (ev.get("contentBlockDelta") or {}).get("delta") or {}
+                                    text = delta.get("text")
+                                    if text:
+                                        result_output += text
+                                        if callback_handler:
+                                            await callback_handler(
+                                                type="text_generation",
+                                                agent=agent.name,
+                                                data={
+                                                    "chunk": text,
+                                                    "execution_id": execution_id,
+                                                    "sequence": sequence
+                                                }
+                                            )
+                                            sequence += 1
+                                except Exception:
+                                    pass
+                            elif "current_tool_use" in evt:
+                                tool_info = evt["current_tool_use"]
+                                tool_name = tool_info.get("name", "")
+                                if callback_handler and tool_name:
+                                    await callback_handler(
+                                        type="tool_call",
+                                        agent=agent.name,
+                                        data={
+                                            "tool": tool_name,
+                                            "parameters": tool_info.get("input", {})
+                                        }
+                                    )
+                            elif "result" in evt:
+                                res = evt["result"]
+                                if hasattr(res, 'content') and res.content:
+                                    result_output = res.content
+                                    
                 except Exception as api_error:
-                    logger.error(f"Strands stream_async failed for {agent.name}: {api_error}")
-                    # Fall back to simple run if streaming fails
+                    logger.error(f"Strands streaming failed for {agent.name}: {api_error}")
+                    # Fall back to simple run if streaming fails completely
                     try:
                         result = await strands_agent.run(full_task)
                         result_output = getattr(result, 'content', str(result))
-                    except Exception:
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback also failed for {agent.name}: {fallback_error}")
                         result_output = f"Completed analysis by {agent.name}: {task}"
             
             # Stream the final result
