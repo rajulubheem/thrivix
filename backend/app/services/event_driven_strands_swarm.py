@@ -16,6 +16,7 @@ from app.services.strands_session_service import get_strands_session_service
 from app.services.event_bus import event_bus, SwarmEvent
 from app.services.event_aware_agent import EventAwareAgent, AgentCapabilities
 from app.services.dynamic_agent_factory import DynamicAgentFactory
+from app.services.agent_output_queue import get_output_queue, reset_output_queue
 
 # Try to import existing event_system components if available
 try:
@@ -501,14 +502,33 @@ EVENT-DRIVEN COORDINATION:
         actual_execution_id = session_id if session_id else execution_id
         logger.info(f"🔗 Using execution_id: {actual_execution_id} (session_id: {session_id})")
         
-        # Initialize factory for this execution - use new instance with human loop enabled
-        # IMPORTANT: pass streaming callback so HumanLoopAgent can forward tokens and completion
-        logger.info(f"🔍 Creating DynamicAgentFactory with callback_handler type={type(callback_handler).__name__}, is_callable={callable(callback_handler) if callback_handler else False}")
-        factory = DynamicAgentFactory(human_loop_enabled=True, execution_id=actual_execution_id, callback_handler=callback_handler)
-        logger.info(f"✅ DynamicAgentFactory created with callback_handler type: {type(factory.callback_handler).__name__}")
+        # PARALLEL STREAMING: Direct callback without queue bottleneck
+        # Each agent streams directly to the frontend
+        async def direct_streaming_callback(**kwargs):
+            """Direct parallel streaming - no queue, no waiting"""
+            event_type = kwargs.get("type")
+            agent_name = kwargs.get("agent")
+            data = kwargs.get("data", {})
+            
+            # Forward ALL events directly to SSE for parallel streaming
+            if callback_handler:
+                if asyncio.iscoroutinefunction(callback_handler):
+                    await callback_handler(**kwargs)
+                else:
+                    callback_handler(**kwargs)
+            
+            # Log for debugging
+            if event_type == "text_generation":
+                chunk = data.get("chunk", "")
+                if chunk:
+                    logger.debug(f"Direct streaming from {agent_name}: {len(chunk)} chars")
+        
+        # Initialize factory with DIRECT PARALLEL callback
+        logger.info(f"🔍 Creating DynamicAgentFactory with PARALLEL streaming callback")
+        factory = DynamicAgentFactory(human_loop_enabled=True, execution_id=actual_execution_id, callback_handler=direct_streaming_callback)
+        logger.info(f"✅ DynamicAgentFactory created with PARALLEL streaming callback")
         
         # Sequential execution is DISABLED to allow parallel agent execution
-        # The frontend will handle proper display of multiple agent outputs
         logger.info(f"Sequential execution disabled (parallel mode) for {actual_execution_id}")
         
         # Set up event streaming
@@ -719,11 +739,12 @@ EVENT-DRIVEN COORDINATION:
                             
                             # Create task to spawn and execute agent asynchronously
                             async def execute_agent(role, context):
-                                # Create a new factory instance for each agent to avoid callback conflicts
+                                # Use the same main_queued_callback for consistency
+                                # Create a new factory instance with the main queued callback
                                 agent_factory = DynamicAgentFactory(
                                     human_loop_enabled=True, 
                                     execution_id=actual_execution_id, 
-                                    callback_handler=callback_handler
+                                    callback_handler=main_queued_callback
                                 )
                                 agent = await agent_factory.spawn_agent(role, {"context": context})
                                 if agent:

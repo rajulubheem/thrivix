@@ -45,7 +45,7 @@ class AgentOutputQueue:
         self.streaming_queue: deque = deque()  # Queue of agent names waiting to stream
         self.current_streaming_agent: Optional[str] = None
         self.global_callback: Optional[Callable] = None
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._stream_task: Optional[asyncio.Task] = None
         
     def set_global_callback(self, callback: Callable):
@@ -53,9 +53,36 @@ class AgentOutputQueue:
         self.global_callback = callback
         logger.info("Global callback set for output queue")
         
+    async def _get_lock(self) -> asyncio.Lock:
+        """Get or create the lock in the current event loop context"""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop, create a new lock
+            self._lock = asyncio.Lock()
+            return self._lock
+            
+        # Check if we have a lock and if it's bound to the current loop
+        if self._lock is not None:
+            try:
+                # Try to check if the lock is bound to the current loop
+                lock_loop = self._lock._loop if hasattr(self._lock, '_loop') else None
+                if lock_loop is not None and lock_loop != current_loop:
+                    # Lock is bound to a different loop, recreate it
+                    self._lock = asyncio.Lock()
+            except:
+                # If there's any issue checking, recreate the lock
+                self._lock = asyncio.Lock()
+        else:
+            # No lock exists, create one
+            self._lock = asyncio.Lock()
+            
+        return self._lock
+        
     async def add_agent(self, agent_name: str, execution_id: str):
         """Register a new agent for output queueing"""
-        async with self._lock:
+        lock = await self._get_lock()
+        async with lock:
             if agent_name not in self.agent_buffers:
                 self.agent_buffers[agent_name] = AgentOutputBuffer(
                     agent_name=agent_name,
@@ -70,19 +97,37 @@ class AgentOutputQueue:
     
     async def add_chunk(self, agent_name: str, chunk: str, execution_id: str):
         """Add a chunk from an agent to its buffer"""
-        async with self._lock:
-            # Auto-register agent if not exists
-            if agent_name not in self.agent_buffers:
-                await self.add_agent(agent_name, execution_id)
-                
-            buffer = self.agent_buffers.get(agent_name)
-            if buffer and not buffer.is_complete:
-                buffer.chunks.append(chunk)
-                logger.debug(f"Added chunk ({len(chunk)} chars) from {agent_name}")
+        try:
+            lock = await self._get_lock()
+            async with lock:
+                # Auto-register agent if not exists
+                if agent_name not in self.agent_buffers:
+                    logger.info(f"Auto-registering agent {agent_name} in add_chunk")
+                    # Don't use await here since we're already in the lock
+                    self.agent_buffers[agent_name] = AgentOutputBuffer(
+                        agent_name=agent_name,
+                        execution_id=execution_id
+                    )
+                    self.streaming_queue.append(agent_name)
+                    
+                    # Start streaming if this is the first agent
+                    if not self.current_streaming_agent and not self._stream_task:
+                        logger.info(f"Starting stream loop for first agent: {agent_name}")
+                        self._stream_task = asyncio.create_task(self._stream_loop())
+                    else:
+                        logger.debug(f"Stream loop already running or current agent exists")
+                    
+                buffer = self.agent_buffers.get(agent_name)
+                if buffer and not buffer.is_complete:
+                    buffer.chunks.append(chunk)
+                    logger.debug(f"Added chunk ({len(chunk)} chars) from {agent_name}, buffer now has {len(buffer.chunks)} chunks")
+        except Exception as e:
+            logger.error(f"Error in add_chunk for {agent_name}: {e}", exc_info=True)
     
     async def mark_agent_complete(self, agent_name: str):
         """Mark an agent as complete"""
-        async with self._lock:
+        lock = await self._get_lock()
+        async with lock:
             if agent_name in self.agent_buffers:
                 self.agent_buffers[agent_name].is_complete = True
                 logger.info(f"Agent {agent_name} marked as complete")
@@ -93,9 +138,11 @@ class AgentOutputQueue:
     
     async def _stream_loop(self):
         """Main streaming loop - streams one agent at a time"""
+        logger.info("Starting output queue stream loop")
         while True:
             try:
-                async with self._lock:
+                lock = await self._get_lock()
+                async with lock:
                     # Find next agent to stream
                     if not self.current_streaming_agent:
                         # Find next agent with chunks to stream
@@ -120,11 +167,14 @@ class AgentOutputQueue:
                             # Send chunks to callback
                             if chunks_to_stream and self.global_callback:
                                 combined_chunk = "".join(chunks_to_stream)
+                                logger.info(f"Sending {len(combined_chunk)} chars from {self.current_streaming_agent} to callback")
                                 await self._send_to_callback(
                                     self.current_streaming_agent,
                                     combined_chunk,
                                     buffer.execution_id
                                 )
+                            elif chunks_to_stream and not self.global_callback:
+                                logger.warning(f"Have chunks to stream but no global callback set!")
                         
                         # Check if agent is done
                         if buffer and buffer.is_complete and not buffer.chunks:
