@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 class ControlledSwarmService:
     """Event-driven swarm with strict controls and limits"""
     
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict = None, timeout_provider=None):
         # Use user-provided config or defaults
         config = config or {}
+        self.timeout_provider = timeout_provider  # Optional callable to get agent timeouts
         
         self.pool_manager = AgentPoolManager(
             max_concurrent_agents=config.get("max_concurrent_agents", 3),
@@ -422,13 +423,26 @@ class ControlledSwarmService:
             logger.info(f"🔗🤖 Creating HumanLoopAgent with execution_id: {effective_execution_id} (session_id: {session_id}, original: {execution_id})")
             logger.info(f"🔗🤖 HumanLoopAgent config: role={role}, enable_human_loop={self.enable_human_loop}")
             
+            # Try to get timeout from provider if available
+            agent_timeout = 120.0  # Default
+            if self.timeout_provider and callable(self.timeout_provider):
+                try:
+                    # Get timeout for this agent using the provider
+                    timeout = self.timeout_provider(effective_execution_id, f"{role}_{agent_id[:8]}")
+                    if timeout:
+                        agent_timeout = timeout
+                        logger.info(f"⏱️ Using timeout {agent_timeout}s from provider for {role}")
+                except Exception as e:
+                    logger.debug(f"Could not get timeout from provider: {e}")
+            
             agent = HumanLoopAgent(
                 name=f"{role}_{agent_id[:8]}",
                 role=role,
                 system_prompt=system_prompt,
                 capabilities=capabilities,
                 execution_id=effective_execution_id,
-                memory_store=self.memory_store
+                memory_store=self.memory_store,
+                agent_timeout=agent_timeout
             )
             # Set the callback handler for streaming output
             agent.callback_handler = callback_handler

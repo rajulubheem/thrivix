@@ -87,9 +87,15 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const isExecutingRef = useRef<boolean>(false);
   const lastStartedAgentRef = useRef<string | null>(null);
   const lastCompletedHashRef = useRef<Map<string, string>>(new Map());
+  const receivedFirstChunkRef = useRef<boolean>(false);
+  // Micro-batching for smoother streaming (reduce React churn)
+  const queuedChunksRef = useRef<Map<string, string>>(new Map());
+  const rafPendingRef = useRef<boolean>(false);
+  const flushTimerRef = useRef<number | null>(null);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -140,24 +146,46 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     });
   }, []);
 
-  const appendStreamChunk = useCallback((agent: string, chunk: string) => {
-    // Allow empty chunks to create placeholder messages
-    const id = `msg-streaming-${agent}`;
-    
-    setMessages(prev => {
-      const idx = prev.findIndex(m => m.id === id);
-      if (idx >= 0) {
-        const updated = [...prev];
-        // Only append non-empty chunks to avoid duplicates
-        if (chunk && chunk.trim()) {
-          updated[idx] = { ...updated[idx], content: updated[idx].content + chunk, streaming: true, timestamp: new Date() };
-        }
+  const scheduleFlush = useCallback(() => {
+    if (rafPendingRef.current) return;
+    rafPendingRef.current = true;
+    requestAnimationFrame(() => {
+      rafPendingRef.current = false;
+      const pending = queuedChunksRef.current;
+      if (pending.size === 0) return;
+      queuedChunksRef.current = new Map();
+      setMessages(prev => {
+        let updated = [...prev];
+        pending.forEach((chunk, agent) => {
+          const id = `msg-streaming-${agent}`;
+          const idx = updated.findIndex(m => m.id === id);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], content: updated[idx].content + chunk, streaming: true, timestamp: new Date() };
+          } else {
+            updated.push({ id, agent, content: chunk, timestamp: new Date(), type: 'message', streaming: true });
+          }
+        });
         return updated;
-      }
-      // Create new message for this agent if it doesn't exist
-      return [...prev, { id, agent, content: chunk || '', timestamp: new Date(), type: 'message', streaming: true }];
+      });
     });
   }, []);
+
+  const appendStreamChunk = useCallback((agent: string, chunk: string) => {
+    const id = `msg-streaming-${agent}`;
+    // If this is a placeholder (empty chunk), ensure the message bubble exists immediately
+    if (!chunk || !chunk.trim()) {
+      setMessages(prev => {
+        const idx = prev.findIndex(m => m.id === id);
+        if (idx >= 0) return prev;
+        return [...prev, { id, agent, content: '', timestamp: new Date(), type: 'message', streaming: true }];
+      });
+      return;
+    }
+    // Accumulate chunk for micro-batched flush
+    const current = queuedChunksRef.current.get(agent) || '';
+    queuedChunksRef.current.set(agent, current + chunk);
+    scheduleFlush();
+  }, [scheduleFlush]);
 
   const finalizeAgentMessage = useCallback((agent: string, content: string) => {
     const id = `msg-streaming-${agent}`;
@@ -165,6 +193,20 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     const seen = lastCompletedHashRef.current.get(agent);
     if (seen === hash) return;
     lastCompletedHashRef.current.set(agent, hash);
+    // Flush any queued chunks for this agent before finalizing
+    const pending = queuedChunksRef.current.get(agent);
+    if (pending && pending.length) {
+      queuedChunksRef.current.delete(agent);
+      setMessages(prev => {
+        const idx = prev.findIndex(m => m.id === id);
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], content: updated[idx].content + pending, streaming: true, timestamp: new Date() };
+          return updated;
+        }
+        return [...prev, { id, agent, content: pending, timestamp: new Date(), type: 'message', streaming: true }];
+      });
+    }
     setMessages(prev => {
       const idx = prev.findIndex(m => m.id === id);
       if (idx >= 0) {
@@ -179,10 +221,19 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 
   const handleSSEObject = useCallback((obj: any) => {
     // Enhanced logging to debug event flow
-    if (obj?.type === 'text_generation' || obj?.agent) {
-      console.log(`[SSE] Event type: ${obj?.type}, Agent: ${obj?.agent}, Has output: ${!!obj?.output}, Has data.chunk: ${!!obj?.data?.chunk}`);
-    }
+    // Commented verbose logs to avoid console bottleneck during streaming
+    // if (obj?.type === 'text_generation' || obj?.agent) {
+    //   console.debug(`[SSE] Event type: ${obj?.type}, Agent: ${obj?.agent}`);
+    // }
     
+    // Drop events from other executions if execution_id is present and mismatched
+    try {
+      const incExec = (obj as any)?.execution_id || (obj as any)?.data?.execution_id;
+      if (incExec && executionId && incExec !== executionId) {
+        return;
+      }
+    } catch {}
+
     // Handle Anthropic-style envelopes lacking type
     if (!obj?.type && obj?.event?.contentBlockDelta?.delta?.text) {
       const agent = obj.agent || obj.data?.agent || lastStartedAgentRef.current || 'assistant';
@@ -256,11 +307,12 @@ export const EventDrivenSwarmInterface: React.FC = () => {
         // Backend sends: obj.output at root level and obj.data.chunk/text/content
         const chunk = obj.output || obj.data?.chunk || obj.data?.text || obj.data?.content || obj.content || '';
         if (chunk) {
-          console.log(`Processing ${obj.type} from ${agent}:`, chunk.substring(0, 50) + '...');
+          // console.debug(`Processing ${obj.type} from ${agent}`);
+          receivedFirstChunkRef.current = true;
           appendStreamChunk(agent, chunk);
           ensureAgent(agent, { status: 'working', lastActivity: new Date().toISOString() });
         } else {
-          console.warn(`No text content found in ${obj.type} event from ${agent}:`, obj);
+          // console.debug(`No text content in ${obj.type} event from ${agent}`);
         }
         break;
       }
@@ -327,13 +379,20 @@ export const EventDrivenSwarmInterface: React.FC = () => {
     setAgents(new Map());
     setEvents([]);
 
+    // Create new AbortController for this execution
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     // Start native SSE (server streams in the response body)
     // Use event-swarm endpoint for proper event streaming
     const endpoint = `${API_BASE_URL}/api/v1/event-swarm/stream`;
     try {
       const response = await fetch(endpoint, {
+        signal: abortControllerRef.current.signal,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream', 'Cache-Control': 'no-cache' },
         body: JSON.stringify({
           task,
           execution_mode: 'event_driven',
@@ -359,26 +418,41 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       const decoder = new TextDecoder();
       let buffer = '';
       let localSessionId: string | null = null;
+      receivedFirstChunkRef.current = false;
+      let fallbackTriggered = false;
+      // Start a periodic safety flush in case RAF is throttled
+      if (flushTimerRef.current) window.clearInterval(flushTimerRef.current);
+      flushTimerRef.current = window.setInterval(() => {
+        // Trigger a flush if anything is pending
+        if (queuedChunksRef.current.size > 0) {
+          // Use scheduleFlush to apply
+          scheduleFlush();
+        }
+      }, 100);
 
       while (true) {
+        // Check if aborted
+        if (abortControllerRef.current?.signal.aborted) {
+          break;
+        }
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
+        const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || '';
         for (const line of lines) {
           if (!line.trim()) continue; // Skip empty lines
-          console.log('Raw SSE line:', line);
+          // console.debug('Raw SSE line:', line);
           
           if (!line.startsWith('data:')) {
             // Try parsing non-SSE formatted JSON lines directly
             try {
               const obj = JSON.parse(line.trim());
-              console.log('Parsed non-SSE JSON:', obj);
+              // console.debug('Parsed non-SSE JSON');
               handleSSEObject(obj);
               continue;
             } catch (e) {
-              console.log('Skipping non-data line:', line);
+              // console.debug('Skipping non-data line');
               continue;
             }
           }
@@ -387,8 +461,8 @@ export const EventDrivenSwarmInterface: React.FC = () => {
           if (!json) continue;
           try {
             const obj: SwarmEvent = JSON.parse(json);
-            console.log('Parsed SSE data:', obj);
-            if (obj.type === 'session_start') {
+            // console.debug('Parsed SSE data');
+            if (obj.type === 'session_start' || obj.type === 'connected') {
               localSessionId = (obj as any).session_id || obj.data?.execution_id || obj.data?.session_id || null;
               setExecutionId(localSessionId);
             }
@@ -397,31 +471,82 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             // Try parsing Anthropic envelope lines
             try {
               const raw = JSON.parse(json);
-              console.log('Parsed Anthropic envelope:', raw);
+              // console.debug('Parsed Anthropic envelope');
               handleSSEObject(raw);
             } catch (err) {
-              console.error('Failed to parse SSE JSON:', json, err);
+              // console.error('Failed to parse SSE JSON:', json, err);
             }
           }
         }
       }
+      // Clear any pending micro-batch timer
+      // Process any trailing buffered content
+      if (buffer && buffer.trim()) {
+        try {
+          const maybe = buffer.trim();
+          if (maybe.startsWith('data:')) {
+            const obj: SwarmEvent = JSON.parse(maybe.slice(5).trim());
+            handleSSEObject(obj);
+          } else {
+            const obj = JSON.parse(maybe);
+            handleSSEObject(obj);
+          }
+        } catch {}
+      }
+      // Final flush of any pending chunks
+      if (queuedChunksRef.current.size > 0) scheduleFlush();
       setIsExecuting(false);
       isExecutingRef.current = false;
-    } catch (err) {
+    } catch (err: any) {
       setIsExecuting(false);
       isExecutingRef.current = false;
-      setMessages(prev => ([...prev, { id: `err-${Date.now()}`, agent: 'system', content: `Failed to start: ${String(err)}`, timestamp: new Date(), type: 'system' }]));
+      // Don't show error message if it was an intentional abort
+      if (err?.name !== 'AbortError') {
+        setMessages(prev => ([...prev, { id: `err-${Date.now()}`, agent: 'system', content: `Failed to start: ${String(err)}`, timestamp: new Date(), type: 'system' }]));
+      }
     }
   }, [API_BASE_URL, task, maxConcurrentAgents, maxTotalAgents, maxExecutionTime, maxAgentRuntime, selectedTools, restrictToSelected, handleSSEObject]);
 
   const stopExecution = useCallback(async () => {
-    if (!executionId) return;
-    try {
-      await fetch(`${API_BASE_URL}/api/v1/streaming/stop/${executionId}`, { method: 'POST' });
-    } catch {}
+    // Abort the fetch request immediately
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    
+    // Then send stop signal to backend if we have an execution
+    if (executionId) {
+      try {
+        await fetch(`${API_BASE_URL}/api/v1/event-swarm/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ execution_id: executionId, force: true })
+        });
+      } catch {}
+    }
+    
     setIsExecuting(false);
     isExecutingRef.current = false;
-  }, [executionId]);
+    // Clear flush timer
+    if (flushTimerRef.current) {
+      window.clearInterval(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+  }, [executionId, API_BASE_URL]);
+
+  // Cleanup timers and abort controller on unmount
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current) {
+        window.clearInterval(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
 
   const toggleTool = (name: string) => {
     setSelectedTools(prev => {
@@ -639,4 +764,3 @@ export const EventDrivenSwarmInterface: React.FC = () => {
 };
 
 export default EventDrivenSwarmInterface;
-

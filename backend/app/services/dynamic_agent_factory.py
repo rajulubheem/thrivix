@@ -15,11 +15,13 @@ logger = logging.getLogger(__name__)
 class DynamicAgentFactory:
     """Create agents on-the-fly based on needs"""
     
-    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None, callback_handler=None):
+    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None, callback_handler=None, agent_timeout: float = None, timeout_provider=None):
         logger.info(f"🏭 DynamicAgentFactory __init__ called with callback_handler type={type(callback_handler).__name__}, is_callable={callable(callback_handler) if callback_handler else False}")
         self.human_loop_enabled = human_loop_enabled
         self.execution_id = execution_id
         self.callback_handler = callback_handler
+        self.agent_timeout = agent_timeout or 120.0  # Default 120s if not provided
+        self.timeout_provider = timeout_provider  # Callable to get agent-specific timeout
         logger.info(f"🏭 self.callback_handler after assignment: type={type(self.callback_handler).__name__}, is_callable={callable(self.callback_handler) if self.callback_handler else False}")
         self.memory_store = get_memory_store() if human_loop_enabled else None
         # No more hardcoded agent templates - everything is AI-driven now
@@ -123,13 +125,26 @@ class DynamicAgentFactory:
         
         # Create agent - use HumanLoopAgent if human loop is enabled
         if self.human_loop_enabled and self.execution_id:
+            # Get the effective timeout for this specific agent
+            effective_timeout = self.agent_timeout
+            if self.timeout_provider and callable(self.timeout_provider):
+                try:
+                    # Now we have the actual agent name, we can get agent-specific timeout
+                    specific_timeout = self.timeout_provider(self.execution_id, agent_name)
+                    if specific_timeout:
+                        effective_timeout = specific_timeout
+                        logger.info(f"⏱️ Using agent-specific timeout {effective_timeout}s for {agent_name}")
+                except Exception as e:
+                    logger.debug(f"Could not get agent-specific timeout: {e}")
+            
             agent = HumanLoopAgent(
                 name=agent_name,
                 role=role,
                 system_prompt=template["system_prompt"],
                 capabilities=capabilities,
                 execution_id=self.execution_id,
-                memory_store=self.memory_store
+                memory_store=self.memory_store,
+                agent_timeout=effective_timeout
             )
             # Wire streaming callback so UI receives tokens and completion
             # IMPORTANT: Create an agent-specific wrapper to prevent cross-agent interference

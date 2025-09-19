@@ -222,6 +222,17 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
         logger.info(f"⏱️ Set timeout for {agent_name} in {execution_id} to {seconds}s")
         return True
     
+    def get_effective_timeout(self, execution_id: str, agent_name: str = None) -> float:
+        """Get the effective timeout for an agent in an execution"""
+        # Get base timeout for this execution
+        base_timeout = float(self.agent_timeouts.get(execution_id, 90))
+        
+        # Check for agent-specific override
+        if agent_name and execution_id in self.agent_timeout_overrides:
+            return float(self.agent_timeout_overrides[execution_id].get(agent_name, base_timeout))
+        
+        return base_timeout
+    
     def enable_sequential_execution(self, execution_id: str):
         """Enable sequential hierarchical execution for specific execution ID"""
         if self.sequential_controller:
@@ -333,19 +344,10 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             # Initialize with smart agent selection if needed
             await self.agent_factory.initialize_dynamic_builder()
             
-            # Get initial agents
-            if not request.agents or len(request.agents) == 0:
-                # Analyze task to determine needed agents
-                agent_configs = await self._analyze_and_spawn_agents(request.task)
-            else:
-                agent_configs = request.agents
-            
-            # Create Strands agents with event hooks
-            strands_agents = await self._create_event_aware_agents(agent_configs, execution_id)
-            
             # Execute with event-driven coordination
             if request.execution_mode == "event_driven":
                 # Use TRUE event-driven execution with dynamic spawning
+                # Don't create Strands agents - HumanLoopAgents will be created with callbacks
                 return await self.execute_true_event_driven(
                     request.task, 
                     execution_id,
@@ -353,6 +355,17 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
                     callback_handler
                 )
             else:
+                # For non-event_driven mode, create Strands agents
+                # Get initial agents
+                if not request.agents or len(request.agents) == 0:
+                    # Analyze task to determine needed agents
+                    agent_configs = await self._analyze_and_spawn_agents(request.task)
+                else:
+                    agent_configs = request.agents
+                
+                # Create Strands agents with event hooks
+                strands_agents = await self._create_event_aware_agents(agent_configs, execution_id)
+                
                 # Fall back to parent implementation with event hooks added
                 return await super().execute_swarm_async(request, user_id, callback_handler)
             
@@ -510,23 +523,37 @@ EVENT-DRIVEN COORDINATION:
             agent_name = kwargs.get("agent")
             data = kwargs.get("data", {})
             
+            # Log for debugging
+            if event_type == "text_generation":
+                chunk = data.get("chunk", "")
+                if chunk:
+                    logger.debug(f"Direct streaming from {agent_name}: {len(chunk)} chars")
+                    # Log if callback_handler is missing
+                    if not callback_handler:
+                        logger.warning(f"⚠️ No callback_handler for {agent_name} - chunks not being forwarded to SSE!")
+            
             # Forward ALL events directly to SSE for parallel streaming
             if callback_handler:
                 if asyncio.iscoroutinefunction(callback_handler):
                     await callback_handler(**kwargs)
                 else:
                     callback_handler(**kwargs)
-            
-            # Log for debugging
-            if event_type == "text_generation":
-                chunk = data.get("chunk", "")
-                if chunk:
-                    logger.debug(f"Direct streaming from {agent_name}: {len(chunk)} chars")
+            else:
+                # Log when callback_handler is missing for important events
+                if event_type in ["text_generation", "agent_completed"]:
+                    logger.warning(f"⚠️ No callback_handler configured - {event_type} from {agent_name} not forwarded")
         
-        # Initialize factory with DIRECT PARALLEL callback
+        # Initialize factory with DIRECT PARALLEL callback and timeout configuration
         logger.info(f"🔍 Creating DynamicAgentFactory with PARALLEL streaming callback")
-        factory = DynamicAgentFactory(human_loop_enabled=True, execution_id=actual_execution_id, callback_handler=direct_streaming_callback)
-        logger.info(f"✅ DynamicAgentFactory created with PARALLEL streaming callback")
+        base_timeout = self.get_effective_timeout(actual_execution_id)
+        factory = DynamicAgentFactory(
+            human_loop_enabled=True, 
+            execution_id=actual_execution_id, 
+            callback_handler=direct_streaming_callback,
+            agent_timeout=base_timeout,
+            timeout_provider=self.get_effective_timeout
+        )
+        logger.info(f"✅ DynamicAgentFactory created with PARALLEL streaming callback and timeout {base_timeout}s")
         
         # Sequential execution is DISABLED to allow parallel agent execution
         logger.info(f"Sequential execution disabled (parallel mode) for {actual_execution_id}")
@@ -739,12 +766,18 @@ EVENT-DRIVEN COORDINATION:
                             
                             # Create task to spawn and execute agent asynchronously
                             async def execute_agent(role, context):
-                                # Use the same main_queued_callback for consistency
-                                # Create a new factory instance with the main queued callback
+                                # Get the base timeout for this execution
+                                base_timeout = self.get_effective_timeout(actual_execution_id)
+                                logger.info(f"⏱️ Using base timeout {base_timeout}s for execution {actual_execution_id}")
+                                
+                                # Use the same direct_streaming_callback as the main factory
+                                # This ensures all agents stream directly to the SSE endpoint
                                 agent_factory = DynamicAgentFactory(
                                     human_loop_enabled=True, 
                                     execution_id=actual_execution_id, 
-                                    callback_handler=main_queued_callback
+                                    callback_handler=direct_streaming_callback,  # Use the SAME callback
+                                    agent_timeout=base_timeout,
+                                    timeout_provider=self.get_effective_timeout  # Pass the method to get agent-specific timeouts
                                 )
                                 agent = await agent_factory.spawn_agent(role, {"context": context})
                                 if agent:
@@ -1229,14 +1262,8 @@ EVENT-DRIVEN COORDINATION:
                         logger.error(f"Fallback also failed for {agent.name}: {fallback_error}")
                         result_output = f"Completed analysis by {agent.name}: {task}"
             
-            # Stream the final result
+            # Signal completion without re-sending the full content
             if callback_handler:
-                await callback_handler(
-                    type="text_generation", 
-                    agent=agent.name,
-                    data={"chunk": result_output, "execution_id": execution_id}
-                )
-                
                 await callback_handler(
                     type="agent_completed",
                     agent=agent.name,

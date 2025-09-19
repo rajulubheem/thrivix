@@ -44,7 +44,8 @@ class HumanLoopAgent(EventAwareAgent):
         capabilities: AgentCapabilities,
         execution_id: str,
         model_config: dict = None,
-        memory_store=None
+        memory_store=None,
+        agent_timeout: float = None  # Configurable timeout
     ):
         super().__init__(name, role, system_prompt, capabilities, model_config)
         self.execution_id = execution_id
@@ -53,6 +54,7 @@ class HumanLoopAgent(EventAwareAgent):
         self.pending_human_requests: Dict[str, Dict] = {}
         self.callback_handler = None  # Will be set by ControlledSwarmService
         self._chunk_sequence = 0  # Sequence counter for ordered streaming
+        self.agent_timeout = agent_timeout or 120.0  # Default 120s, can be overridden
         
     def _is_stopped(self) -> bool:
         """Cooperative stop check using streaming module service registry."""
@@ -70,6 +72,57 @@ class HumanLoopAgent(EventAwareAgent):
         except Exception:
             pass
         return False
+    
+    def _extract_text(self, obj: Any) -> str:
+        """Extract text content from various message/result formats.
+        
+        Handles OpenAI/Anthropic message formats and fallbacks to str().
+        """
+        if obj is None:
+            return ""
+        
+        # If already a string, return it
+        if isinstance(obj, str):
+            return obj
+        
+        # Handle dict-like message formats
+        if isinstance(obj, dict):
+            # OpenAI/Anthropic style with content array
+            if "content" in obj:
+                content = obj["content"]
+                if isinstance(content, str):
+                    return content
+                elif isinstance(content, list):
+                    # Extract text from content array
+                    text_parts = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            if item.get("type") == "text":
+                                text_parts.append(item.get("text", ""))
+                            elif "text" in item:
+                                text_parts.append(item["text"])
+                        elif isinstance(item, str):
+                            text_parts.append(item)
+                    return " ".join(text_parts)
+            
+            # Try other common fields
+            if "text" in obj:
+                return str(obj["text"])
+            if "output" in obj:
+                return str(obj["output"])
+            if "message" in obj:
+                return str(obj["message"])
+        
+        # Handle objects with attributes
+        if hasattr(obj, 'content'):
+            return self._extract_text(obj.content)
+        if hasattr(obj, 'output'):
+            return str(obj.output)
+        if hasattr(obj, 'text'):
+            return str(obj.text)
+        
+        # Fallback to string conversion
+        return str(obj)
 
     def _initialize_memory(self) -> AgentMemory:
         """Initialize or load agent memory"""
@@ -865,9 +918,12 @@ IMPORTANT: Work specifically on the original user request about "{original_query
             
             logger.info(f"🎯 Agent {self.name} executing task: {task_message[:100]}...")
             
-            # Execute agent with streaming callback handler
+            # Execute agent with streaming callback handler and timeout
             try:
                 logger.debug(f"Creating Strands agent with streaming callback handler")
+                
+                # Track if we received final message/result
+                final_received = {'value': False, 'result': ''}
                 
                 # Create streaming callback that captures tokens in real-time
                 def capture_streaming_callback(**kwargs):
@@ -877,15 +933,30 @@ IMPORTANT: Work specifically on the original user request about "{original_query
                     - 'data': Text chunk from model (this is what we want for streaming)
                     - 'event': Raw event from model (contains internal format details)
                     - 'delta': Raw delta content
+                    - 'message': Final message (indicates completion)
+                    - 'result': Final result (indicates completion)
                     - 'current_tool_use': Tool usage information
                     - Other lifecycle events
                     
-                    We should ONLY process 'data' for text streaming, not 'event'!
+                    We should process 'data' for streaming and 'message'/'result' for completion!
                     """
                     if self._is_stopped():
                         return
                     
-                    # CRITICAL: Only process 'data' field, nothing else
+                    # Check for finalization triggers
+                    if "message" in kwargs or "result" in kwargs:
+                        finalize_type = 'message' if 'message' in kwargs else 'result'
+                        logger.info(f"📦 FINALIZATION: Received {finalize_type} for {self.name} (seq: {self._chunk_sequence})")
+                        final_received['value'] = True
+                        # Extract text properly from various formats
+                        if "message" in kwargs:
+                            final_received['result'] = self._extract_text(kwargs.get("message"))
+                        elif "result" in kwargs:
+                            final_received['result'] = self._extract_text(kwargs.get("result"))
+                        logger.debug(f"📦 Finalized with {len(final_received['result'])} chars from {finalize_type}")
+                        return  # Don't stream these as text chunks
+                    
+                    # CRITICAL: Only process 'data' field for streaming
                     # Ignore 'event', 'delta', and all other fields
                     if "data" not in kwargs:
                         # Log what we're ignoring for debugging
@@ -963,25 +1034,87 @@ IMPORTANT: Work specifically on the original user request about "{original_query
                 
                 logger.debug(f"Created Strands agent with callback handler")
                 
-                # Execute agent
+                # Execute agent with timeout
                 if self._is_stopped():
                     return "Stopped by user"
-                if hasattr(strands_agent, 'run'):
-                    try:
-                        result = await strands_agent.run(task_message)
-                    except TypeError:
-                        result = strands_agent.run(task_message)
-                else:
-                    result = strands_agent(task_message)
                 
-                # Extract result content
-                if hasattr(result, 'content'):
-                    result_text = result.content
-                elif hasattr(result, 'output'):
-                    result_text = result.output
-                else:
-                    result_text = str(result)
+                # Use configured timeout for this agent
+                AGENT_TIMEOUT = self.agent_timeout
                 
+                async def run_with_timeout():
+                    """Run agent with timeout protection"""
+                    if hasattr(strands_agent, 'run'):
+                        try:
+                            result = await strands_agent.run(task_message)
+                        except TypeError:
+                            # Fallback to sync execution
+                            result = strands_agent.run(task_message)
+                    else:
+                        result = strands_agent(task_message)
+                    return result
+                
+                # Grace finalize: If we get final message/result, wait briefly for run() to complete
+                # This improves perceived latency for final-envelope-only cases
+                GRACE_TIMEOUT = 2.0  # Short grace period after final received
+                
+                try:
+                    # Start main execution
+                    logger.info(f"⏱️ Starting agent {self.name} with {AGENT_TIMEOUT}s timeout")
+                    run_task = asyncio.create_task(run_with_timeout())
+                    
+                    # If we receive final message/result, give a short grace period
+                    grace_triggered = False
+                    start_time = asyncio.get_event_loop().time()
+                    
+                    while True:
+                        # Check if we have final result and should trigger grace
+                        if final_received['value'] and not grace_triggered:
+                            logger.info(f"🕐 Final received for {self.name}, starting {GRACE_TIMEOUT}s grace period")
+                            grace_triggered = True
+                            
+                        # Calculate appropriate timeout
+                        elapsed = asyncio.get_event_loop().time() - start_time
+                        if grace_triggered:
+                            # Use short grace timeout from when final was received
+                            remaining = GRACE_TIMEOUT
+                        else:
+                            # Use full agent timeout
+                            remaining = AGENT_TIMEOUT - elapsed
+                        
+                        if remaining <= 0:
+                            # Timeout reached
+                            if not run_task.done():
+                                run_task.cancel()
+                            raise asyncio.TimeoutError()
+                        
+                        try:
+                            # Wait for task with calculated timeout
+                            result = await asyncio.wait_for(asyncio.shield(run_task), timeout=min(remaining, 0.5))
+                            break  # Task completed
+                        except asyncio.TimeoutError:
+                            # Check if we should continue waiting
+                            if grace_triggered or elapsed >= AGENT_TIMEOUT:
+                                if not run_task.done():
+                                    run_task.cancel()
+                                raise
+                            # Otherwise continue loop to check for final_received
+                    
+                    # Check if we only got message/result without data chunks
+                    if final_received['value'] and final_received['result']:
+                        logger.info(f"✅ Agent {self.name} completed via message/result finalization (chunks: {self._chunk_sequence}, grace: {grace_triggered})")
+                        result_text = final_received['result']
+                    else:
+                        # Extract result content normally using helper
+                        result_text = self._extract_text(result)
+                        logger.info(f"✅ Agent {self.name} completed via normal run() return (chunks: {self._chunk_sequence})")
+                    
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ Agent {self.name} timeout after {AGENT_TIMEOUT}s - forcing completion (chunks streamed: {self._chunk_sequence})")
+                    # On timeout, return whatever we have accumulated (already extracted as string)
+                    result_text = final_received.get('result') or f"[Agent {self.name} timed out after {AGENT_TIMEOUT}s]"
+                
+                # Ensure result_text is a string for defensive typing
+                result_text = str(result_text) if result_text else ""
                 logger.info(f"✅ Agent {self.name} completed with {len(result_text)} characters")
                 return result_text
                 

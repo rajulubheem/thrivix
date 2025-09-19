@@ -1180,7 +1180,21 @@ async def start_streaming(
                 if hasattr(request, 'context') and request.context:
                     tool_preferences = request.context.get('tool_preferences', {}) or {}
 
-                service = ControlledSwarmService(config=user_config)
+                # Create timeout provider that checks for global service
+                def timeout_provider(execution_id: str, agent_name: str = None):
+                    """Get timeout from global swarm service if available"""
+                    try:
+                        import app.api.v1.endpoints.streaming as streaming_module
+                        if hasattr(streaming_module, '_global_swarm_service'):
+                            svc = streaming_module._global_swarm_service
+                            if hasattr(svc, 'get_effective_timeout'):
+                                return svc.get_effective_timeout(execution_id, agent_name)
+                    except Exception:
+                        pass
+                    # Fallback to config default
+                    return user_config.get("max_agent_runtime", 60)
+                
+                service = ControlledSwarmService(config=user_config, timeout_provider=timeout_provider)
                 # Attach tool preferences to the service so agents can adapt
                 try:
                     service.user_tool_preferences = {

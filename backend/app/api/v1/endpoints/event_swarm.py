@@ -8,6 +8,7 @@ from typing import Optional
 import json
 import asyncio
 import time
+from collections import deque
 from datetime import datetime
 import uuid
 
@@ -80,25 +81,65 @@ async def stream_event_swarm(
             yield f"data: {json.dumps({'type': 'connected', 'execution_id': execution_id, 'timestamp': datetime.now().isoformat()})}\n\n"
             logger.info("Sent initial connection event")
             
-            # Create a queue for streaming events
-            event_queue = asyncio.Queue()
+            # Create a queue for streaming events with size limit to prevent memory issues
+            # Limit to 500 events to provide backpressure
+            event_queue = asyncio.Queue(maxsize=500)
             
             # Track events from global event bus
             event_listener_task = None
             
-            # Register listener for all events from the global event bus
+            # Whitelist of event types to forward from bus (avoid duplicates from streaming_callback)
+            BUS_EVENT_WHITELIST = {
+                "session_start",
+                "agent.spawned", 
+                "agent.started",
+                "agent.needed",
+                "handoff.requested",
+                "task.started",
+                "task.complete",
+                "error",
+                "human.approval.needed",
+                "human.question"
+            }
+            
+            # Register listener for select events from the global event bus
             async def forward_bus_events(event):
-                """Forward events from the global event bus to the SSE stream"""
+                """Forward select events from the global event bus to the SSE stream"""
                 try:
-                    logger.info(f"Forwarding event: {event.type} from {event.source}")
+                    # Scope by execution_id to avoid cross-session noise
+                    try:
+                        ev_exec = (event.data or {}).get('execution_id')
+                    except Exception:
+                        ev_exec = None
+                    if ev_exec and ev_exec != execution_id:
+                        return
+                    # Skip events that are already handled by streaming_callback
+                    # These would be duplicates
+                    if event.type in ["text_generation", "agent_completed", "agent.completed"]:
+                        return
                     
-                    # Forward all event bus events to the SSE stream
+                    # Only forward whitelisted events to avoid noise
+                    if event.type not in BUS_EVENT_WHITELIST:
+                        return
+                    
+                    logger.debug(f"Forwarding bus event: {event.type} from {event.source}")
+                    
+                    # Forward whitelisted event bus events to the SSE stream
                     event_data = {
                         "type": event.type,
                         "data": event.data,
                         "source": event.source,
-                        "timestamp": event.timestamp
+                        "timestamp": event.timestamp,
+                        "execution_id": execution_id
                     }
+                    # Normalize agent for frontend consumers
+                    try:
+                        if isinstance(event.data, dict) and 'agent' in event.data:
+                            event_data["agent"] = event.data.get("agent")
+                        elif event.source:
+                            event_data["agent"] = event.source
+                    except Exception:
+                        pass
                     
                     # Special handling for agent.completed events
                     if event.type == "agent.completed":
@@ -106,16 +147,20 @@ async def stream_event_swarm(
                         # Don't send output again - it was already streamed
                         # The output field should not be in agent.completed anymore
                     
-                    # Forward the original event without blocking
-                    asyncio.create_task(event_queue.put(event_data))
+                    # Forward the original event - use put_nowait to avoid blocking
+                    # Don't create unbounded tasks
+                    try:
+                        event_queue.put_nowait(event_data)
+                    except asyncio.QueueFull:
+                        logger.warning(f"Queue full, dropping bus event: {event.type}")
                 except Exception as e:
                     logger.error(f"Error forwarding bus event: {e}", exc_info=True)
             
             # Register the event listener
             global_event_bus.on("*", forward_bus_events)
             
-            # Track pending events
-            pending_events = []
+            # Track pending events using deque for O(1) operations
+            pending_events = deque()
             
             # Track recent events to avoid duplicates
             recent_event_hashes = set()
@@ -140,14 +185,28 @@ async def stream_event_swarm(
                     return
                 
                 content = ""
+                # Scope by execution_id to this stream
+                try:
+                    k_exec = None
+                    if isinstance(data, dict):
+                        k_exec = data.get('execution_id') or kwargs.get('execution_id')
+                    else:
+                        k_exec = kwargs.get('execution_id')
+                    if k_exec and k_exec != execution_id:
+                        return
+                except Exception:
+                    pass
                 
                 # Create hash for deduplication - be more specific to avoid false positives
-                # For text_generation events, include timestamp to avoid blocking similar chunks
+                # For text_generation events, include sequence number if available to avoid dropping ordered chunks
                 chunk_text = ""
+                sequence_num = None
                 if event_type == "text_generation" and isinstance(data, dict):
                     chunk_text = data.get("chunk", "")
+                    sequence_num = data.get("sequence")  # Get sequence number if available
                 
-                # Include a timestamp component to ensure we don't block similar chunks
+                # Include sequence number for better deduplication
+                # If no sequence, fallback to timestamp bucket
                 import time
                 timestamp_bucket = int(time.time() * 10)  # 100ms buckets
                 
@@ -155,7 +214,7 @@ async def stream_event_swarm(
                     event_type,
                     agent,
                     chunk_text if chunk_text else str(data),  # Use full text for uniqueness
-                    timestamp_bucket  # Different time buckets won't clash
+                    sequence_num if sequence_num is not None else timestamp_bucket  # Use sequence or time bucket
                 ))
                 
                 # Skip if we've seen this exact event recently
@@ -173,11 +232,13 @@ async def stream_event_swarm(
                 # Handle different event types based on what HumanLoopAgent sends
                 # text_generation events contain streaming chunks
                 if event_type == "text_generation" and data:
-                    # Extract chunk content from data dict
+                    # Extract chunk content and sequence from data dict
                     if isinstance(data, dict):
                         content = data.get("chunk", "")
+                        sequence = data.get("sequence")  # Preserve sequence number
                     else:
                         content = str(data) if data else ""
+                        sequence = None
                     
                     # Also queue this as agent output event  
                     if content and agent:
@@ -187,21 +248,26 @@ async def stream_event_swarm(
                             "data": {
                                 "chunk": content,
                                 "text": content,
-                                "content": content
+                                "content": content,
+                                "sequence": sequence,  # Preserve sequence for proper dedup
+                                "execution_id": execution_id
                             },
                             "output": content,  # Keep for backwards compatibility
                             "role": "assistant",
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": datetime.now().isoformat(),
+                            "execution_id": execution_id
                         }
-                        # Queue the event properly using async put (will wait if needed)
+                        # Queue the event with put_nowait - OK to drop text chunks if queue is full
                         try:
-                            # Use asyncio.create_task to queue without blocking the callback
-                            asyncio.create_task(event_queue.put(agent_output_event))
-                            logger.info(f"Immediately queued text_generation from {agent}")
+                            event_queue.put_nowait(agent_output_event)
+                            # Log every 10th chunk to reduce log spam but still show activity
+                            if sequence and sequence % 10 == 0:
+                                logger.info(f"✍️ Streaming chunks from {agent} (seq: {sequence})")
+                        except asyncio.QueueFull:
+                            # Drop text chunks when queue is full - they're not critical
+                            logger.warning(f"Queue full, dropping text chunk from {agent}")
                         except Exception as e:
                             logger.error(f"Failed to queue text_generation from {agent}: {e}")
-                            # Store as fallback
-                            pending_events.append(agent_output_event)
                     return  # IMPORTANT: Return here to avoid processing the same data again
                         
                 elif event_type == "agent_completed":
@@ -213,16 +279,40 @@ async def stream_event_swarm(
                         # Don't include content - it was already streamed chunk by chunk
                         "role": "assistant", 
                         "complete": True,
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
+                        "execution_id": execution_id
                     }
-                    # Store event to be queued later
-                    pending_events.append(agent_output_event)
-                    # Also try to push immediately to queue (non-blocking)
+                    # CRITICAL: Completion events MUST be delivered - use await
+                    # This is a control event that signals agent done, never drop it
                     try:
-                        event_queue.put_nowait(agent_output_event)
-                        logger.info(f"Immediately queued agent_completed from {agent}")
-                    except asyncio.QueueFull:
-                        logger.warning(f"Queue full for immediate push from {agent}")
+                        # If queue is >80% full, make room by dropping some text chunks
+                        # This keeps latency low by preventing congestion
+                        queue_threshold = int(event_queue.maxsize * 0.8)  # 80% threshold
+                        if event_queue.qsize() >= queue_threshold:
+                            logger.warning(f"Queue full for agent_completed, making room...")
+                            # Try to remove a text_generation event to make space
+                            temp_items = []
+                            made_room = False
+                            for _ in range(min(10, event_queue.qsize())):
+                                try:
+                                    item = event_queue.get_nowait()
+                                    if item.get('type') == 'text_generation' and not made_room:
+                                        # Drop this text chunk to make room
+                                        logger.debug("Dropped text chunk to make room for completion")
+                                        made_room = True
+                                    else:
+                                        temp_items.append(item)
+                                except asyncio.QueueEmpty:
+                                    break
+                            # Put back the items we're keeping
+                            for item in temp_items:
+                                event_queue.put_nowait(item)
+                        
+                        # Now queue the completion event
+                        await event_queue.put(agent_output_event)
+                        logger.info(f"✅ Queued agent_completed from {agent}")
+                    except Exception as e:
+                        logger.error(f"Failed to queue agent_completed from {agent}: {e}")
                     return  # IMPORTANT: Return here to avoid further processing
                     
                 elif "current_tool_use" in kwargs and kwargs["current_tool_use"]:
@@ -261,22 +351,34 @@ async def stream_event_swarm(
                     
                     # Queue the event (non-blocking)
                     try:
-                        event_queue.put_nowait(event)
-                        logger.info(f"Queued event type: {event_type} from {agent}")
+                        await event_queue.put(event)
+                        logger.debug(f"Queued event type: {event_type} from {agent}")
                     except asyncio.QueueFull:
                         logger.warning(f"Queue full, dropping event: {event_type} from {agent}")
                         # Still append to pending_events for later flush
                         pending_events.append(event)
             
-            # Flush pending events periodically
+            # Track if streaming should continue
+            streaming_active = True
+            
+            # Flush pending events periodically while streaming is active
             async def flush_pending_events():
-                while True:
+                while streaming_active:
                     await asyncio.sleep(0.1)  # Check every 100ms
-                    while pending_events:
-                        event = pending_events.pop(0)
+                    # Process up to 10 pending events at a time to avoid blocking
+                    batch_size = min(10, len(pending_events))
+                    for _ in range(batch_size):
+                        if not pending_events:
+                            break
+                        event = pending_events.popleft()  # O(1) operation with deque
                         try:
-                            await event_queue.put(event)
-                            logger.info(f"Flushed pending event for agent: {event.get('agent')}")
+                            # Use put_nowait to avoid blocking
+                            event_queue.put_nowait(event)
+                            logger.debug(f"Flushed pending event for agent: {event.get('agent')}")
+                        except asyncio.QueueFull:
+                            # Put it back if queue is full
+                            pending_events.appendleft(event)  # O(1) operation with deque
+                            break
                         except Exception as e:
                             logger.error(f"Failed to flush event: {e}")
             
@@ -320,28 +422,74 @@ async def stream_event_swarm(
             logger.info("Starting event streaming loop")
             event_count = 0
             last_keepalive = time.time()
+            last_queue_log = time.time()
             
             while True:
-                # Process events efficiently
+                # Log queue size periodically to monitor congestion
+                current_time = time.time()
+                if current_time - last_queue_log >= 5.0:  # Log every 5 seconds
+                    queue_size = event_queue.qsize()
+                    if queue_size > 100:
+                        logger.warning(f"⚠️ Event queue congestion: {queue_size} events pending")
+                    elif queue_size > 50:
+                        logger.info(f"📊 Event queue size: {queue_size}")
+                    last_queue_log = current_time
+                
+                # Process events efficiently - drain queue aggressively when events are available
                 try:
-                    # Try to get event with short timeout
-                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-                    
-                    if event is None:
-                        logger.info("Received None event, ending stream")
-                        return
-                    
-                    event_count += 1
-                    event_type = event.get('type', 'unknown')
-                    
-                    # Log streaming events
-                    if event_type == 'text_generation':
-                        logger.info(f"Streaming text_generation event {event_count} from {event.get('agent', 'unknown')}")
+                    # First, check if queue has events without waiting
+                    if not event_queue.empty():
+                        # Drain up to 20 events at once when queue has data
+                        batch_size = min(20, event_queue.qsize())
+                        for _ in range(batch_size):
+                            try:
+                                event = event_queue.get_nowait()
+                                if event is None:
+                                    logger.info("Received None event, ending stream")
+                                    streaming_active = False
+                                    return
+                                
+                                event_count += 1
+                                event_type = event.get('type', 'unknown')
+                                
+                                # Log streaming events (less verbose for text chunks)
+                                if event_type == 'text_generation':
+                                    if event_count % 20 == 0:  # Log every 20th chunk
+                                        agent_name = event.get('agent', 'unknown')
+                                        logger.info(f"📡 SSE: Sending text chunks to client from {agent_name} ({event_count} total events sent)")
+                                else:
+                                    logger.info(f"📡 SSE: Sending {event_type} event to client (event #{event_count})")
+                                
+                                # Send event immediately
+                                yield f"data: {json.dumps(event)}\n\n"
+                                
+                                # Add flush comment periodically for text chunks
+                                if event_type == 'text_generation' and event_count % 10 == 0:
+                                    yield f": flush\n\n"
+                                    
+                            except asyncio.QueueEmpty:
+                                break
                     else:
-                        logger.debug(f"Streaming event {event_count}: {event_type}")
-                    
-                    # Send event immediately
-                    yield f"data: {json.dumps(event)}\n\n"
+                        # Queue is empty, wait with timeout
+                        event = await asyncio.wait_for(event_queue.get(), timeout=0.1)  # Increased timeout
+                        
+                        if event is None:
+                            logger.info("Received None event, ending stream")
+                            streaming_active = False
+                            return
+                        
+                        event_count += 1
+                        event_type = event.get('type', 'unknown')
+                        
+                        # Log and send the event
+                        if event_type == 'text_generation':
+                            if event_count % 20 == 0:
+                                agent_name = event.get('agent', 'unknown')
+                                logger.info(f"📡 SSE: Sending text chunks to client from {agent_name} ({event_count} total events sent)")
+                        else:
+                            logger.info(f"📡 SSE: Sending {event_type} event to client (event #{event_count})")
+                        
+                        yield f"data: {json.dumps(event)}\n\n"
                     
                 except asyncio.TimeoutError:
                     # Send keepalive every second to maintain connection
@@ -363,15 +511,27 @@ async def stream_event_swarm(
             logger.error(f"Streaming failed: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'timestamp': datetime.now().isoformat()})}\n\n"
         finally:
+            # Stop the flush loop
+            streaming_active = False
+            
             # Clean up
             try:
                 flusher_task.cancel()
+                await asyncio.sleep(0.1)  # Give time for task to cancel
             except:
                 pass
             try:
                 global_event_bus.off("*", forward_bus_events)
             except:
                 pass
+            
+            # Log final queue state
+            remaining = event_queue.qsize()
+            if remaining > 0:
+                logger.warning(f"⚠️ Stream ending with {remaining} events still in queue")
+            if pending_events:
+                logger.warning(f"⚠️ Stream ending with {len(pending_events)} pending events")
+            
             logger.info("Cleaned up event stream resources")
     
     return StreamingResponse(
@@ -381,7 +541,9 @@ async def stream_event_swarm(
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable Nginx buffering
-            "X-Content-Type-Options": "nosniff"
+            "X-Content-Type-Options": "nosniff",
+            # Ensure CORS header for cross-origin dev setups (frontend on different port)
+            "Access-Control-Allow-Origin": "*"
         }
     )
 
