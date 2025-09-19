@@ -44,7 +44,7 @@ const EfficientSwarmInterface: React.FC = () => {
   const [isRunning, setIsRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
-  const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel'>('sequential');
+  const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic'>('dynamic');
   const [useMockAgents, setUseMockAgents] = useState(true);
   const [stats, setStats] = useState({
     tokensReceived: 0,
@@ -220,6 +220,11 @@ const EfficientSwarmInterface: React.FC = () => {
         }
         break;
 
+      case 'agent_spawned':
+        // Handle dynamic agent spawning event
+        console.log('Agent spawned:', payload);
+        break;
+
       case 'agent_completed':
         if (agent_id) {
           setAgents(prev => {
@@ -294,32 +299,38 @@ const EfficientSwarmInterface: React.FC = () => {
 
     try {
       // Call the new streaming v2 API
+      const requestBody: any = {
+        task,
+        execution_mode: executionMode,
+        use_mock: useMockAgents,
+        max_parallel: 5
+      };
+
+      // Only add agents for non-dynamic modes
+      if (executionMode !== 'dynamic' && useMockAgents) {
+        requestBody.agents = [
+          {
+            name: 'UI Designer',
+            role: 'Design user interfaces',
+            task: 'Design the UI components'
+          },
+          {
+            name: 'Backend Developer',
+            role: 'Implement backend logic',
+            task: 'Build the backend services'
+          },
+          {
+            name: 'QA Engineer',
+            role: 'Test the application',
+            task: 'Write and execute tests'
+          }
+        ];
+      }
+
       const response = await fetch('http://localhost:8000/api/v1/streaming/stream/v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task,
-          agents: [
-            {
-              name: 'UI Designer',
-              role: 'Design user interfaces',
-              task: 'Design the UI components'
-            },
-            {
-              name: 'Backend Developer',
-              role: 'Implement backend logic',
-              task: 'Build the backend services'
-            },
-            {
-              name: 'QA Engineer',
-              role: 'Test the application',
-              task: 'Write and execute tests'
-            }
-          ],
-          execution_mode: executionMode,
-          use_mock: useMockAgents,
-          max_parallel: 5
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -399,10 +410,15 @@ const EfficientSwarmInterface: React.FC = () => {
         </h2>
         
         <div className="efficient-alert">
-          <div className="efficient-alert-icon">ℹ️</div>
+          <div className="efficient-alert-icon">🤖</div>
           <div>
-            <strong>New Architecture</strong>
-            <p>This interface uses WebSocket + Redis Streams for real-time, efficient streaming with backpressure handling and deterministic orchestration.</p>
+            <strong>Dynamic Agent Creation</strong>
+            <p>
+              {executionMode === 'dynamic' 
+                ? 'AI will analyze your task and dynamically create specialized agents as needed. No predefined agents - completely flexible!'
+                : 'Using predefined agents in ' + executionMode + ' mode.'
+              }
+            </p>
           </div>
         </div>
 
@@ -433,12 +449,13 @@ const EfficientSwarmInterface: React.FC = () => {
             
             <select
               value={executionMode}
-              onChange={(e) => setExecutionMode(e.target.value as 'sequential' | 'parallel')}
+              onChange={(e) => setExecutionMode(e.target.value as 'sequential' | 'parallel' | 'dynamic')}
               disabled={isRunning}
               className="efficient-select"
             >
-              <option value="sequential">Sequential</option>
-              <option value="parallel">Parallel</option>
+              <option value="dynamic">Dynamic (AI Creates Agents)</option>
+              <option value="sequential">Sequential (Predefined)</option>
+              <option value="parallel">Parallel (Predefined)</option>
             </select>
           </div>
         </div>
@@ -512,6 +529,7 @@ const EfficientSwarmInterface: React.FC = () => {
                 {agent.status === 'completed' && <span style={{ color: '#10b981' }}>✓</span>}
                 {agent.status === 'failed' && <span style={{ color: '#ef4444' }}>✗</span>}
                 <strong>{agent.name}</strong>
+                {agent.id.includes('sub') && <span style={{ fontSize: '0.8em', marginLeft: '8px', color: '#666' }}>(Spawned)</span>}
               </div>
               <div className="efficient-agent-meta">
                 <span className={`efficient-agent-status efficient-status-${agent.status}`}>

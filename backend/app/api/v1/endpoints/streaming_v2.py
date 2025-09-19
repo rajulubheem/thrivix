@@ -15,8 +15,13 @@ from app.services.dag_orchestrator import (
     build_simple_dag,
     build_parallel_dag
 )
-from app.services.agent_runtime import MockAgentRuntime, SimpleAgentRuntime
-from strands import Agent
+from app.services.agent_runtime import MockAgentRuntime
+from app.services.strands_agent_runtime import (
+    StrandsAgentRuntime, 
+    StrandsAgentConfig,
+    StrandsAgentFactory
+)
+from app.services.true_dynamic_coordinator import TrueDynamicCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +33,18 @@ class AgentConfig(BaseModel):
     name: str
     role: str
     task: str
-    model: str = "gpt-4"
+    model: str = "gpt-4o-mini"
     agent_id: Optional[str] = None
+    agent_type: str = "research"  # research, analysis, writer, qa, custom
+    system_prompt: Optional[str] = None
+    temperature: float = 0.7
 
 
 class StreamingRequestV2(BaseModel):
     """Request for streaming execution"""
     task: str
-    agents: List[AgentConfig]
-    execution_mode: str = "sequential"  # sequential, parallel, dag
+    agents: Optional[List[AgentConfig]] = None  # Optional for dynamic mode
+    execution_mode: str = "dynamic"  # sequential, parallel, dag, dynamic
     max_parallel: int = Field(default=5, ge=1, le=20)
     use_mock: bool = False  # For testing without real LLM calls
 
@@ -87,43 +95,92 @@ async def start_streaming_v2(
     # Create orchestrator
     orchestrator = DAGOrchestrator(max_parallel=request.max_parallel)
     
-    # Create and register agents
-    for i, agent_config in enumerate(request.agents):
-        agent_id = agent_config.agent_id or f"agent_{i:03d}"
+    # Check execution mode
+    if request.execution_mode == "dynamic":
+        # Use true dynamic coordinator
+        coordinator = TrueDynamicCoordinator(
+            agent_id="dynamic_coordinator",
+            name="Dynamic Task Coordinator",
+            model="gpt-4o-mini",
+            session_id=exec_id
+        )
         
-        if request.use_mock:
-            # Use mock agents for testing
-            agent = MockAgentRuntime(
-                agent_id=agent_id,
-                name=agent_config.name,
-                delay=0.05
-            )
-        else:
-            # Create real Strands agent and wrap it
-            strands_agent = Agent(
-                name=agent_config.name,
-                role=agent_config.role,
-                model=agent_config.model
-            )
-            agent = SimpleAgentRuntime(agent_id, strands_agent)
+        orchestrator.register_agent(coordinator)
         
-        # Reset agent sequence for new execution
-        agent.reset_sequence()
-        orchestrator.register_agent(agent)
-    
-    # Build execution DAG based on mode
-    if request.execution_mode == "parallel":
-        # All agents in parallel
-        dag = build_parallel_dag([[
-            {"agent_id": f"agent_{i:03d}", "task": agent.task}
-            for i, agent in enumerate(request.agents)
-        ]])
-    else:
-        # Sequential execution (default)
+        # Simple DAG with just the coordinator
         dag = build_simple_dag([
-            {"agent_id": f"agent_{i:03d}", "task": agent.task}
-            for i, agent in enumerate(request.agents)
+            {"agent_id": "dynamic_coordinator", "task": request.task}
         ])
+        
+        logger.info(f"Using true dynamic coordinator for task: {request.task}")
+    
+    elif request.agents:
+        # Use provided agent configuration
+        for i, agent_config in enumerate(request.agents):
+            agent_id = agent_config.agent_id or f"agent_{i:03d}"
+            
+            if request.use_mock:
+                # Use mock agents for testing
+                agent = MockAgentRuntime(
+                    agent_id=agent_id,
+                    name=agent_config.name,
+                    delay=0.05
+                )
+            else:
+                # Create real Strands agent based on type
+                if agent_config.agent_type == "research":
+                    agent = StrandsAgentFactory.create_research_agent(agent_id)
+                elif agent_config.agent_type == "analysis":
+                    agent = StrandsAgentFactory.create_analysis_agent(agent_id)
+                elif agent_config.agent_type == "writer":
+                    agent = StrandsAgentFactory.create_writer_agent(agent_id)
+                elif agent_config.agent_type == "qa":
+                    agent = StrandsAgentFactory.create_qa_agent(agent_id)
+                else:  # custom
+                    # Use provided system prompt or default
+                    system_prompt = agent_config.system_prompt or agent_config.role
+                    agent = StrandsAgentFactory.create_custom_agent(
+                        agent_id=agent_id,
+                        name=agent_config.name,
+                        system_prompt=system_prompt,
+                        model=agent_config.model,
+                        temperature=agent_config.temperature
+                    )
+            
+            # Reset agent sequence for new execution
+            agent.reset_sequence()
+            orchestrator.register_agent(agent)
+        
+        # Build execution DAG based on mode
+        if request.execution_mode == "parallel":
+            # All agents in parallel
+            dag = build_parallel_dag([[
+                {"agent_id": f"agent_{i:03d}", "task": agent.task}
+                for i, agent in enumerate(request.agents)
+            ]])
+        else:
+            # Sequential execution (default)
+            dag = build_simple_dag([
+                {"agent_id": f"agent_{i:03d}", "task": agent.task}
+                for i, agent in enumerate(request.agents)
+            ])
+    
+    else:
+        # Default to dynamic mode if no agents provided
+        coordinator = TrueDynamicCoordinator(
+            agent_id="dynamic_coordinator",
+            name="Dynamic Task Coordinator",
+            model="gpt-4o-mini",
+            session_id=exec_id
+        )
+        
+        orchestrator.register_agent(coordinator)
+        
+        dag = build_simple_dag([
+            {"agent_id": "dynamic_coordinator", "task": request.task}
+        ])
+        
+        logger.info(f"Defaulting to dynamic coordinator for task: {request.task}")
     
     # Store execution info
     active_executions[exec_id] = {
@@ -150,7 +207,7 @@ async def start_streaming_v2(
         exec_id=exec_id,
         websocket_url=websocket_url,
         status="started",
-        message=f"Execution started with {len(request.agents)} agents"
+        message=f"Execution started in {request.execution_mode} mode"
     )
 
 
@@ -202,6 +259,30 @@ async def get_execution_status(exec_id: str):
         "dag_stats": execution["dag"].get_statistics() if execution["dag"] else None,
         "result": execution.get("result"),
         "error": execution.get("error")
+    }
+
+
+@router.get("/stream/v2/test-dynamic")
+async def test_dynamic_streaming():
+    """
+    Test the true dynamic coordinator that creates agents based on task
+    """
+    
+    # Test with a complex task
+    test_request = StreamingRequestV2(
+        task="Create a comprehensive business plan for a sustainable coffee shop startup in Seattle, including market research, financial projections, and marketing strategy",
+        execution_mode="dynamic",
+        use_mock=False
+    )
+    
+    # Start execution
+    response = await start_streaming_v2(test_request)
+    
+    return {
+        "message": "Dynamic execution started",
+        "exec_id": response.exec_id,
+        "websocket_url": response.websocket_url,
+        "instructions": f"Connect to ws://localhost:8000{response.websocket_url} to see dynamic agent creation"
     }
 
 
