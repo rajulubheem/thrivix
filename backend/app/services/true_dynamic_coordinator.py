@@ -303,19 +303,19 @@ The agents will be executed automatically.""",
             # Apply timeout to the entire streaming operation
             async with asyncio.timeout(planned.timeout):
                 async for event in agent.stream_async(full_prompt):
-                if "data" in event:
-                    text_chunk = event["data"]
-                    if text_chunk:
-                        result_text += text_chunk
-                        # Stream text from sub-agent
-                        yield TokenFrame(
-                            exec_id=context.exec_id,
-                            agent_id=planned.agent_id,
-                            seq=self._next_seq(),
-                            text=text_chunk,
-                            ts=time.time(),
-                            final=False
-                        )
+                    if "data" in event:
+                        text_chunk = event["data"]
+                        if text_chunk:
+                            result_text += text_chunk
+                            # Stream text from sub-agent
+                            yield TokenFrame(
+                                exec_id=context.exec_id,
+                                agent_id=planned.agent_id,
+                                seq=self._next_seq(),
+                                text=text_chunk,
+                                ts=time.time(),
+                                final=False
+                            )
         except asyncio.TimeoutError:
             logger.error(f"Agent {planned.name} timed out after {planned.timeout}s")
             error_msg = f"\n⚠️ Timeout: Agent execution exceeded {planned.timeout} seconds\n"
