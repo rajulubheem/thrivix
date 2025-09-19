@@ -348,11 +348,23 @@ class EventDrivenStrandsSwarm(StrandsSwarmService):
             if request.execution_mode == "event_driven":
                 # Use TRUE event-driven execution with dynamic spawning
                 # Don't create Strands agents - HumanLoopAgents will be created with callbacks
+                # Determine concurrency limit from context
+                max_concurrent = None
+                try:
+                    cfg = getattr(request, 'context', None) or {}
+                    scfg = cfg.get('swarm_config', {}) if isinstance(cfg, dict) else {}
+                    max_concurrent = int(
+                        scfg.get('max_concurrent_agents') or scfg.get('maxConcurrentAgents') or scfg.get('max_concurrent') or 0
+                    ) or None
+                except Exception:
+                    max_concurrent = None
+
                 return await self.execute_true_event_driven(
                     request.task, 
                     execution_id,
                     session_id,
-                    callback_handler
+                    callback_handler,
+                    max_concurrent_agents=max_concurrent
                 )
             else:
                 # For non-event_driven mode, create Strands agents
@@ -502,7 +514,8 @@ EVENT-DRIVEN COORDINATION:
         task: str,
         execution_id: str,
         session_id: str,
-        callback_handler: Optional[Callable] = None
+        callback_handler: Optional[Callable] = None,
+        max_concurrent_agents: Optional[int] = None
     ) -> SwarmExecutionResponse:
         """Execute task with TRUE event-driven dynamic agent spawning"""
         logger.info(f"🚀 Starting TRUE event-driven execution: {execution_id}")
@@ -534,10 +547,15 @@ EVENT-DRIVEN COORDINATION:
             
             # Forward ALL events directly to SSE for parallel streaming
             if callback_handler:
-                if asyncio.iscoroutinefunction(callback_handler):
-                    await callback_handler(**kwargs)
-                else:
-                    callback_handler(**kwargs)
+                try:
+                    if asyncio.iscoroutinefunction(callback_handler):
+                        # Never await here; schedule to avoid back-pressuring the agent stream
+                        asyncio.create_task(callback_handler(**kwargs))
+                    else:
+                        # Synchronous callback should be lightweight (enqueue only)
+                        callback_handler(**kwargs)
+                except Exception as e:
+                    logger.error(f"direct_streaming_callback error: {e}")
             else:
                 # Log when callback_handler is missing for important events
                 if event_type in ["text_generation", "agent_completed"]:
@@ -551,7 +569,8 @@ EVENT-DRIVEN COORDINATION:
             execution_id=actual_execution_id, 
             callback_handler=direct_streaming_callback,
             agent_timeout=base_timeout,
-            timeout_provider=self.get_effective_timeout
+            timeout_provider=self.get_effective_timeout,
+            max_concurrent_agents=max_concurrent_agents
         )
         logger.info(f"✅ DynamicAgentFactory created with PARALLEL streaming callback and timeout {base_timeout}s")
         

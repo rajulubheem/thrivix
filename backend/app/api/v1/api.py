@@ -21,6 +21,15 @@ if EVENT_ENDPOINTS_AVAILABLE:
     api_router.include_router(event_swarm.router, prefix="/event-swarm", tags=["event-swarm"])
     api_router.include_router(event_test.router, prefix="/event-test", tags=["event-test"])
 
+# Include new efficient streaming v2 endpoints
+try:
+    from app.api.v1.endpoints import streaming_v2, websocket_gateway, test_efficient
+    api_router.include_router(streaming_v2.router, prefix="/streaming", tags=["streaming-v2"])
+    api_router.include_router(websocket_gateway.router, tags=["websocket"])
+    api_router.include_router(test_efficient.router, tags=["test-efficient"])
+except ImportError as e:
+    print(f"Warning: Could not import streaming v2 endpoints: {e}")
+
 # Include True Dynamic Swarm endpoints
 try:
     from app.api.v1.endpoints import true_dynamic_swarm

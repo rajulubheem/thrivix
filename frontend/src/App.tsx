@@ -19,6 +19,7 @@ import ToolSettingsV2 from './pages/ToolSettingsV2';
 import SettingsPage from './pages/SettingsPage';
 import VercelResearch from './components/research/VercelResearch';
 import EventDrivenSwarmInterface from './components/swarm/EventDrivenSwarmInterface';
+import EfficientSwarmInterface from './components/swarm/EfficientSwarmInterface';
 import { TrueDynamicSwarmChatInterface } from './components/swarm/TrueDynamicSwarmChatInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
@@ -64,6 +65,9 @@ function App() {
             
             {/* True Dynamic Swarm with Session-Based Architecture */}
             <Route path="/true-dynamic-swarm" element={<TrueDynamicSwarmChatInterface />} />
+            
+            {/* New Efficient WebSocket-based Swarm */}
+            <Route path="/efficient-swarm" element={<EfficientSwarmInterface />} />
 
             {/* Redirect any other routes to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -15,13 +15,14 @@ logger = logging.getLogger(__name__)
 class DynamicAgentFactory:
     """Create agents on-the-fly based on needs"""
     
-    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None, callback_handler=None, agent_timeout: float = None, timeout_provider=None):
+    def __init__(self, human_loop_enabled: bool = True, execution_id: str = None, callback_handler=None, agent_timeout: float = None, timeout_provider=None, max_concurrent_agents: int = None):
         logger.info(f"🏭 DynamicAgentFactory __init__ called with callback_handler type={type(callback_handler).__name__}, is_callable={callable(callback_handler) if callback_handler else False}")
         self.human_loop_enabled = human_loop_enabled
         self.execution_id = execution_id
         self.callback_handler = callback_handler
         self.agent_timeout = agent_timeout or 120.0  # Default 120s if not provided
         self.timeout_provider = timeout_provider  # Callable to get agent-specific timeout
+        self.max_concurrent_agents = max_concurrent_agents  # Optional cap
         logger.info(f"🏭 self.callback_handler after assignment: type={type(self.callback_handler).__name__}, is_callable={callable(self.callback_handler) if self.callback_handler else False}")
         self.memory_store = get_memory_store() if human_loop_enabled else None
         # No more hardcoded agent templates - everything is AI-driven now
@@ -38,6 +39,23 @@ class DynamicAgentFactory:
         event_bus.on("agent.needed", self._handle_agent_needed)
         event_bus.on("specialist.needed", self._handle_specialist_needed)
         event_bus.on("task.complete", self._cleanup_agents)
+        # Track per-agent completion to release capacity
+        event_bus.on("agent.completed", self._on_agent_completed)
+        # Also track our internal callback style
+        event_bus.on("agent_completed", self._on_agent_completed)
+
+    async def _on_agent_completed(self, event):
+        try:
+            agent_name = None
+            # unify possible shapes
+            if hasattr(event, 'data') and isinstance(event.data, dict):
+                agent_name = event.data.get('agent') or event.data.get('name')
+            if not agent_name and hasattr(event, 'source'):
+                agent_name = event.source
+            if agent_name and agent_name in self.active_agents:
+                self.active_agents.pop(agent_name, None)
+        except Exception:
+            pass
     
     async def _handle_agent_needed(self, event):
         """Handle request for a new agent"""
@@ -90,6 +108,15 @@ class DynamicAgentFactory:
         """Create a new agent dynamically based on specific needs"""
         
         logger.info(f"🚀 SPAWNING AGENT: {role}")
+
+        # Concurrency gate if configured
+        if self.max_concurrent_agents and self.max_concurrent_agents > 0:
+            waited_ms = 0
+            while len(self.active_agents) >= self.max_concurrent_agents:
+                await asyncio.sleep(0.05)
+                waited_ms += 50
+                if waited_ms % 1000 == 0:
+                    logger.info(f"⏳ Waiting for capacity: {len(self.active_agents)}/{self.max_concurrent_agents}")
         
         # Extract detailed requirements from context/role
         requirements = context.get("context", "") if context else ""

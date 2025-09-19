@@ -4,15 +4,20 @@ Event-Driven Swarm API endpoints with human-in-loop support
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 import json
 import asyncio
 import time
-from collections import deque
+from collections import deque, defaultdict
+import os
 from datetime import datetime
 import uuid
 
 from app.schemas.swarm import SwarmExecutionRequest, SwarmExecutionResponse
+from app.schemas.events import TextGenerationEvent, AgentCompletedEvent, BusEvent
+from app.core.database import AsyncSessionLocal
+from sqlalchemy import select
+from app.models.database import SwarmExecution, ExecutionEvent, ExecutionStatus as DBExecStatus
 from app.services.event_driven_strands_swarm import EventDrivenStrandsSwarm
 from app.services.event_system import global_event_bus
 from app.core.security import get_current_user
@@ -23,6 +28,59 @@ logger = structlog.get_logger()
 
 # Global swarm service instance
 event_swarm_service = EventDrivenStrandsSwarm()
+
+# In-memory replay buffers for SSE resume (Last-Event-ID)
+# Per-execution ring buffer of the last N events with assigned SSE ids
+_REPLAY_MAX = int(os.getenv('SWARM_SSE_REPLAY_MAX', '2000'))
+_RUNTIME_CONFIG: Dict[str, Any] = {
+    'replay_max': _REPLAY_MAX,
+    'sample_every': int(os.getenv('SWARM_TEXT_SAMPLE_EVERY', '20')),
+    'coalesce': False,
+    'coalesce_ms': int(os.getenv('SWARM_COALESCE_MS', '15')),
+}
+_replay_state = {}  # execution_id -> { 'next_id': int, 'buffer': deque[(int, dict)] }
+
+def _get_replay_state(execution_id: str):
+    state = _replay_state.get(execution_id)
+    if not state:
+        state = {
+            'next_id': 1,
+            'buffer': deque(maxlen=int(_RUNTIME_CONFIG.get('replay_max') or _REPLAY_MAX)),
+        }
+        _replay_state[execution_id] = state
+    return state
+
+def _emit_and_buffer_sse(execution_id: str, event_obj: dict) -> str:
+    state = _get_replay_state(execution_id)
+    sse_id = state['next_id']
+    state['next_id'] += 1
+    # Store copy to avoid mutation surprises
+    state['buffer'].append((sse_id, dict(event_obj)))
+    payload = json.dumps(event_obj)
+    return f"id: {sse_id}\n" f"data: {payload}\n\n"
+
+def _format_sse_with_id(event_obj: dict, sse_id: int) -> str:
+    payload = json.dumps(event_obj)
+    return f"id: {sse_id}\n" f"data: {payload}\n\n"
+
+# Per-execution streaming metrics and budget state
+_stream_metrics: Dict[str, Dict[str, Dict[str, int]]] = defaultdict(lambda: defaultdict(lambda: {
+    'last_sequence': 0,
+    'chunks': 0,
+    'chars': 0
+}))
+
+_budget_state: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+    'tokens_last_min': deque(),  # (timestamp, tokens)
+    'requests_last_min': deque(),  # (timestamp)
+    'tokens_total': 0,
+    'chunks_total': 0,
+    'budget_exceeded': False,
+    'last_rate_limit_notice': 0.0
+})
+
+def _now_ts() -> float:
+    return time.time()
 
 
 @router.post("/execute")
@@ -60,9 +118,109 @@ async def execute_event_swarm(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/replay/{execution_id}")
+async def get_replay_depth(execution_id: str):
+    """Return current replay buffer depth and ID range for an execution."""
+    state = _get_replay_state(execution_id)
+    buf = state['buffer']
+    depth = len(buf)
+    oldest = buf[0][0] if depth > 0 else None
+    newest = buf[-1][0] if depth > 0 else None
+    return {
+        'execution_id': execution_id,
+        'depth': depth,
+        'max': _REPLAY_MAX,
+        'next_id': state['next_id'],
+        'oldest_id': oldest,
+        'newest_id': newest
+    }
+
+
+@router.get("/status/{execution_id}/streams")
+async def get_stream_metrics(execution_id: str):
+    """Return per-agent last-seen sequence and simple counters for a session."""
+    agents = _stream_metrics.get(execution_id, {})
+    budget = _budget_state.get(execution_id, {})
+    return {
+        'execution_id': execution_id,
+        'agents': agents,
+        'budget': {
+            'tokens_total': budget.get('tokens_total', 0),
+            'chunks_total': budget.get('chunks_total', 0),
+            'budget_exceeded': budget.get('budget_exceeded', False)
+        }
+    }
+
+
+@router.get("/config")
+async def get_runtime_config():
+    """Get current runtime configuration for SSE and sampling."""
+    return {
+        'replay_max': _RUNTIME_CONFIG.get('replay_max'),
+        'sample_every': _RUNTIME_CONFIG.get('sample_every'),
+        'coalesce': _RUNTIME_CONFIG.get('coalesce'),
+        'coalesce_ms': _RUNTIME_CONFIG.get('coalesce_ms')
+    }
+
+
+class UpdateConfigRequest(BaseModel):
+    replay_max: Optional[int] = None
+    sample_every: Optional[int] = None
+    coalesce: Optional[bool] = None
+    coalesce_ms: Optional[int] = None
+
+
+@router.post("/config")
+async def update_runtime_config(req: UpdateConfigRequest):
+    """Update runtime configuration and apply changes immediately."""
+    changed = {}
+    if req.replay_max is not None and req.replay_max > 0:
+        new_max = int(req.replay_max)
+        _RUNTIME_CONFIG['replay_max'] = new_max
+        # Update existing buffers to new maxlen
+        for exec_id, st in _replay_state.items():
+            old_buf = st['buffer']
+            new_buf = deque(maxlen=new_max)
+            # Preserve the newest entries up to new_max
+            for _, item in list(old_buf)[-new_max:]:
+                # We need to reassign IDs? Keep existing ids as-is for consistency
+                pass
+            # Rebuild while preserving (id, payload)
+            for pair in list(old_buf)[-new_max:]:
+                new_buf.append(pair)
+            st['buffer'] = new_buf
+        global _REPLAY_MAX
+        _REPLAY_MAX = new_max
+        changed['replay_max'] = new_max
+
+    if req.sample_every is not None and req.sample_every > 0:
+        _RUNTIME_CONFIG['sample_every'] = int(req.sample_every)
+        changed['sample_every'] = int(req.sample_every)
+
+    if req.coalesce is not None:
+        _RUNTIME_CONFIG['coalesce'] = bool(req.coalesce)
+        changed['coalesce'] = bool(req.coalesce)
+
+    if req.coalesce_ms is not None and req.coalesce_ms >= 0:
+        _RUNTIME_CONFIG['coalesce_ms'] = int(req.coalesce_ms)
+        changed['coalesce_ms'] = int(req.coalesce_ms)
+
+    return {
+        'ok': True,
+        'changed': changed,
+        'config': {
+            'replay_max': _RUNTIME_CONFIG['replay_max'],
+            'sample_every': _RUNTIME_CONFIG['sample_every'],
+            'coalesce': _RUNTIME_CONFIG['coalesce'],
+            'coalesce_ms': _RUNTIME_CONFIG['coalesce_ms']
+        }
+    }
+
+
 @router.post("/stream")
 async def stream_event_swarm(
-    request: SwarmExecutionRequest
+    request: SwarmExecutionRequest,
+    http_request: Request,
     # Temporarily disabled for testing: current_user: dict = Depends(get_current_user)
 ):
     """Stream swarm execution with Server-Sent Events"""
@@ -77,13 +235,36 @@ async def stream_event_swarm(
             request.execution_id = execution_id
             logger.info(f"Execution ID: {execution_id}")
             
+            # Optional client retry hint (5s)
+            yield "retry: 5000\n\n"
+
             # Send initial connection event
-            yield f"data: {json.dumps({'type': 'connected', 'execution_id': execution_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+            yield _emit_and_buffer_sse(execution_id, {'type': 'connected', 'execution_id': execution_id, 'timestamp': datetime.now().isoformat()})
             logger.info("Sent initial connection event")
+
+            # Persist/ensure execution record exists
+            try:
+                async with AsyncSessionLocal() as session:
+                    # Upsert-like behavior
+                    q = await session.execute(select(SwarmExecution).where(SwarmExecution.execution_id == execution_id))
+                    existing = q.scalars().first()
+                    if not existing:
+                        rec = SwarmExecution(
+                            execution_id=execution_id,
+                            user_id='anonymous',
+                            task=request.task,
+                            agents_config=( [a.dict() for a in request.agents] if getattr(request, 'agents', None) else None ),
+                            status=DBExecStatus.RUNNING,
+                            started_at=datetime.utcnow(),
+                        )
+                        session.add(rec)
+                        await session.commit()
+            except Exception as e:
+                logger.warning(f"Failed to persist execution record: {e}")
             
             # Create a queue for streaming events with size limit to prevent memory issues
-            # Limit to 500 events to provide backpressure
-            event_queue = asyncio.Queue(maxsize=500)
+            # Use a larger buffer to minimize dropped token chunks under bursty loads
+            event_queue = asyncio.Queue(maxsize=2000)
             
             # Track events from global event bus
             event_listener_task = None
@@ -124,14 +305,14 @@ async def stream_event_swarm(
                     
                     logger.debug(f"Forwarding bus event: {event.type} from {event.source}")
                     
-                    # Forward whitelisted event bus events to the SSE stream
-                    event_data = {
-                        "type": event.type,
-                        "data": event.data,
-                        "source": event.source,
-                        "timestamp": event.timestamp,
-                        "execution_id": execution_id
-                    }
+                    # Forward whitelisted bus events (validated)
+                    event_data = BusEvent(
+                        type=event.type,
+                        agent=event.source,
+                        data=event.data or {},
+                        timestamp=event.timestamp,
+                        execution_id=execution_id
+                    ).dict()
                     # Normalize agent for frontend consumers
                     try:
                         if isinstance(event.data, dict) and 'agent' in event.data:
@@ -148,11 +329,21 @@ async def stream_event_swarm(
                         # The output field should not be in agent.completed anymore
                     
                     # Forward the original event - use put_nowait to avoid blocking
-                    # Don't create unbounded tasks
                     try:
                         event_queue.put_nowait(event_data)
                     except asyncio.QueueFull:
                         logger.warning(f"Queue full, dropping bus event: {event.type}")
+
+                    # Persist non-text events (offload)
+                    try:
+                        _audit_queue.put_nowait({
+                            'execution_id': execution_id,
+                            'event_type': event.type,
+                            'agent': event.source,
+                            'data': event.data or {}
+                        })
+                    except asyncio.QueueFull:
+                        pass
                 except Exception as e:
                     logger.error(f"Error forwarding bus event: {e}", exc_info=True)
             
@@ -161,12 +352,29 @@ async def stream_event_swarm(
             
             # Track pending events using deque for O(1) operations
             pending_events = deque()
+            # Per-agent tiny-chunk coalescing to reduce event flood and latency
+            coalesce_buffers: Dict[str, Dict[str, Any]] = defaultdict(lambda: {'buf': '', 'seq': None})
+            coalesce_interval_sec = 0.03  # 30ms flush cadence
             
             # Track recent events to avoid duplicates
             recent_event_hashes = set()
             event_dedup_window = 100  # Keep last 100 event hashes
             
             # Create async streaming callback to handle events from swarm
+            # Budget configuration (optional) from request.context.swarm_config
+            budget_cfg = {}
+            try:
+                if request.context and isinstance(request.context, dict):
+                    budget_cfg = (request.context.get('swarm_config') or {})
+            except Exception:
+                budget_cfg = {}
+            token_budget = int(budget_cfg.get('token_budget') or 0) or None
+            chunk_budget = int(budget_cfg.get('chunk_budget') or 0) or None
+            tpm = int(budget_cfg.get('tpm') or 0) or None  # tokens per minute
+            rpm = int(budget_cfg.get('rpm') or 0) or None  # chunks per minute
+            sample_every = int(_RUNTIME_CONFIG.get('sample_every') or 20)
+            min_sample_chars = 20
+
             async def streaming_callback(**kwargs):
                 # Log what we receive for debugging - but only log the keys, not the values
                 received_keys = list(kwargs.keys())
@@ -239,49 +447,98 @@ async def stream_event_swarm(
                     else:
                         content = str(data) if data else ""
                         sequence = None
-                    
-                    # Also queue this as agent output event  
+
+                    # Coalesce per-agent tiny chunks and return quickly
                     if content and agent:
-                        agent_output_event = {
-                            "type": "text_generation",
-                            "agent": agent,
-                            "data": {
-                                "chunk": content,
-                                "text": content,
-                                "content": content,
-                                "sequence": sequence,  # Preserve sequence for proper dedup
-                                "execution_id": execution_id
-                            },
-                            "output": content,  # Keep for backwards compatibility
-                            "role": "assistant",
-                            "timestamp": datetime.now().isoformat(),
-                            "execution_id": execution_id
-                        }
-                        # Queue the event with put_nowait - OK to drop text chunks if queue is full
-                        try:
-                            event_queue.put_nowait(agent_output_event)
-                            # Log every 10th chunk to reduce log spam but still show activity
-                            if sequence and sequence % 10 == 0:
-                                logger.info(f"✍️ Streaming chunks from {agent} (seq: {sequence})")
-                        except asyncio.QueueFull:
-                            # Drop text chunks when queue is full - they're not critical
-                            logger.warning(f"Queue full, dropping text chunk from {agent}")
-                        except Exception as e:
-                            logger.error(f"Failed to queue text_generation from {agent}: {e}")
-                    return  # IMPORTANT: Return here to avoid processing the same data again
+                        # Update metrics
+                        _stream_metrics[execution_id][agent]['last_sequence'] = max(_stream_metrics[execution_id][agent]['last_sequence'], sequence or 0)
+                        _stream_metrics[execution_id][agent]['chunks'] += 1
+                        _stream_metrics[execution_id][agent]['chars'] += len(content)
+
+                        # Budget checks (approximate tokens by words)
+                        approx_tokens = max(1, len(content.split()))
+                        bs = _budget_state[execution_id]
+                        now = _now_ts()
+                        while bs['tokens_last_min'] and now - bs['tokens_last_min'][0][0] > 60:
+                            bs['tokens_last_min'].popleft()
+                        while bs['requests_last_min'] and now - bs['requests_last_min'][0] > 60:
+                            bs['requests_last_min'].popleft()
+                        bs['tokens_last_min'].append((now, approx_tokens))
+                        bs['requests_last_min'].append(now)
+                        bs['tokens_total'] += approx_tokens
+                        bs['chunks_total'] += 1
+
+                        over_token_budget = token_budget is not None and bs['tokens_total'] > token_budget
+                        over_chunk_budget = chunk_budget is not None and bs['chunks_total'] > chunk_budget
+                        over_tpm = tpm is not None and sum(t for _, t in bs['tokens_last_min']) > tpm
+                        over_rpm = rpm is not None and len(bs['requests_last_min']) > rpm
+                        if over_token_budget or over_chunk_budget or over_tpm or over_rpm:
+                            if not bs['budget_exceeded'] or (now - bs['last_rate_limit_notice'] > 2.0):
+                                notice = {
+                                    "type": "rate_limited",
+                                    "agent": agent,
+                                    "data": {
+                                        "over_token_budget": bool(over_token_budget),
+                                        "over_chunk_budget": bool(over_chunk_budget),
+                                        "over_tpm": bool(over_tpm),
+                                        "over_rpm": bool(over_rpm)
+                                    },
+                                    "timestamp": datetime.now().isoformat(),
+                                    "execution_id": execution_id
+                                }
+                                try:
+                                    event_queue.put_nowait(notice)
+                                except asyncio.QueueFull:
+                                    pass
+                                bs['budget_exceeded'] = True
+                                bs['last_rate_limit_notice'] = now
+                            return  # Drop this tiny chunk due to budget
+
+                        # Coalesce small chunks per agent
+                        cb = coalesce_buffers[agent]
+                        cb['buf'] += content
+                        if sequence is not None:
+                            cb['seq'] = sequence
+                        # Persist sampled partial text for audit (offload) using raw content
+                        if sequence and sequence % sample_every == 0 and len(content) >= min_sample_chars:
+                            try:
+                                _audit_queue.put_nowait({
+                                    'execution_id': execution_id,
+                                    'event_type': 'text_generation_sample',
+                                    'agent': agent,
+                                    'data': {'sequence': sequence, 'sample': content[:500], 'len': len(content)}
+                                })
+                            except asyncio.QueueFull:
+                                pass
+                        return  # Return: actual SSE emit is in coalescer
                         
                 elif event_type == "agent_completed":
-                    # Agent has completed - don't send content (already streamed)
-                    # Just send completion signal
-                    agent_output_event = {
-                        "type": "agent_completed",
-                        "agent": agent or kwargs.get("source", "unknown"),
-                        # Don't include content - it was already streamed chunk by chunk
-                        "role": "assistant", 
-                        "complete": True,
-                        "timestamp": datetime.now().isoformat(),
-                        "execution_id": execution_id
-                    }
+                    # Agent has completed - flush coalesced buffer then send completion
+                    try:
+                        cb = coalesce_buffers.get(agent or '', None)
+                        if cb and cb.get('buf'):
+                            ev = TextGenerationEvent(
+                                agent=agent or kwargs.get("source", "unknown"),
+                                data={
+                                    "chunk": cb['buf'],
+                                    "sequence": cb.get('seq'),
+                                    "execution_id": execution_id
+                                },
+                                execution_id=execution_id
+                            ).dict()
+                            # Best effort enqueue
+                            try:
+                                event_queue.put_nowait(ev)
+                            except asyncio.QueueFull:
+                                pass
+                            cb['buf'] = ''
+                    except Exception:
+                        pass
+                    agent_output_event = AgentCompletedEvent(
+                        agent=agent or kwargs.get("source", "unknown"),
+                        role="assistant",
+                        execution_id=execution_id
+                    ).dict()
                     # CRITICAL: Completion events MUST be delivered - use await
                     # This is a control event that signals agent done, never drop it
                     try:
@@ -314,7 +571,7 @@ async def stream_event_swarm(
                     except Exception as e:
                         logger.error(f"Failed to queue agent_completed from {agent}: {e}")
                     return  # IMPORTANT: Return here to avoid further processing
-                    
+                
                 elif "current_tool_use" in kwargs and kwargs["current_tool_use"]:
                     tool = kwargs["current_tool_use"]
                     event_type = "tool"
@@ -342,12 +599,12 @@ async def stream_event_swarm(
                 
                 # Create event for non-delta types (delta already handled above)
                 if event_type != "delta":
-                    event = {
-                        "type": event_type,
-                        "agent": agent,
-                        "content": content,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                    event = BusEvent(
+                        type=event_type,
+                        agent=agent,
+                        content=content,
+                        execution_id=execution_id
+                    ).dict()
                     
                     # Queue the event (non-blocking)
                     try:
@@ -357,6 +614,18 @@ async def stream_event_swarm(
                         logger.warning(f"Queue full, dropping event: {event_type} from {agent}")
                         # Still append to pending_events for later flush
                         pending_events.append(event)
+
+                # Persist select non-chunk events for audit (offload)
+                if event_type in ("message", "tool", "complete"):
+                    try:
+                        _audit_queue.put_nowait({
+                            'execution_id': execution_id,
+                            'event_type': event_type,
+                            'agent': agent,
+                            'data': {'content': content} if content else {}
+                        })
+                    except asyncio.QueueFull:
+                        pass
             
             # Track if streaming should continue
             streaming_active = True
@@ -384,6 +653,67 @@ async def stream_event_swarm(
             
             # Start the event flusher
             flusher_task = asyncio.create_task(flush_pending_events())
+            # Background audit persister (batch DB commits)
+            async def persist_audit_events():
+                try:
+                    while streaming_active:
+                        batch = []
+                        try:
+                            item = await asyncio.wait_for(_audit_queue.get(), timeout=0.25)
+                            batch.append(item)
+                        except asyncio.TimeoutError:
+                            pass
+                        for _ in range(200):
+                            try:
+                                batch.append(_audit_queue.get_nowait())
+                            except asyncio.QueueEmpty:
+                                break
+                        if not batch:
+                            continue
+                        try:
+                            async with AsyncSessionLocal() as session:
+                                for ev in batch:
+                                    ee = ExecutionEvent(
+                                        execution_id=ev['execution_id'],
+                                        event_type=ev['event_type'],
+                                        agent=ev.get('agent'),
+                                        data=ev.get('data') or {}
+                                    )
+                                    session.add(ee)
+                                await session.commit()
+                        except Exception as e:
+                            logger.debug(f"Audit persist batch failed: {e}")
+                except Exception as e:
+                    logger.debug(f"Audit persister exit: {e}")
+
+            audit_task = asyncio.create_task(persist_audit_events())
+
+            # Coalesced buffer periodic flusher
+            async def flush_coalesced():
+                try:
+                    while streaming_active:
+                        await asyncio.sleep(coalesce_interval_sec)
+                        # Emit coalesced content for each agent
+                        for a, cb in list(coalesce_buffers.items()):
+                            buf = cb.get('buf')
+                            if not buf:
+                                continue
+                            seq = cb.get('seq') or None
+                            try:
+                                ev = TextGenerationEvent(
+                                    agent=a,
+                                    data={"chunk": buf, "sequence": seq, "execution_id": execution_id},
+                                    execution_id=execution_id
+                                ).dict()
+                                event_queue.put_nowait(ev)
+                                cb['buf'] = ''
+                            except asyncio.QueueFull:
+                                # If queue full, keep buffer for next flush
+                                pass
+                except Exception as e:
+                    logger.debug(f"Coalescer exit: {e}")
+
+            coalescer_task = asyncio.create_task(flush_coalesced())
             
             # Start swarm execution in background
             async def run_swarm():
@@ -396,11 +726,26 @@ async def stream_event_swarm(
                     )
                     
                     # Queue completion event
-                    await event_queue.put({
+                    final_ev = {
                         'type': 'complete',
                         'result': str(result.result if hasattr(result, 'result') else result),
-                        'timestamp': datetime.now().isoformat()
-                    })
+                        'timestamp': datetime.now().isoformat(),
+                        'execution_id': execution_id
+                    }
+                    await event_queue.put(final_ev)
+
+                    # Mark execution as completed in DB
+                    try:
+                        async with AsyncSessionLocal() as session:
+                            q = await session.execute(select(SwarmExecution).where(SwarmExecution.execution_id == execution_id))
+                            rec = q.scalars().first()
+                            if rec:
+                                rec.status = DBExecStatus.COMPLETED
+                                rec.completed_at = datetime.utcnow()
+                                rec.result = final_ev.get('result')
+                                await session.commit()
+                    except Exception as de:
+                        logger.debug(f"Persist completion failed: {de}")
                     
                     # Signal end of stream
                     await event_queue.put(None)
@@ -423,6 +768,20 @@ async def stream_event_swarm(
             event_count = 0
             last_keepalive = time.time()
             last_queue_log = time.time()
+
+            # If client provided Last-Event-ID, replay any missed events from buffer
+            try:
+                last_event_id = http_request.headers.get('last-event-id') or http_request.headers.get('Last-Event-ID')
+                if last_event_id:
+                    last_event_id = int(last_event_id)
+                    state = _get_replay_state(execution_id)
+                    # Send buffered events with id > last_event_id
+                    for eid, payload in list(state['buffer']):
+                        if eid > last_event_id:
+                            yield _format_sse_with_id(payload, eid)
+                    logger.info(f"Replayed SSE events after Last-Event-ID={last_event_id}")
+            except Exception as re:
+                logger.debug(f"No replay or invalid Last-Event-ID: {re}")
             
             while True:
                 # Log queue size periodically to monitor congestion
@@ -439,8 +798,8 @@ async def stream_event_swarm(
                 try:
                     # First, check if queue has events without waiting
                     if not event_queue.empty():
-                        # Drain up to 20 events at once when queue has data
-                        batch_size = min(20, event_queue.qsize())
+                        # Drain more aggressively for low latency
+                        batch_size = min(100, event_queue.qsize())
                         for _ in range(batch_size):
                             try:
                                 event = event_queue.get_nowait()
@@ -460,8 +819,8 @@ async def stream_event_swarm(
                                 else:
                                     logger.info(f"📡 SSE: Sending {event_type} event to client (event #{event_count})")
                                 
-                                # Send event immediately
-                                yield f"data: {json.dumps(event)}\n\n"
+                                # Send event immediately (buffer + assign id)
+                                yield _emit_and_buffer_sse(execution_id, event)
                                 
                                 # Add flush comment periodically for text chunks
                                 if event_type == 'text_generation' and event_count % 10 == 0:
@@ -489,14 +848,14 @@ async def stream_event_swarm(
                         else:
                             logger.info(f"📡 SSE: Sending {event_type} event to client (event #{event_count})")
                         
-                        yield f"data: {json.dumps(event)}\n\n"
+                        yield _emit_and_buffer_sse(execution_id, event)
                     
                 except asyncio.TimeoutError:
                     # Send keepalive every second to maintain connection
                     current_time = time.time()
                     if current_time - last_keepalive >= 1.0:
-                        logger.debug("Sending keepalive")
-                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.now().isoformat()})}\n\n"
+                        hb = {'type': 'keepalive', 'timestamp': datetime.now().isoformat(), 'execution_id': execution_id}
+                        yield _emit_and_buffer_sse(execution_id, hb)
                         last_keepalive = current_time
                     
                     # Check if swarm is done
@@ -518,6 +877,19 @@ async def stream_event_swarm(
             try:
                 flusher_task.cancel()
                 await asyncio.sleep(0.1)  # Give time for task to cancel
+            except:
+                pass
+            try:
+                audit_task.cancel()
+            except:
+                pass
+            # Stop the coalescer if running
+            try:
+                coalescer_task.cancel()
+            except Exception:
+                pass
+            try:
+                coalescer_task.cancel()
             except:
                 pass
             try:

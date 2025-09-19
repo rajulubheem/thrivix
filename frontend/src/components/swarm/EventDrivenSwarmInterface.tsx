@@ -55,6 +55,10 @@ interface AgentState {
   status: 'spawning' | 'working' | 'complete' | 'error' | 'waiting';
   lastActivity: string;
   outputCount: number;
+  lastSequence?: number;
+  chunks?: number;
+  chars?: number;
+  rateLimited?: boolean;
 }
 
 // Utility to stringify role regardless of shape
@@ -79,6 +83,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
   const [availableTools, setAvailableTools] = useState<string[]>([]);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [restrictToSelected, setRestrictToSelected] = useState(false);
+  const [rateLimitedGlobal, setRateLimitedGlobal] = useState(false);
 
   const [maxConcurrentAgents, setMaxConcurrentAgents] = useState(10);
   const [maxTotalAgents, setMaxTotalAgents] = useState(30);
@@ -332,6 +337,11 @@ export const EventDrivenSwarmInterface: React.FC = () => {
         if (agent) finalizeAgentMessage(agent, ''); // Empty string means keep existing content
         break;
       }
+      case 'rate_limited': {
+        const agent = obj.agent || obj.data?.agent || lastStartedAgentRef.current || 'assistant';
+        ensureAgent(agent, { rateLimited: true, lastActivity: new Date().toISOString() });
+        break;
+      }
       case 'ai_decision': {
         const c = obj.data?.decision || obj.data?.content || obj.data?.chunk || '';
         setMessages(prev => ([...prev, { id: `ai-${Date.now()}`, agent: 'AI Decision', content: String(c).slice(0, 2000), timestamp: new Date(), type: 'system' }]));
@@ -363,6 +373,31 @@ export const EventDrivenSwarmInterface: React.FC = () => {
       }
     }
   }, [appendEvent, appendStreamChunk, ensureAgent, finalizeAgentMessage]);
+
+  // Poll backend for per-agent stream status while executing
+  useEffect(() => {
+    if (!executionId || !isExecuting) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/v1/event-swarm/status/${executionId}/streams`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const agentsMetrics = data?.agents || {};
+        const budget = data?.budget || {};
+        setRateLimitedGlobal(Boolean(budget?.budget_exceeded));
+        Object.entries(agentsMetrics).forEach(([agentName, m]: any) => {
+          ensureAgent(agentName, {
+            lastSequence: (m as any)?.last_sequence || (m as any)?.lastSequence || 0,
+            chunks: (m as any)?.chunks || 0,
+            chars: (m as any)?.chars || 0,
+          });
+        });
+      } catch {}
+    }, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [executionId, isExecuting, ensureAgent]);
 
   const connectSSE = useCallback(() => {
     if (eventSourceRef.current) return;
@@ -573,6 +608,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             <div className="text-xs text-gray-600 dark:text-gray-300">Agents: {agents.size}</div>
             <div className="text-xs text-gray-600 dark:text-gray-300">Active: {activeAgentCount}</div>
             <div className="text-xs text-gray-600 dark:text-gray-300">Events: {events.length}</div>
+            <div className="text-xs text-gray-600 dark:text-gray-300">Rate limited: {rateLimitedGlobal ? 'Yes' : 'No'}</div>
           </Card>
         </div>
         <div className="px-3 py-2 text-xs text-gray-500">Recent Events</div>
@@ -594,6 +630,7 @@ export const EventDrivenSwarmInterface: React.FC = () => {
             <div className="text-sm text-gray-600 dark:text-gray-300">Messages: {messages.length}</div>
             <div className="text-sm text-gray-600 dark:text-gray-300">Active: {activeAgentCount}</div>
             {executionId && (<Badge variant="outline" className="text-xs">{executionId.slice(0,8)}...</Badge>)}
+            {rateLimitedGlobal && (<Badge variant="destructive" className="text-[10px]">Rate-limited</Badge>)}
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => setShowSettingsHub(true)} className="gap-2">
