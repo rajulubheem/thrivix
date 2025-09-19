@@ -477,6 +477,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+  position: relative;
 }
 
 .efficient-agent-output::-webkit-scrollbar {
@@ -505,6 +506,33 @@
   line-height: 1.5;
   color: #1f2937;
   font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  overflow-y: auto;
+  max-height: 100%;
+}
+
+/* Copy button styles */
+.efficient-copy-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  z-index: 10;
+}
+
+.efficient-copy-button:hover {
+  background: white;
+  border-color: #d1d5db;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.efficient-copy-button:active {
+  transform: scale(0.95);
 }
 
 /* Error State */

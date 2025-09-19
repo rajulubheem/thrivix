@@ -8,8 +8,8 @@ import asyncio
 import json
 import time
 import logging
-from typing import AsyncIterator, Dict, Any, Optional, List, Union
-from dataclasses import dataclass
+from typing import AsyncIterator, Dict, Any, Optional, List, Union, Set
+from dataclasses import dataclass, field
 
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
@@ -32,14 +32,13 @@ class PlannedAgent:
     system_prompt: str
     model: str = "gpt-4o-mini"
     temperature: float = 0.7
-    depends_on: List[str] = None
-    tools: List[Dict[str, str]] = None
+    depends_on: List[str] = field(default_factory=list)  # Use agent_ids, not names
+    tools: List[Dict[str, str]] = field(default_factory=list)
+    timeout: float = 60.0  # Per-agent timeout in seconds
     
-    def __post_init__(self):
-        if self.depends_on is None:
-            self.depends_on = []
-        if self.tools is None:
-            self.tools = []
+    def get_dependency_ids(self) -> List[str]:
+        """Get dependency IDs - handles both agent_ids and names for backward compat"""
+        return [dep if dep.startswith('agent_') else dep for dep in self.depends_on]
 
 
 class TrueDynamicCoordinator(AgentRuntime):
@@ -62,7 +61,9 @@ class TrueDynamicCoordinator(AgentRuntime):
             storage_dir="./sessions"
         )
         self.planned_agents: List[PlannedAgent] = []
-        self.executed_agents: Dict[str, Any] = {}
+        self.planned_by_id: Dict[str, PlannedAgent] = {}  # ID to agent mapping for O(1) lookup
+        self.executed_agents: Dict[str, Any] = {}  # Keyed by agent_id now
+        self.agent_name_to_id: Dict[str, str] = {}  # Name to ID mapping
         self.shared_state = {"agents_created": [], "results": {}}
         self._agent_counter = 0
         self._initialize_coordinator()
@@ -78,7 +79,8 @@ class TrueDynamicCoordinator(AgentRuntime):
             system_prompt: str,
             model: str = "gpt-4o-mini",
             temperature: float = 0.7,
-            depends_on: List[str] = None
+            depends_on: List[str] = None,
+            timeout: float = 60.0
         ) -> str:
             """
             Plan a specialist agent with any role and capabilities
@@ -90,10 +92,22 @@ class TrueDynamicCoordinator(AgentRuntime):
                 system_prompt: Full system prompt defining agent's behavior
                 model: LLM model to use
                 temperature: Creativity level (0.0-1.0)
-                depends_on: List of agent names this depends on
+                depends_on: List of agent names or IDs this depends on
+                timeout: Maximum execution time in seconds
             """
             agent_id = f"agent_{self._agent_counter:03d}"
             self._agent_counter += 1
+            
+            # Normalize dependencies to agent_ids
+            dep_ids = []
+            if depends_on:
+                for dep in depends_on:
+                    if dep.startswith('agent_'):
+                        dep_ids.append(dep)
+                    elif dep in self.agent_name_to_id:
+                        dep_ids.append(self.agent_name_to_id[dep])
+                    else:
+                        dep_ids.append(dep)  # Will resolve later
             
             planned = PlannedAgent(
                 agent_id=agent_id,
@@ -103,13 +117,16 @@ class TrueDynamicCoordinator(AgentRuntime):
                 system_prompt=system_prompt,
                 model=model,
                 temperature=temperature,
-                depends_on=depends_on or []
+                depends_on=dep_ids,
+                timeout=timeout
             )
             
             self.planned_agents.append(planned)
+            self.planned_by_id[agent_id] = planned  # O(1) lookup
+            self.agent_name_to_id[name] = agent_id
             logger.info(f"Planned agent: {name} ({agent_id}) - {role}")
             
-            return f"Planned agent '{name}' with role '{role}'. Will execute after planning phase."
+            return f"Planned agent '{name}' ({agent_id}) with role '{role}'. Will execute after planning phase."
         
         @tool
         async def plan_agent_with_tools(
@@ -118,7 +135,10 @@ class TrueDynamicCoordinator(AgentRuntime):
             task: str,
             system_prompt: str,
             tool_descriptions: List[Dict[str, str]],
-            model: str = "gpt-4o-mini"
+            model: str = "gpt-4o-mini",
+            temperature: float = 0.7,
+            depends_on: List[str] = None,
+            timeout: float = 60.0
         ) -> str:
             """
             Plan an agent with custom tools/capabilities
@@ -141,6 +161,17 @@ class TrueDynamicCoordinator(AgentRuntime):
             
             full_system_prompt = system_prompt + tools_prompt
             
+            # Normalize dependencies
+            dep_ids = []
+            if depends_on:
+                for dep in depends_on:
+                    if dep.startswith('agent_'):
+                        dep_ids.append(dep)
+                    elif dep in self.agent_name_to_id:
+                        dep_ids.append(self.agent_name_to_id[dep])
+                    else:
+                        dep_ids.append(dep)
+            
             planned = PlannedAgent(
                 agent_id=agent_id,
                 name=name,
@@ -148,13 +179,18 @@ class TrueDynamicCoordinator(AgentRuntime):
                 task=task,
                 system_prompt=full_system_prompt,
                 model=model,
-                tools=tool_descriptions
+                temperature=temperature,
+                tools=tool_descriptions,
+                depends_on=dep_ids,
+                timeout=timeout
             )
             
             self.planned_agents.append(planned)
+            self.planned_by_id[agent_id] = planned  # O(1) lookup
+            self.agent_name_to_id[name] = agent_id
             logger.info(f"Planned tool-enabled agent: {name} ({agent_id})")
             
-            return f"Planned tool-enabled agent '{name}' with {len(tool_descriptions)} tools."
+            return f"Planned tool-enabled agent '{name}' ({agent_id}) with {len(tool_descriptions)} tools."
         
         @tool
         async def get_execution_plan() -> str:
@@ -207,7 +243,7 @@ The agents will be executed automatically.""",
     ):
         """Execute a planned agent and stream its execution"""
         
-        # Emit agent started event
+        # Emit agent started event with full configuration
         yield ControlFrame(
             exec_id=context.exec_id,
             type=ControlType.AGENT_STARTED,
@@ -215,24 +251,35 @@ The agents will be executed automatically.""",
             payload={
                 "name": planned.name,
                 "role": planned.role,
-                "parent": self.agent_id
+                "parent": self.agent_id,
+                "model": planned.model,
+                "temperature": planned.temperature
             }
         )
         
-        # Get context from dependencies
+        # Get context from dependencies (resolve both names and IDs)
         context_text = ""
         if planned.depends_on:
-            for dep_name in planned.depends_on:
-                if dep_name in self.executed_agents:
-                    context_text += f"\n{dep_name} results:\n{self.executed_agents[dep_name]}\n"
+            for dep in planned.depends_on:
+                # Try as agent_id first
+                if dep in self.executed_agents:
+                    context_text += f"\n{dep} results:\n{self.executed_agents[dep]}\n"
+                # Try as name
+                elif dep in self.agent_name_to_id:
+                    dep_id = self.agent_name_to_id[dep]
+                    if dep_id in self.executed_agents:
+                        context_text += f"\n{dep} results:\n{self.executed_agents[dep_id]}\n"
         
         # Build prompt
         full_prompt = f"Task: {planned.task}"
         if context_text:
             full_prompt = f"Context from previous agents:{context_text}\n\n{full_prompt}"
         
-        # Create the agent
-        openai_model = OpenAIModel(model_id=planned.model)
+        # Create the agent with temperature
+        openai_model = OpenAIModel(
+            model_id=planned.model,
+            temperature=planned.temperature
+        )
         
         # Create unique session for this sub-agent
         sub_agent_session = FileSessionManager(
@@ -249,10 +296,13 @@ The agents will be executed automatically.""",
         
         logger.info(f"Executing agent {planned.name} ({planned.agent_id})")
         
-        # Stream the agent's execution
+        # Stream the agent's execution with timeout
         result_text = ""
+        start_time = time.time()
         try:
-            async for event in agent.stream_async(full_prompt):
+            # Apply timeout to the entire streaming operation
+            async with asyncio.timeout(planned.timeout):
+                async for event in agent.stream_async(full_prompt):
                 if "data" in event:
                     text_chunk = event["data"]
                     if text_chunk:
@@ -266,6 +316,18 @@ The agents will be executed automatically.""",
                             ts=time.time(),
                             final=False
                         )
+        except asyncio.TimeoutError:
+            logger.error(f"Agent {planned.name} timed out after {planned.timeout}s")
+            error_msg = f"\n⚠️ Timeout: Agent execution exceeded {planned.timeout} seconds\n"
+            result_text = error_msg
+            yield TokenFrame(
+                exec_id=context.exec_id,
+                agent_id=planned.agent_id,
+                seq=self._next_seq(),
+                text=error_msg,
+                ts=time.time(),
+                final=False
+            )
         except Exception as e:
             logger.error(f"Error executing agent {planned.name}: {e}")
             error_msg = f"\n⚠️ Error: {str(e)}\n"
@@ -289,17 +351,24 @@ The agents will be executed automatically.""",
             final=True
         )
         
-        # Store result
-        self.executed_agents[planned.name] = result_text
+        # Store result by agent_id (stable key)
+        self.executed_agents[planned.agent_id] = result_text
+        # Also store in shared state for backward compatibility
+        self.shared_state["results"][planned.agent_id] = result_text
         
-        # Emit agent completed event
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Emit agent completed event with timing metrics
         yield ControlFrame(
             exec_id=context.exec_id,
             type=ControlType.AGENT_COMPLETED,
             agent_id=planned.agent_id,
             payload={
                 "name": planned.name,
-                "result": result_text[:200] + "..." if len(result_text) > 200 else result_text
+                "result": result_text[:200] + "..." if len(result_text) > 200 else result_text,
+                "execution_time": round(execution_time, 2),
+                "timeout": planned.timeout
             }
         )
     
@@ -379,7 +448,45 @@ Plan all the agents needed, then say "Planning complete" when done."""
                 final=True
             )
             
-            # Phase 2: Execution
+            # Emit planning summary with structured plan
+            if self.planned_agents:
+                plan_data = [{
+                    "id": agent.agent_id,
+                    "name": agent.name,
+                    "role": agent.role,
+                    "depends_on": agent.depends_on,
+                    "model": agent.model
+                } for agent in self.planned_agents]
+                
+                yield ControlFrame(
+                    exec_id=context.exec_id,
+                    type="planning_complete",
+                    agent_id=self.agent_id,
+                    payload={
+                        "plan": plan_data,
+                        "agent_count": len(self.planned_agents)
+                    }
+                )
+                
+                # Emit spawn events for each planned agent BEFORE execution
+                for planned in self.planned_agents:
+                    yield ControlFrame(
+                        exec_id=context.exec_id,
+                        type="agent_spawned",
+                        agent_id=planned.agent_id,
+                        payload={
+                            "id": planned.agent_id,
+                            "name": planned.name,
+                            "role": planned.role,
+                            "parent": self.agent_id,
+                            "depends_on": planned.depends_on,
+                            "model": planned.model,
+                            "temperature": planned.temperature,
+                            "has_tools": len(planned.tools) > 0
+                        }
+                    )
+            
+            # Phase 2: Execution with dependency resolution
             if self.planned_agents:
                 # Emit execution starting
                 yield TokenFrame(
@@ -391,20 +498,104 @@ Plan all the agents needed, then say "Planning complete" when done."""
                     final=False
                 )
                 
-                # Execute planned agents in order
-                for planned in self.planned_agents:
-                    # Check if dependencies are met
-                    deps_met = all(
-                        dep in self.executed_agents 
-                        for dep in planned.depends_on
-                    )
+                # Track execution state
+                pending_agents = set(agent.agent_id for agent in self.planned_agents)
+                executed = set()
+                failed_deps = set()
+                max_iterations = len(self.planned_agents) * 2  # Prevent infinite loops
+                iteration = 0
+                
+                # Execute agents with dependency resolution
+                while pending_agents and iteration < max_iterations:
+                    iteration += 1
+                    ready_to_execute = []
                     
-                    if deps_met:
-                        # Execute the agent and stream its output
-                        async for frame in self._execute_planned_agent(planned, context):
-                            yield frame
+                    for agent_id in list(pending_agents):
+                        agent = self.planned_by_id[agent_id]  # O(1) lookup
+                        
+                        # Check dependencies using agent_ids
+                        deps_resolved = True
+                        for dep in agent.get_dependency_ids():
+                            # Resolve name to ID if needed
+                            dep_id = self.agent_name_to_id.get(dep, dep) if not dep.startswith('agent_') else dep
+                            if dep_id not in executed and dep_id not in failed_deps:
+                                deps_resolved = False
+                                break
+                        
+                        if deps_resolved:
+                            ready_to_execute.append(agent)
+                    
+                    # Execute ready agents in parallel (with concurrency limit)
+                    if ready_to_execute:
+                        # Limit concurrent executions to avoid overwhelming the system
+                        max_concurrent = 3
+                        
+                        # Process in batches
+                        for i in range(0, len(ready_to_execute), max_concurrent):
+                            batch = ready_to_execute[i:i + max_concurrent]
+                            
+                            # Create tasks for parallel execution
+                            tasks = []
+                            for agent in batch:
+                                async def execute_agent(a):
+                                    frames = []
+                                    try:
+                                        async for frame in self._execute_planned_agent(a, context):
+                                            frames.append(frame)
+                                        return a.agent_id, frames, None
+                                    except Exception as e:
+                                        logger.error(f"Failed to execute agent {a.name}: {e}")
+                                        return a.agent_id, [], e
+                                
+                                tasks.append(execute_agent(agent))
+                            
+                            # Run batch in parallel
+                            results = await asyncio.gather(*tasks, return_exceptions=False)
+                            
+                            # Yield frames in order and update state
+                            for agent_id, frames, error in results:
+                                # Yield all frames from this agent
+                                for frame in frames:
+                                    yield frame
+                                
+                                # Update execution state
+                                if error:
+                                    failed_deps.add(agent_id)
+                                else:
+                                    executed.add(agent_id)
+                                pending_agents.remove(agent_id)
                     else:
-                        logger.warning(f"Dependencies not met for {planned.name}")
+                        # No progress possible - report unresolved dependencies
+                        if pending_agents:
+                            unresolved = []
+                            for agent_id in pending_agents:
+                                agent = self.planned_by_id[agent_id]  # O(1) lookup
+                                unresolved.append(f"{agent.name} ({agent.agent_id}): waiting for {agent.depends_on}")
+                            
+                            error_msg = f"\n⚠️ Unresolved dependencies detected:\n" + "\n".join(unresolved) + "\n"
+                            yield TokenFrame(
+                                exec_id=context.exec_id,
+                                agent_id=self.agent_id,
+                                seq=self._next_seq(),
+                                text=error_msg,
+                                ts=time.time(),
+                                final=False
+                            )
+                            
+                            # Emit control frame for UI
+                            yield ControlFrame(
+                                exec_id=context.exec_id,
+                                type="dependencies_unresolved",
+                                agent_id=self.agent_id,
+                                payload={
+                                    "unresolved": [{
+                                        "agent_id": aid,
+                                        "name": self.planned_by_id[aid].name,
+                                        "depends_on": self.planned_by_id[aid].depends_on
+                                    } for aid in pending_agents]
+                                }
+                            )
+                        break
             
             # Final summary
             summary = f"\n\n✅ Execution complete. {len(self.executed_agents)} agents executed successfully.\n"

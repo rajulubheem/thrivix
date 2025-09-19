@@ -202,6 +202,26 @@ class EventHub:
         # No longer need to track sequences - agents manage their own
         logger.info(f"Ready for new execution {exec_id}")
     
+    async def delete_execution_streams(self, exec_id: str):
+        """
+        Delete all streams for an execution immediately
+        """
+        await self.connect()
+        
+        streams = [
+            f"exec.{exec_id}.token",
+            f"exec.{exec_id}.control",
+            f"exec.{exec_id}.metrics"
+        ]
+        
+        for stream in streams:
+            try:
+                await self._redis.delete(stream)
+            except Exception as e:
+                logger.warning(f"Could not delete stream {stream}: {e}")
+        
+        logger.info(f"Deleted streams for execution {exec_id}")
+    
     async def cleanup_execution(self, exec_id: str, ttl: int = 3600):
         """
         Mark streams for expiration after TTL

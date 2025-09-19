@@ -3,8 +3,9 @@ Streaming V2: New efficient streaming endpoint using EventHub + WebSocket
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field, validator
+from typing import List, Dict, Any, Optional, Literal
+from enum import Enum
 import uuid
 import asyncio
 import logging
@@ -40,13 +41,29 @@ class AgentConfig(BaseModel):
     temperature: float = 0.7
 
 
+class ExecutionMode(str, Enum):
+    """Supported execution modes"""
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+    DAG = "dag"
+    DYNAMIC = "dynamic"
+
+
 class StreamingRequestV2(BaseModel):
     """Request for streaming execution"""
     task: str
+    execution_mode: ExecutionMode = ExecutionMode.DYNAMIC
     agents: Optional[List[AgentConfig]] = None  # Optional for dynamic mode
-    execution_mode: str = "dynamic"  # sequential, parallel, dag, dynamic
     max_parallel: int = Field(default=5, ge=1, le=20)
     use_mock: bool = False  # For testing without real LLM calls
+    
+    @validator('agents')
+    def validate_agents(cls, v, values):
+        """Validate agents requirement based on mode"""
+        mode = values.get('execution_mode')
+        if mode != ExecutionMode.DYNAMIC and not v:
+            raise ValueError(f"Agents list required for {mode} mode")
+        return v
 
 
 class StreamingResponseV2(BaseModel):
@@ -57,8 +74,9 @@ class StreamingResponseV2(BaseModel):
     message: str
 
 
-# Store active executions
+# Store active executions with background tasks
 active_executions: Dict[str, Dict[str, Any]] = {}
+background_tasks: Dict[str, asyncio.Task] = {}
 
 
 @router.post("/stream/v2", response_model=StreamingResponseV2)
@@ -82,12 +100,9 @@ async def start_streaming_v2(
     # Reset sequences for this execution
     await hub.reset_execution(exec_id)
     
-    # Delete existing streams if they exist (shouldn't happen with UUID, but just in case)
+    # Use EventHub method to delete streams
     try:
-        redis_client = hub._redis
-        await redis_client.delete(f"exec.{exec_id}.token")
-        await redis_client.delete(f"exec.{exec_id}.control")
-        await redis_client.delete(f"exec.{exec_id}.metrics")
+        await hub.delete_execution_streams(exec_id)
         logger.info(f"Cleared Redis streams for execution {exec_id}")
     except Exception as e:
         logger.warning(f"Could not clear Redis streams: {e}")
@@ -96,7 +111,7 @@ async def start_streaming_v2(
     orchestrator = DAGOrchestrator(max_parallel=request.max_parallel)
     
     # Check execution mode
-    if request.execution_mode == "dynamic":
+    if request.execution_mode == ExecutionMode.DYNAMIC:
         # Use true dynamic coordinator
         coordinator = TrueDynamicCoordinator(
             agent_id="dynamic_coordinator",
@@ -152,17 +167,17 @@ async def start_streaming_v2(
             orchestrator.register_agent(agent)
         
         # Build execution DAG based on mode
-        if request.execution_mode == "parallel":
+        if request.execution_mode == ExecutionMode.PARALLEL:
             # All agents in parallel
             dag = build_parallel_dag([[
-                {"agent_id": f"agent_{i:03d}", "task": agent.task}
-                for i, agent in enumerate(request.agents)
+                {"agent_id": f"agent_{i:03d}", "task": agent_cfg.task}
+                for i, agent_cfg in enumerate(request.agents)
             ]])
         else:
             # Sequential execution (default)
             dag = build_simple_dag([
-                {"agent_id": f"agent_{i:03d}", "task": agent.task}
-                for i, agent in enumerate(request.agents)
+                {"agent_id": f"agent_{i:03d}", "task": agent_cfg.task}
+                for i, agent_cfg in enumerate(request.agents)
             ])
     
     else:
@@ -190,7 +205,7 @@ async def start_streaming_v2(
         "status": "running"
     }
     
-    # Start execution in background
+    # Start execution in background and track it
     task = asyncio.create_task(
         execute_in_background(
             exec_id,
@@ -198,6 +213,7 @@ async def start_streaming_v2(
             dag
         )
     )
+    background_tasks[exec_id] = task
     logger.info(f"Created background task for execution {exec_id}: {task}")
     
     # Return WebSocket URL
@@ -240,6 +256,10 @@ async def execute_in_background(
         if exec_id in active_executions:
             active_executions[exec_id]["status"] = "failed"
             active_executions[exec_id]["error"] = str(e)
+    finally:
+        # Remove from background tasks
+        if exec_id in background_tasks:
+            del background_tasks[exec_id]
 
 
 @router.get("/stream/v2/{exec_id}/status")
@@ -251,10 +271,13 @@ async def get_execution_status(exec_id: str):
     
     execution = active_executions[exec_id]
     
+    # Safe agent count (handle None agents in dynamic mode)
+    agent_count = len(execution["request"].get("agents") or [])
+    
     return {
         "exec_id": exec_id,
         "status": execution["status"],
-        "agents": len(execution["request"]["agents"]),
+        "agents": agent_count,
         "mode": execution["request"]["execution_mode"],
         "dag_stats": execution["dag"].get_statistics() if execution["dag"] else None,
         "result": execution.get("result"),
@@ -271,7 +294,7 @@ async def test_dynamic_streaming():
     # Test with a complex task
     test_request = StreamingRequestV2(
         task="Create a comprehensive business plan for a sustainable coffee shop startup in Seattle, including market research, financial projections, and marketing strategy",
-        execution_mode="dynamic",
+        execution_mode=ExecutionMode.DYNAMIC,
         use_mock=False
     )
     
@@ -283,6 +306,54 @@ async def test_dynamic_streaming():
         "exec_id": response.exec_id,
         "websocket_url": response.websocket_url,
         "instructions": f"Connect to ws://localhost:8000{response.websocket_url} to see dynamic agent creation"
+    }
+
+
+@router.post("/stream/v2/{exec_id}/cancel")
+async def cancel_execution(exec_id: str):
+    """Cancel a running execution"""
+    
+    if exec_id not in active_executions:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    
+    execution = active_executions[exec_id]
+    
+    # Cancel background task if still running
+    if exec_id in background_tasks:
+        task = background_tasks[exec_id]
+        if not task.done():
+            task.cancel()
+            logger.info(f"Cancelled execution {exec_id}")
+    
+    # Update status
+    execution["status"] = "cancelled"
+    
+    # Emit control frames to notify connected clients
+    try:
+        hub = get_event_hub()
+        await hub.connect()
+        
+        # Emit error event
+        await hub.publish_control(
+            exec_id=exec_id,
+            frame_type=ControlType.ERROR,
+            agent_id="system",
+            payload={"error": "Execution cancelled by user", "type": "Cancelled"}
+        )
+        
+        # Emit session end
+        await hub.publish_control(
+            exec_id=exec_id,
+            frame_type=ControlType.SESSION_END,
+            payload={"status": "cancelled", "cancelled": True}
+        )
+    except Exception as e:
+        logger.warning(f"Could not emit cancellation events: {e}")
+    
+    return {
+        "exec_id": exec_id,
+        "status": "cancelled",
+        "message": "Execution cancelled successfully"
     }
 
 

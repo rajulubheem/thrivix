@@ -37,6 +37,9 @@ interface Agent {
   error?: string;
 }
 
+// Debug mode - set via env or toggle
+const DEBUG_MODE = process.env.NODE_ENV === 'development';
+
 const EfficientSwarmInterface: React.FC = () => {
   // State
   const [task, setTask] = useState('');
@@ -45,28 +48,31 @@ const EfficientSwarmInterface: React.FC = () => {
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic'>('dynamic');
-  const [useMockAgents, setUseMockAgents] = useState(true);
+  const [useMockAgents, setUseMockAgents] = useState(false);
   const [stats, setStats] = useState({
     tokensReceived: 0,
     controlEventsReceived: 0,
     latency: 0,
     startTime: 0
   });
+  const [debugMode, setDebugMode] = useState(DEBUG_MODE);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const agentSequences = useRef<Map<string, number>>(new Map());
   const connectionIdRef = useRef<string | null>(null);
+  const outputRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // WebSocket connection
-  const connectWebSocket = useCallback((execId: string) => {
+  const connectWebSocket = useCallback((execId: string, isReconnect: boolean = false) => {
     // Generate a unique connection ID for this session
     const newConnectionId = `${execId}-${Date.now()}`;
     
     // Close any existing connection first
     if (wsRef.current) {
-      console.log('Closing existing WebSocket connection');
+      if (debugMode) console.log('Closing existing WebSocket connection');
       wsRef.current.close();
       wsRef.current = null;
     }
@@ -75,16 +81,20 @@ const EfficientSwarmInterface: React.FC = () => {
     setConnectionStatus('connecting');
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Start from beginning (0) to get all messages for this execution
-    const wsUrl = `${protocol}//${window.location.hostname}:8000/api/v1/ws/${execId}?start_from=0`;
+    // Use Redis stream IDs: '0' for replay, '$' for new messages only
+    const startFrom = isReconnect ? '$' : '0';
+    const port = window.location.port || (protocol === 'wss:' ? '443' : '8000');
+    const wsUrl = `${protocol}//${window.location.hostname}:${port}/api/v1/ws/${execId}?start_from=${startFrom}`;
     
-    console.log(`Connecting to WebSocket: ${wsUrl} (connection: ${newConnectionId})`);
+    if (debugMode) {
+      console.log(`Connecting to WebSocket: ${wsUrl} (connection: ${newConnectionId})`);
+    }
     
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
+      if (debugMode) console.log('WebSocket connected');
       setConnectionStatus('connected');
       
       // Send ping to verify connection
@@ -94,7 +104,7 @@ const EfficientSwarmInterface: React.FC = () => {
     ws.onmessage = (event) => {
       // Only process messages if this is still the active connection
       if (connectionIdRef.current !== newConnectionId) {
-        console.log('Ignoring message from old connection');
+        if (debugMode) console.log('Ignoring message from old connection');
         return;
       }
       
@@ -102,40 +112,44 @@ const EfficientSwarmInterface: React.FC = () => {
         const frame: Frame = JSON.parse(event.data);
         handleFrame(frame);
       } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+        if (debugMode) console.error('Error parsing WebSocket message:', error);
       }
     };
 
     ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+      if (debugMode) console.error('WebSocket error:', error);
       setConnectionStatus('error');
     };
 
     ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
+      if (debugMode) console.log('WebSocket closed:', event.code, event.reason);
       setConnectionStatus('disconnected');
       wsRef.current = null;
 
       // Auto-reconnect if still running
       if (isRunning && !event.wasClean) {
+        setIsReconnecting(true);
         reconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket(execId);
+          connectWebSocket(execId, true);
         }, 2000);
       }
     };
-  }, [isRunning]);
+  }, [isRunning, debugMode]);
 
   // Handle incoming frames
   const handleFrame = useCallback((frame: Frame) => {
-    console.log('Received frame:', frame.frame_type, 
-      frame.frame_type === 'token' ? `seq=${(frame as TokenFrame).seq} agent=${(frame as TokenFrame).agent_id}` : (frame as ControlFrame).type
-    );
+    if (debugMode) {
+      console.log('Received frame:', frame.frame_type, 
+        frame.frame_type === 'token' ? `seq=${(frame as TokenFrame).seq} agent=${(frame as TokenFrame).agent_id}` : (frame as ControlFrame).type
+      );
+    }
+    
     if (frame.frame_type === 'token') {
       handleTokenFrame(frame as TokenFrame);
     } else if (frame.frame_type === 'control') {
       handleControlFrame(frame as ControlFrame);
     }
-  }, []);
+  }, [debugMode]);
 
   // Handle token frames
   const handleTokenFrame = useCallback((frame: TokenFrame) => {
@@ -146,13 +160,13 @@ const EfficientSwarmInterface: React.FC = () => {
     
     // Skip duplicate sequences
     if (seq === lastSeq) {
-      console.warn(`Duplicate frame dropped: agent=${agent_id}, seq=${seq}`);
+      if (debugMode) console.warn(`Duplicate frame dropped: agent=${agent_id}, seq=${seq}`);
       return;
     }
     
     // Skip out-of-order sequences (except final)
     if (seq < lastSeq && !final) {
-      console.warn(`Out of order frame dropped: agent=${agent_id}, seq=${seq}, last=${lastSeq}`);
+      if (debugMode) console.warn(`Out of order frame dropped: agent=${agent_id}, seq=${seq}, last=${lastSeq}`);
       return;
     }
     
@@ -175,23 +189,34 @@ const EfficientSwarmInterface: React.FC = () => {
       return updated;
     });
 
+    // Auto-scroll to bottom of agent output
+    setTimeout(() => {
+      const outputEl = outputRefs.current.get(agent_id);
+      if (outputEl) {
+        const preEl = outputEl.querySelector('pre');
+        if (preEl) {
+          preEl.scrollTop = preEl.scrollHeight;
+        }
+      }
+    }, 0);
+
     // Update stats
     setStats(prev => ({
       ...prev,
       tokensReceived: prev.tokensReceived + 1,
       latency: Date.now() - (frame.ts * 1000)
     }));
-  }, []);
+  }, [debugMode]);
 
   // Handle control frames
   const handleControlFrame = useCallback((frame: ControlFrame) => {
     const { type, agent_id, payload } = frame;
 
-    console.log('Control frame:', type, agent_id, payload);
+    if (debugMode) console.log('Control frame:', type, agent_id, payload);
 
     switch (type) {
       case 'connected':
-        console.log('Connected to execution:', frame.exec_id);
+        if (debugMode) console.log('Connected to execution:', frame.exec_id);
         break;
 
       case 'session_start':
@@ -221,8 +246,32 @@ const EfficientSwarmInterface: React.FC = () => {
         break;
 
       case 'agent_spawned':
-        // Handle dynamic agent spawning event
-        console.log('Agent spawned:', payload);
+        // Handle dynamic agent spawning event - add new agent to UI immediately
+        if (payload?.id) {
+          setAgents(prev => {
+            const updated = new Map(prev);
+            updated.set(payload.id, {
+              id: payload.id,
+              name: payload.name || payload.id,
+              status: 'pending',
+              output: '',
+              parent: payload.parent
+            } as Agent);
+            return updated;
+          });
+          if (debugMode) console.log('Agent spawned:', payload);
+        }
+        break;
+      
+      case 'planning_complete':
+        // Show plan summary
+        if (debugMode) console.log('Planning complete:', payload);
+        break;
+      
+      case 'task_started':
+      case 'task_completed':
+        // Handle DAG node events for better progress tracking
+        if (debugMode) console.log(`Task ${type}:`, payload);
         break;
 
       case 'agent_completed':
@@ -266,7 +315,7 @@ const EfficientSwarmInterface: React.FC = () => {
 
       case 'session_end':
         setIsRunning(false);
-        console.log('Session completed:', payload);
+        if (debugMode) console.log('Session completed:', payload);
         break;
     }
 
@@ -275,7 +324,7 @@ const EfficientSwarmInterface: React.FC = () => {
       ...prev,
       controlEventsReceived: prev.controlEventsReceived + 1
     }));
-  }, []);
+  }, [debugMode]);
 
   // Start execution
   const startExecution = async () => {
@@ -327,7 +376,9 @@ const EfficientSwarmInterface: React.FC = () => {
         ];
       }
 
-      const response = await fetch('http://localhost:8000/api/v1/streaming/stream/v2', {
+      // Use relative URL for better portability
+      const apiUrl = `${window.location.origin}/api/v1/streaming/stream/v2`;
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -338,17 +389,17 @@ const EfficientSwarmInterface: React.FC = () => {
       }
 
       const data = await response.json();
-      console.log('Execution started:', data);
+      if (debugMode) console.log('Execution started:', data);
 
       setExecutionId(data.exec_id);
       
       // Small delay to ensure backend is ready, then connect WebSocket once
       setTimeout(() => {
-        connectWebSocket(data.exec_id);
+        connectWebSocket(data.exec_id, false);
       }, 100);
       
     } catch (error) {
-      console.error('Error starting execution:', error);
+      if (debugMode) console.error('Error starting execution:', error);
       setIsRunning(false);
       setConnectionStatus('error');
     }
@@ -379,7 +430,7 @@ const EfficientSwarmInterface: React.FC = () => {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, []);
+  }, [debugMode]);
 
   // Calculate progress
   const calculateProgress = () => {
@@ -529,7 +580,7 @@ const EfficientSwarmInterface: React.FC = () => {
                 {agent.status === 'completed' && <span style={{ color: '#10b981' }}>✓</span>}
                 {agent.status === 'failed' && <span style={{ color: '#ef4444' }}>✗</span>}
                 <strong>{agent.name}</strong>
-                {agent.id.includes('sub') && <span style={{ fontSize: '0.8em', marginLeft: '8px', color: '#666' }}>(Spawned)</span>}
+                {(agent as any).parent && <span style={{ fontSize: '0.8em', marginLeft: '8px', color: '#666' }}>(Spawned)</span>}
               </div>
               <div className="efficient-agent-meta">
                 <span className={`efficient-agent-status efficient-status-${agent.status}`}>
@@ -548,8 +599,20 @@ const EfficientSwarmInterface: React.FC = () => {
                 <strong>Error:</strong> {agent.error}
               </div>
             ) : (
-              <div className="efficient-agent-output">
+              <div 
+                className="efficient-agent-output"
+                ref={(el) => el && outputRefs.current.set(agent.id, el)}
+              >
                 <pre>{agent.output || 'Waiting for output...'}</pre>
+                {agent.output && (
+                  <button
+                    className="efficient-copy-button"
+                    onClick={() => navigator.clipboard.writeText(agent.output)}
+                    title="Copy output"
+                  >
+                    📋
+                  </button>
+                )}
               </div>
             )}
           </div>
