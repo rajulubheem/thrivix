@@ -124,11 +124,11 @@ class TrueDynamicCoordinator(AgentRuntime):
             self.planned_agents.append(planned)
             self.planned_by_id[agent_id] = planned  # O(1) lookup
             self.agent_name_to_id[name] = agent_id
-            logger.info(f"Planned agent: {name} ({agent_id}) - {role}")
+            logger.info(f"✅ AGENT CREATED: {name} ({agent_id}) - {role}")
             logger.info(f"Total planned agents now: {len(self.planned_agents)}")
-            logger.info(f"Agent IDs in list: {[a.agent_id for a in self.planned_agents]}")
+            logger.info(f"Dependencies: {dep_ids if dep_ids else 'None'}")
             
-            return f"Planned agent '{name}' ({agent_id}) with role '{role}'. Will execute after planning phase."
+            return f"✅ Successfully created agent '{name}' ({agent_id}) with role '{role}'. Agent will execute after planning phase."
         
         @tool
         async def plan_agent_with_tools(
@@ -209,31 +209,30 @@ class TrueDynamicCoordinator(AgentRuntime):
                 })
             return json.dumps(plan, indent=2)
         
-        # Create the main coordinator
-        openai_model = OpenAIModel(model_id=self.model)
+        # Create the main coordinator with optimal temperature for tool use
+        openai_model = OpenAIModel(
+            model_id=self.model,
+            temperature=0.0  # Lower temperature for more deterministic tool calling
+        )
+        
+        # Store tools as instance attributes so they're accessible
+        self.plan_specialist_agent = plan_specialist_agent
+        self.plan_agent_with_tools = plan_agent_with_tools
+        self.get_execution_plan = get_execution_plan
+        
+        logger.info(f"Initializing coordinator with {len([plan_specialist_agent, plan_agent_with_tools, get_execution_plan])} tools")
         
         self.coordinator = Agent(
             name=self.name,
-            system_prompt="""You are a task coordinator that plans specialized agents.
+            system_prompt="""You create agents by calling tool functions.
 
-Your role:
-1. Analyze the task to identify needed expertise
-2. Plan appropriate specialist agents by CALLING the provided tool functions
-3. Set dependencies between agents when needed
+RULES:
+- Always use plan_specialist_agent to create agents
+- Never describe agents, only create them with tools
+- Create multiple agents for complex tasks
+- Use depends_on for sequential execution
 
-IMPORTANT: You MUST use the provided tool functions to plan agents. Do NOT write JSON or code examples.
-
-Available tools you MUST use:
-- plan_specialist_agent: Call this function to plan each agent
-- get_execution_plan: Call this to review your planned agents
-
-Instructions:
-1. For each agent you want to create, CALL the plan_specialist_agent function
-2. Do NOT write JSON, TypeScript, or any code examples
-3. Simply call the functions with the required parameters
-4. After planning all agents, say "Planning complete"
-
-The agents will be executed automatically after planning.""",
+Your response should primarily consist of function calls.""",
             model=openai_model,
             tools=[
                 plan_specialist_agent,
@@ -402,17 +401,22 @@ The agents will be executed automatically after planning.""",
         
         try:
             # Phase 1: Planning
-            prompt = f"""Analyze this task and plan the necessary specialist agents to accomplish it:
+            # Add few-shot examples to prime the model for tool calling
+            examples = """
+Example 1: Task "Research climate change"
+plan_specialist_agent(name="Climate Researcher", role="Research Specialist", task="Research climate change data and impacts", system_prompt="You are an expert researcher who gathers and analyzes information about climate change", temperature=0.7)
 
-Task: {context.task}
+Example 2: Task "Build a website"  
+plan_specialist_agent(name="Frontend Dev", role="Frontend Developer", task="Create UI components", system_prompt="You are a frontend developer expert in React and modern web technologies", temperature=0.7)
+plan_specialist_agent(name="Backend Dev", role="Backend Developer", task="Build API endpoints", system_prompt="You are a backend developer expert in Python and REST APIs", temperature=0.7, depends_on=["Frontend Dev"])
+"""
+            
+            prompt = f"""Task: {context.task}
 
-Think step by step:
-1. What expertise is needed?
-2. What agents should be created?
-3. What order should they work in?
-4. How should they share information?
+Create agents using the plan_specialist_agent function.
+{examples}
 
-Plan all the agents needed, then say "Planning complete" when done."""
+Now create agents for your task. Call plan_specialist_agent for each agent:"""
             
             if context.parent_result:
                 prompt += f"\n\nContext: {context.parent_result}"
@@ -446,6 +450,18 @@ Plan all the agents needed, then say "Planning complete" when done."""
                 )
                 # Continue with any agents that were planned before the error
                 planning_response += error_msg
+            
+            # Check if agents were actually created
+            if not self.planned_agents:
+                logger.warning("⚠️ NO AGENTS WERE CREATED! The coordinator may not have called the tool functions.")
+                yield TokenFrame(
+                    exec_id=context.exec_id,
+                    agent_id=self.agent_id,
+                    seq=self._next_seq(),
+                    text="\n\n⚠️ WARNING: No agents were created! The coordinator needs to use the tool functions.\n",
+                    ts=time.time(),
+                    final=False
+                )
             
             # Final token for planning phase
             yield TokenFrame(

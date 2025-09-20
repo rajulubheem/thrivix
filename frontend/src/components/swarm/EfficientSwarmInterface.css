@@ -34,6 +34,80 @@ body {
   display: flex;
   flex-direction: column;
   background: linear-gradient(to bottom, #0f172a, #1a1f36);
+  overflow: hidden;
+}
+
+/* Neural thinking specific styles */
+@keyframes neural-pulse {
+  0%, 100% {
+    opacity: 0.3;
+    stroke-width: 2;
+  }
+  50% {
+    opacity: 1;
+    stroke-width: 4;
+  }
+}
+
+@keyframes thought-flow {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -20;
+  }
+}
+
+.neural-connection {
+  animation: neural-pulse 2s ease-in-out infinite;
+}
+
+.neural-connection.active {
+  stroke: #667eea;
+  stroke-dasharray: 5, 5;
+  animation: thought-flow 1s linear infinite;
+}
+
+.neural-node.thinking {
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.8), rgba(118, 75, 162, 0.6));
+  box-shadow: 0 0 30px rgba(102, 126, 234, 0.6);
+  animation: neural-activation 1s ease-in-out infinite;
+}
+
+@keyframes neural-activation {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 30px rgba(102, 126, 234, 0.6);
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 50px rgba(102, 126, 234, 1);
+  }
+}
+
+.thought-bubble {
+  position: absolute;
+  background: rgba(30, 41, 59, 0.95);
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  padding: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  max-width: 200px;
+  pointer-events: none;
+  animation: fadeIn 0.3s ease-in;
+  z-index: 1000;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Control Bar */
@@ -173,10 +247,11 @@ body {
 /* Main Display */
 .main-display {
   flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
   z-index: 5;
   padding: 2rem;
-  overflow: auto;
 }
 
 /* Neural View */
@@ -184,9 +259,45 @@ body {
   width: 100%;
   height: 100%;
   position: relative;
-  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(26, 31, 54, 0.95));
   border-radius: 12px;
   overflow: hidden;
+}
+
+/* Neural Loading State */
+.neural-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: white;
+}
+
+.neural-loading h2 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.neural-loading p {
+  font-size: 1rem;
+  color: var(--text-dim);
+  margin-bottom: 2rem;
+}
+
+.loading-spinner {
+  width: 50px;
+  height: 50px;
+  margin: 0 auto;
+  border: 3px solid rgba(102, 126, 234, 0.2);
+  border-top: 3px solid var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .layout-controls {
@@ -239,12 +350,7 @@ body {
   height: calc(100% - 60px);
   position: relative;
   overflow: auto;
-  cursor: grab;
   background: radial-gradient(ellipse at center, rgba(102, 126, 234, 0.05) 0%, transparent 70%);
-}
-
-.neural-container:active {
-  cursor: grabbing;
 }
 
 .connections-layer {

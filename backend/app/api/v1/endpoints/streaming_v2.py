@@ -23,6 +23,7 @@ from app.services.strands_agent_runtime import (
     StrandsAgentFactory
 )
 from app.services.true_dynamic_coordinator import TrueDynamicCoordinator
+from app.services.neural_thinking_coordinator import NeuralThinkingCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class ExecutionMode(str, Enum):
     PARALLEL = "parallel"
     DAG = "dag"
     DYNAMIC = "dynamic"
+    NEURAL = "neural"  # New neural thinking mode
 
 
 class StreamingRequestV2(BaseModel):
@@ -61,7 +63,7 @@ class StreamingRequestV2(BaseModel):
     def validate_agents(cls, v, values):
         """Validate agents requirement based on mode"""
         mode = values.get('execution_mode')
-        if mode != ExecutionMode.DYNAMIC and not v:
+        if mode not in [ExecutionMode.DYNAMIC, ExecutionMode.NEURAL] and not v:
             raise ValueError(f"Agents list required for {mode} mode")
         return v
 
@@ -128,6 +130,24 @@ async def start_streaming_v2(
         ])
         
         logger.info(f"Using true dynamic coordinator for task: {request.task}")
+    
+    elif request.execution_mode == ExecutionMode.NEURAL:
+        # Use neural thinking coordinator
+        coordinator = NeuralThinkingCoordinator(
+            agent_id="neural_network",
+            name="Neural Thinking Network",
+            model="gpt-4o-mini",
+            session_id=exec_id
+        )
+        
+        orchestrator.register_agent(coordinator)
+        
+        # Simple DAG with just the neural network
+        dag = build_simple_dag([
+            {"agent_id": "neural_network", "task": request.task}
+        ])
+        
+        logger.info(f"Using neural thinking network for task: {request.task}")
     
     elif request.agents:
         # Use provided agent configuration
@@ -354,6 +374,30 @@ async def cancel_execution(exec_id: str):
         "exec_id": exec_id,
         "status": "cancelled",
         "message": "Execution cancelled successfully"
+    }
+
+
+@router.get("/stream/v2/test-neural")
+async def test_neural_thinking():
+    """
+    Test the neural thinking coordinator that creates a network of thinking agents
+    """
+    
+    # Test with a complex task requiring collaborative thinking
+    test_request = StreamingRequestV2(
+        task="Design an innovative solution for reducing plastic waste in oceans that is both economically viable and environmentally effective",
+        execution_mode=ExecutionMode.NEURAL,
+        use_mock=False
+    )
+    
+    # Start execution
+    response = await start_streaming_v2(test_request)
+    
+    return {
+        "message": "Neural thinking network started",
+        "exec_id": response.exec_id,
+        "websocket_url": response.websocket_url,
+        "instructions": f"Connect to ws://localhost:8000{response.websocket_url} to see neural agents thinking collaboratively"
     }
 
 

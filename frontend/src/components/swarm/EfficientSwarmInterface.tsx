@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import './EfficientSwarmInterface.css';
+import NeuralThinkingSimple from './NeuralThinkingSimple';
 
 interface TokenFrame {
   exec_id: string;
@@ -162,7 +163,7 @@ const EfficientSwarmInterface: React.FC = () => {
   const [isRunning, setIsRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
-  const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic'>('dynamic');
+  const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic' | 'neural'>('neural');
   const [useMockAgents, setUseMockAgents] = useState(false);
 
   // UI state
@@ -191,6 +192,11 @@ const EfficientSwarmInterface: React.FC = () => {
     totalTokens: 0,
     totalEvents: 0
   });
+  
+  // Neural thinking state
+  const [neuralThoughts, setNeuralThoughts] = useState<any[]>([]);
+  const [consensusItems, setConsensusItems] = useState<any[]>([]);
+  const [isNeuralThinking, setIsNeuralThinking] = useState(false);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -432,6 +438,47 @@ const EfficientSwarmInterface: React.FC = () => {
         setIsRunning(false);
         addConsoleOutput('system', 'Execution complete');
         break;
+        
+      case 'neural_thought':
+        // Handle neural thinking visualization
+        if (payload?.thought) {
+          const thought = payload.thought;
+          addConsoleOutput('neural', `💭 [${thought.agent}] ${thought.type}: ${thought.content} (conf: ${thought.confidence})`);
+          
+          // Add to neural thoughts collection
+          setNeuralThoughts(prev => [...prev, {
+            ...thought,
+            id: `${thought.agent}-${Date.now()}`,
+            timestamp: Date.now()
+          }]);
+          
+          // Update agent activation level if provided
+          if (agent_id && payload.activation !== undefined) {
+            setAgents(prev => {
+              const updated = new Map(prev);
+              const agent = updated.get(agent_id);
+              if (agent) {
+                updated.set(agent_id, {
+                  ...agent,
+                  output: agent.output + `\n[${thought.type}] ${thought.content}\n`
+                });
+              }
+              return updated;
+            });
+          }
+        }
+        break;
+        
+      case 'consensus_reached':
+        // Handle consensus visualization
+        if (payload?.items) {
+          addConsoleOutput('success', `🎯 Consensus reached on ${payload.items.length} topics!`);
+          setConsensusItems(payload.items);
+          payload.items.forEach((item: any) => {
+            addConsoleOutput('info', `  Topic: ${item.topic} (confidence: ${item.confidence.toFixed(2)})`);
+          });
+        }
+        break;
     }
 
     setMetrics(prev => ({
@@ -449,6 +496,11 @@ const EfficientSwarmInterface: React.FC = () => {
     setWindows(new Map()); // Clear windows on new execution
     agentSequences.current.clear();
     setConsoleOutput([]);
+    
+    // Reset neural thinking state
+    setNeuralThoughts([]);
+    setConsensusItems([]);
+    setIsNeuralThinking(executionMode === 'neural');
 
     addConsoleOutput('system', '=== STARTING EXECUTION ===');
     addConsoleOutput('info', `Mode: ${executionMode}`);
@@ -802,6 +854,23 @@ const EfficientSwarmInterface: React.FC = () => {
         <div className="main-display">
           {viewMode === 'neural' && (
               <div className="neural-view">
+                {/* Show Neural Thinking Simple for neural mode execution */}
+                {executionMode === 'neural' && neuralThoughts.length > 0 ? (
+                  <NeuralThinkingSimple
+                    thoughts={neuralThoughts}
+                    consensusItems={consensusItems}
+                    isThinking={isRunning}
+                    agents={agents}
+                    task={task}
+                  />
+                ) : executionMode === 'neural' && isRunning ? (
+                  <div className="neural-loading">
+                    <h2>Initializing Neural Thinking Network...</h2>
+                    <p>5 AI agents are preparing to collaborate on your task</p>
+                    <div className="loading-spinner"></div>
+                  </div>
+                ) : (
+                  <>
                 <div className="layout-controls">
                   <span className="layout-label">Layout:</span>
                   {['force', 'grid', 'tree', 'circular', 'manual'].map(layout => (
@@ -1106,6 +1175,8 @@ const EfficientSwarmInterface: React.FC = () => {
                       </div>
                     </div>
                 )}
+                  </>
+                )}
               </div>
           )}
 
@@ -1183,6 +1254,7 @@ const EfficientSwarmInterface: React.FC = () => {
                 onChange={(e) => setExecutionMode(e.target.value as any)}
                 disabled={isRunning}
             >
+              <option value="neural">Neural Thinking</option>
               <option value="dynamic">Dynamic AI</option>
               <option value="sequential">Sequential</option>
               <option value="parallel">Parallel</option>
