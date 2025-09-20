@@ -125,6 +125,8 @@ class TrueDynamicCoordinator(AgentRuntime):
             self.planned_by_id[agent_id] = planned  # O(1) lookup
             self.agent_name_to_id[name] = agent_id
             logger.info(f"Planned agent: {name} ({agent_id}) - {role}")
+            logger.info(f"Total planned agents now: {len(self.planned_agents)}")
+            logger.info(f"Agent IDs in list: {[a.agent_id for a in self.planned_agents]}")
             
             return f"Planned agent '{name}' ({agent_id}) with role '{role}'. Will execute after planning phase."
         
@@ -216,15 +218,22 @@ class TrueDynamicCoordinator(AgentRuntime):
 
 Your role:
 1. Analyze the task to identify needed expertise
-2. Plan appropriate specialist agents using the tools
+2. Plan appropriate specialist agents by CALLING the provided tool functions
 3. Set dependencies between agents when needed
 
-Use these tools:
-- plan_specialist_agent: Plan an agent with a specific role
-- get_execution_plan: Review your planned agents
+IMPORTANT: You MUST use the provided tool functions to plan agents. Do NOT write JSON or code examples.
 
-Keep agent plans simple and focused. After planning, say "Planning complete".
-The agents will be executed automatically.""",
+Available tools you MUST use:
+- plan_specialist_agent: Call this function to plan each agent
+- get_execution_plan: Call this to review your planned agents
+
+Instructions:
+1. For each agent you want to create, CALL the plan_specialist_agent function
+2. Do NOT write JSON, TypeScript, or any code examples
+3. Simply call the functions with the required parameters
+4. After planning all agents, say "Planning complete"
+
+The agents will be executed automatically after planning.""",
             model=openai_model,
             tools=[
                 plan_specialist_agent,
@@ -487,6 +496,7 @@ Plan all the agents needed, then say "Planning complete" when done."""
                     )
             
             # Phase 2: Execution with dependency resolution
+            logger.info(f"About to execute agents. Planned count: {len(self.planned_agents)}")
             if self.planned_agents:
                 # Emit execution starting
                 yield TokenFrame(
@@ -534,36 +544,19 @@ Plan all the agents needed, then say "Planning complete" when done."""
                         for i in range(0, len(ready_to_execute), max_concurrent):
                             batch = ready_to_execute[i:i + max_concurrent]
                             
-                            # Create tasks for parallel execution
-                            tasks = []
+                            # Execute agents in parallel but stream their output immediately
+                            # Don't collect frames - yield them as they come for real-time streaming
                             for agent in batch:
-                                async def execute_agent(a):
-                                    frames = []
-                                    try:
-                                        async for frame in self._execute_planned_agent(a, context):
-                                            frames.append(frame)
-                                        return a.agent_id, frames, None
-                                    except Exception as e:
-                                        logger.error(f"Failed to execute agent {a.name}: {e}")
-                                        return a.agent_id, [], e
-                                
-                                tasks.append(execute_agent(agent))
-                            
-                            # Run batch in parallel
-                            results = await asyncio.gather(*tasks, return_exceptions=False)
-                            
-                            # Yield frames in order and update state
-                            for agent_id, frames, error in results:
-                                # Yield all frames from this agent
-                                for frame in frames:
-                                    yield frame
-                                
-                                # Update execution state
-                                if error:
-                                    failed_deps.add(agent_id)
-                                else:
-                                    executed.add(agent_id)
-                                pending_agents.remove(agent_id)
+                                # Execute and stream each agent's output in real-time
+                                try:
+                                    async for frame in self._execute_planned_agent(agent, context):
+                                        yield frame  # Stream immediately, don't collect
+                                    executed.add(agent.agent_id)
+                                except Exception as e:
+                                    logger.error(f"Failed to execute agent {agent.name}: {e}")
+                                    failed_deps.add(agent.agent_id)
+                                finally:
+                                    pending_agents.remove(agent.agent_id)
                     else:
                         # No progress possible - report unresolved dependencies
                         if pending_agents:

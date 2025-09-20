@@ -83,7 +83,8 @@ const EfficientSwarmInterface: React.FC = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     // Use Redis stream IDs: '0' for replay, '$' for new messages only
     const startFrom = isReconnect ? '$' : '0';
-    const port = window.location.port || (protocol === 'wss:' ? '443' : '8000');
+    // Always use backend port 8000 when on localhost
+    const port = window.location.hostname === 'localhost' ? '8000' : (window.location.port || (protocol === 'wss:' ? '443' : '8000'));
     const wsUrl = `${protocol}//${window.location.hostname}:${port}/api/v1/ws/${execId}?start_from=${startFrom}`;
     
     if (debugMode) {
@@ -601,7 +602,9 @@ const EfficientSwarmInterface: React.FC = () => {
             ) : (
               <div 
                 className="efficient-agent-output"
-                ref={(el) => el && outputRefs.current.set(agent.id, el)}
+                ref={(el) => {
+                  if (el) outputRefs.current.set(agent.id, el);
+                }}
               >
                 <pre>{agent.output || 'Waiting for output...'}</pre>
                 {agent.output && (
