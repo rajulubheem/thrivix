@@ -43,7 +43,7 @@ const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
   };
 
   return (
-    <div className={`agent-node ${data.status} ${selected ? 'selected' : ''}`}>
+    <div className={`agent-node ${data.status} ${selected ? 'selected' : ''}`} title={data.description || ''}>
       <Handle
         type="target"
         position={Position.Left}
@@ -53,9 +53,44 @@ const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
       <div className="node-header">
         <div className="node-status" style={{ background: getStatusColor() }} />
         <span className="node-title">{data.label || data.name}</span>
+        {data.nodeType && (
+          <span className="node-badge" style={{ marginLeft: 8 }}>{String(data.nodeType)}</span>
+        )}
       </div>
       
       <div className="node-body">
+        {data.agentRole && (
+          <div className="node-role" style={{ color: '#94a3b8', fontSize: 12, marginBottom: 4 }}>{data.agentRole}</div>
+        )}
+        {data.description && (
+          <div className="node-description" style={{ color: '#cbd5e1', fontSize: 12, maxHeight: 60, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {data.description}
+          </div>
+        )}
+        {Array.isArray(data.toolsPlanned) && data.toolsPlanned.length > 0 && (
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+            {data.toolsPlanned.slice(0,4).map((t: string) => (
+              <span key={t} style={{ fontSize:10, background:'#0b1324', color:'#cbd5e1', padding:'2px 6px', borderRadius:999 }} title={`planned: ${t}`}>
+                {t}
+              </span>
+            ))}
+            {data.toolsPlanned.length > 4 && (
+              <span style={{ fontSize:10, color:'#94a3b8' }}>+{data.toolsPlanned.length - 4}</span>
+            )}
+          </div>
+        )}
+        {Array.isArray(data.toolsUsed) && data.toolsUsed.length > 0 && (
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+            {data.toolsUsed.slice(0,4).map((t: string) => (
+              <span key={t} style={{ fontSize:10, background:'#1f2937', color:'#cbd5e1', padding:'2px 6px', borderRadius:999 }} title={t}>
+                {t}
+              </span>
+            ))}
+            {data.toolsUsed.length > 4 && (
+              <span style={{ fontSize:10, color:'#94a3b8' }}>+{data.toolsUsed.length - 4}</span>
+            )}
+          </div>
+        )}
         {data.status === 'running' && (
           <div className="node-progress">
             <div className="progress-bar" />
@@ -236,6 +271,17 @@ const FlowSwarmInterface: React.FC = () => {
   const [activelyStreamingAgents, setActivelyStreamingAgents] = useState<Set<string>>(new Set());
   // When a full state machine graph is provided by backend, keep it as source of truth
   const [hasStateMachineStructure, setHasStateMachineStructure] = useState<boolean>(false);
+  // Human-in-the-loop decision modal
+  const [decisionPrompt, setDecisionPrompt] = useState<null | {stateId: string, name: string, description?: string, allowed: string[]}>(null);
+  // Tools hub state
+  const [showToolsHub, setShowToolsHub] = useState(false);
+  const [toolsLoading, setToolsLoading] = useState(false);
+  const [availableTools, setAvailableTools] = useState<string[]>([]);
+  const [toolDetails, setToolDetails] = useState<Record<string, { description?: string; category?: string }>>({});
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  const [restrictToSelected, setRestrictToSelected] = useState<boolean>(false);
+  const [toolSearch, setToolSearch] = useState('');
+  const [toolPrefs, setToolPrefs] = useState<null | { unknown: string[]; effective: string[] }>(null);
   
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -431,6 +477,43 @@ const FlowSwarmInterface: React.FC = () => {
     isStreamingRef.current = activelyStreamingAgents.size > 0;
   }, [activelyStreamingAgents]);
 
+  // Load tools (once)
+  useEffect(() => {
+    (async () => {
+      try {
+        setToolsLoading(true);
+        const res = await fetch(`${window.location.origin}/api/v1/dynamic-tools/available`);
+        if (res.ok) {
+          const data = await res.json();
+          const names: string[] = (data.tools || []).map((t: any) => t.name);
+          const details: Record<string, { description?: string; category?: string }> = {};
+          (data.tools || []).forEach((t: any) => {
+            details[t.name] = { description: t.description, category: (t.capabilities || [])[0] };
+          });
+          setAvailableTools(names);
+          setToolDetails(details);
+          // Restore
+          try {
+            const rawSel = localStorage.getItem('flowswarm_selected_tools');
+            if (rawSel) setSelectedTools(new Set(JSON.parse(rawSel)));
+            const rawRestrict = localStorage.getItem('flowswarm_restrict_tools');
+            if (rawRestrict) setRestrictToSelected(rawRestrict === 'true');
+          } catch {}
+        }
+      } finally {
+        setToolsLoading(false);
+      }
+    })();
+  }, []);
+
+  // Persist tool prefs
+  useEffect(() => {
+    try { localStorage.setItem('flowswarm_selected_tools', JSON.stringify(Array.from(selectedTools))); } catch {}
+  }, [selectedTools]);
+  useEffect(() => {
+    try { localStorage.setItem('flowswarm_restrict_tools', restrictToSelected ? 'true' : 'false'); } catch {}
+  }, [restrictToSelected]);
+
   // WebSocket handlers
   const connectWebSocket = useCallback((execId: string, isReconnect: boolean = false) => {
     if (wsRef.current) {
@@ -519,6 +602,12 @@ const FlowSwarmInterface: React.FC = () => {
     const { type, agent_id, payload } = frame;
     
     switch (type) {
+      case 'tool_preferences': {
+        const unknown = Array.isArray(payload?.unknown) ? payload.unknown : [];
+        const effective = Array.isArray(payload?.effective) ? payload.effective : [];
+        setToolPrefs({ unknown, effective });
+        break;
+      }
       case 'dag_structure':
         // Switch to DAG structure mode
         setHasStateMachineStructure(false);
@@ -605,9 +694,12 @@ const FlowSwarmInterface: React.FC = () => {
               label: state.name,
               name: state.name,
               status: 'pending',
-              fluxNodeType: state.type,
+              nodeType: state.type,
               task: state.task,
               tools: state.tools,
+              toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
+              description: state.description,
+              agentRole: state.agent_role,
             },
           }));
           
@@ -652,6 +744,27 @@ const FlowSwarmInterface: React.FC = () => {
           setTimeout(() => fitView({ padding: 0.2, duration: 400, maxZoom: 1 }), 100);
         }
         break;
+        
+      case 'human_decision_required':
+        if (payload?.state && payload?.allowed_events) {
+          const st = payload.state;
+          setDecisionPrompt({
+            stateId: st.id,
+            name: st.name,
+            description: st.description,
+            allowed: payload.allowed_events as string[],
+          });
+        }
+        break;
+
+      case 'state_tools_resolved': {
+        const { state_id, tools } = payload || {};
+        if (!state_id) break;
+        setNodes(nodes => nodes.map(n => (
+          n.id === state_id ? { ...n, data: { ...n.data, toolsPlanned: Array.isArray(tools) ? tools : [] } } : n
+        )));
+        break;
+      }
         
       case 'state_entered':
         // A state is being executed
@@ -719,6 +832,31 @@ const FlowSwarmInterface: React.FC = () => {
           );
         }
         break;
+
+      case 'tool_use': {
+        const toolName = payload?.tool || payload?.name;
+        if (!agent_id || !toolName) break;
+        // Update agents map with tool usage
+        setAgents(prev => {
+          const updated = new Map(prev);
+          const ag = updated.get(agent_id);
+          if (ag) {
+            const tools = new Set((ag as any).tools || []);
+            tools.add(toolName);
+            (ag as any).tools = Array.from(tools);
+            updated.set(agent_id, ag);
+          }
+          return updated;
+        });
+        // Update node badges
+        setNodes(nodes => nodes.map(n => {
+          if (n.id !== agent_id) return n;
+          const current = new Set<string>(Array.isArray(n.data?.toolsUsed) ? n.data.toolsUsed : []);
+          current.add(toolName);
+          return { ...n, data: { ...n.data, toolsUsed: Array.from(current) } };
+        }));
+        break;
+      }
         
       case 'agent_started':
         if (agent_id) {
@@ -867,7 +1005,11 @@ const FlowSwarmInterface: React.FC = () => {
         task,
         execution_mode: executionMode,
         use_mock: false,
-        max_parallel: 5
+        max_parallel: 5,
+        tool_preferences: {
+          selected_tools: Array.from(selectedTools),
+          restrict_to_selected: restrictToSelected,
+        }
       };
       
       // Use AI state machine endpoint for dynamic mode
@@ -937,6 +1079,125 @@ const FlowSwarmInterface: React.FC = () => {
 
   return (
     <div className="flow-swarm-container">
+      {/* Tools Hub Modal */}
+      {showToolsHub && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={() => setShowToolsHub(false)}>
+          <div style={{ background:'#0f172a', color:'#e2e8f0', width:640, maxHeight:'80vh', borderRadius:8, padding:16, overflow:'auto' }} onClick={(e)=>e.stopPropagation()} onMouseDown={(e)=>e.stopPropagation()}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+              <h3 style={{ margin:0 }}>Select Tools</h3>
+              <button className="panel-button" onClick={()=>setShowToolsHub(false)}>Close</button>
+            </div>
+            <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+              <input className="task-input" placeholder="Search tools..." value={toolSearch} onChange={e=>setToolSearch(e.target.value)} />
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setRestrictToSelected(prev => !prev)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setRestrictToSelected(prev => !prev); } }}
+                style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none', padding:'4px 8px', border:'1px solid #334155', borderRadius:6 }}
+              >
+                <div style={{ width:16, height:16, border:'1px solid #475569', borderRadius:4, background: restrictToSelected ? '#22c55e' : 'transparent' }} />
+                <span>Restrict to selected</span>
+              </div>
+              <button className="panel-button" onClick={()=>setSelectedTools(new Set(availableTools))}>Select All</button>
+              <button className="panel-button" onClick={()=>setSelectedTools(new Set())}>Clear</button>
+            </div>
+            {/* Unknown selection warning inside modal */}
+            {(() => {
+              const unknownSel = Array.from(selectedTools).filter(s => !availableTools.includes(s));
+              if (unknownSel.length === 0) return null;
+              return (
+                <div style={{
+                  marginBottom: 8,
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  background: '#3f1d1d',
+                  color: '#fecaca',
+                  border: '1px solid #7f1d1d'
+                }}>
+                  <div style={{ fontSize: 12 }}>These selected names are not registered tools and will be ignored at runtime:</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>{unknownSel.join(', ')}</div>
+                </div>
+              );
+            })()}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              {availableTools.filter(t => t.toLowerCase().includes(toolSearch.toLowerCase())).map(t => (
+                <div
+                  key={t}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    setSelectedTools(prev => {
+                      const n = new Set(prev);
+                      if (n.has(t)) n.delete(t); else n.add(t);
+                      return n;
+                    });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedTools(prev => {
+                        const n = new Set(prev);
+                        if (n.has(t)) n.delete(t); else n.add(t);
+                        return n;
+                      });
+                    }
+                  }}
+                  style={{
+                    border:'1px solid #334155',
+                    borderRadius:8,
+                    padding:10,
+                    display:'flex',
+                    gap:8,
+                    cursor:'pointer',
+                    background: selectedTools.has(t) ? '#0b1324' : 'transparent'
+                  }}
+                >
+                  <div style={{ width:18, height:18, border:'1px solid #475569', borderRadius:4, background: selectedTools.has(t) ? '#22c55e' : 'transparent' }} />
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t}</div>
+                    {toolDetails[t]?.description && (
+                      <div style={{ fontSize:12, color:'#94a3b8' }}>{toolDetails[t]?.description}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {toolsLoading && <div>Loading tools…</div>}
+            </div>
+          </div>
+        </div>
+      )}
+      {decisionPrompt && (
+        <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+          <div style={{ background: '#0f172a', color: '#e2e8f0', padding: 20, borderRadius: 8, width: 420 }}>
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Choose next event</h3>
+            <div style={{ fontWeight: 600 }}>{decisionPrompt.name}</div>
+            {decisionPrompt.description && (
+              <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 6 }}>{decisionPrompt.description}</div>
+            )}
+            <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {decisionPrompt.allowed.map(ev => (
+                <button key={ev} className="panel-button" onClick={async () => {
+                  try {
+                    if (!executionId) return;
+                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/decision`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ state_id: decisionPrompt.stateId, event: ev })
+                    });
+                    setDecisionPrompt(null);
+                  } catch (e) {
+                    console.error('Failed to submit decision', e);
+                  }
+                }}>{ev}</button>
+              ))}
+            </div>
+            <div style={{ marginTop: 12, textAlign: 'right' }}>
+              <button className="panel-button" onClick={() => setDecisionPrompt(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header className="flow-header">
         <div className="header-brand">
@@ -966,6 +1227,20 @@ const FlowSwarmInterface: React.FC = () => {
 
       {/* Main Content */}
       <div className="flow-content">
+        {/* Tool preferences banner */}
+        {toolPrefs && (toolPrefs.unknown.length > 0) && (
+          <div style={{
+            margin: '8px 12px',
+            padding: '8px 12px',
+            borderRadius: 6,
+            background: '#3f1d1d',
+            color: '#fecaca',
+            border: '1px solid #7f1d1d'
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Some selected tools are not registered and will be ignored:</div>
+            <div style={{ fontSize: 12 }}>{toolPrefs.unknown.join(', ')}</div>
+          </div>
+        )}
         {/* React Flow Graph */}
         <div className="flow-graph-panel" ref={reactFlowWrapper}>
           <ReactFlow
@@ -1022,6 +1297,9 @@ const FlowSwarmInterface: React.FC = () => {
                 </button>
                 <button onClick={resetView} className="panel-button">
                   Clear All
+                </button>
+                <button onClick={() => setShowToolsHub(true)} className="panel-button">
+                  Tools
                 </button>
               </div>
             </Panel>

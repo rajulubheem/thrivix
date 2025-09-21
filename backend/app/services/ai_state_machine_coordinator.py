@@ -44,6 +44,71 @@ class AIStateMachineCoordinator:
         self.config = config or {}
         self.tool_registry = ToolRegistry()
         self.active_agents: Dict[str, StrandsAgentRuntime] = {}
+        # Cache of available tools
+        try:
+            self._all_tools = self.tool_registry.get_all_tools()  # name -> instance
+        except Exception:
+            self._all_tools = {}
+        # Simple alias map to translate AI-suggested tool labels to registry names
+        self._tool_alias_map = {
+            'web_search': 'tavily_search',
+            'design_tool': 'diagram',
+            'simulation_tool': 'python_repl',
+            'browser': 'http_request',
+            'extract_links': 'http_request',
+            'fetch_webpage': 'http_request',
+            'wikipedia_search': 'tavily_search',
+        }
+        # Aliases are optional; default off to prefer direct tool names
+        self._enable_aliases = bool(self.config.get('enable_aliases', False))
+        # Human-in-the-loop decision waiters per execution/state
+        self._decision_waiters: Dict[str, asyncio.Future] = {}
+
+    def _decision_key(self, exec_id: str, state_id: str) -> str:
+        return f"{exec_id}:{state_id}"
+
+    def submit_decision(self, exec_id: str, state_id: str, event: str) -> bool:
+        key = self._decision_key(exec_id, state_id)
+        fut = self._decision_waiters.get(key)
+        if fut and not fut.done():
+            fut.set_result(event)
+            return True
+        return False
+
+    async def _await_human_decision(self, exec_id: str, state: Dict[str, Any], allowed: list[str], timeout: float = 300.0) -> Optional[str]:
+        """Publish a decision request and wait for user input via API."""
+        # Notify UI
+        await self.hub.publish_control(ControlFrame(
+            exec_id=exec_id,
+            type="human_decision_required",
+            agent_id=state.get('id'),
+            payload={
+                "state": {
+                    "id": state.get('id'),
+                    "name": state.get('name'),
+                    "type": state.get('type'),
+                    "description": state.get('description'),
+                    "agent_role": state.get('agent_role'),
+                },
+                "allowed_events": allowed
+            }
+        ))
+
+        # Create waiter
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        key = self._decision_key(exec_id, state.get('id'))
+        self._decision_waiters[key] = fut
+
+        try:
+            selected = await asyncio.wait_for(fut, timeout=timeout)
+            return selected
+        except asyncio.TimeoutError:
+            logger.warning(f"Human decision timeout for {key}")
+            return None
+        finally:
+            # Cleanup
+            self._decision_waiters.pop(key, None)
         
     def _normalize_state_machine(self, machine: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure consistency between states and edges, fill missing nodes, and sync transitions.
@@ -97,6 +162,21 @@ class AIStateMachineCoordinator:
         # Rebuild states list
         states = list(state_map.values())
 
+        # Resolve planned tools for each state at creation time
+        for s in states:
+            try:
+                planned = self._resolve_tool_names_for_state(s)
+                # Always overwrite tools with planned list to remove arbitrary AI names
+                s['tools'] = planned
+                # Announce planned tools so UI can show them immediately
+                try:
+                    # Will be published later when exec_id exists; here we only annotate
+                    pass
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
         # Build transitions from edges (merge with existing)
         for e in edges:
             src = e.get('source'); tgt = e.get('target'); ev = e.get('event')
@@ -115,10 +195,147 @@ class AIStateMachineCoordinator:
         machine['edges'] = edges
         return machine
 
+    def _tool_inventory_text(self, names: Optional[List[str]] = None) -> str:
+        """Return a concise list of tools and descriptions.
+        If names is provided, limit to those; otherwise respect restrict_to_selected preferences.
+        """
+        tools = self._all_tools or {}
+        prefs = self.config.get('tool_preferences') or {}
+        sel = set(prefs.get('selected_tools') or [])
+        restrict = bool(prefs.get('restrict_to_selected', False))
+
+        list_names: List[str]
+        if names is not None:
+            list_names = [n for n in names if n in tools]
+        elif restrict and sel:
+            list_names = [n for n in sel if n in tools]
+        else:
+            list_names = list(tools.keys())
+        lines = []
+        for n in list_names[:50]:
+            desc = getattr(tools.get(n), 'description', '') or ''
+            lines.append(f"- {n}: {desc}")
+        return "\n".join(lines)
+
+    def _resolve_tools_for_state(self, state: Dict[str, Any]) -> List[Any]:
+        """Pick the best matching tools for a state using simple heuristics.
+        - If state specifies tools, use those (and ignore unknowns)
+        - Else choose a subset based on state name/description/type
+        - Exclude tools that require approval unless config allows
+        """
+        available = self._all_tools or {}
+        prefs = self.config.get('tool_preferences') or {}
+        sel = set(prefs.get('selected_tools') or [])
+        restrict = bool(prefs.get('restrict_to_selected', False))
+        allow_approval = bool(self.config.get('allow_approval_tools') or prefs.get('allow_approval_tools', False))
+        names = []
+        # use explicitly requested tools first
+        for t in (state.get('tools') or []):
+            if t in available and (not restrict or t in sel):
+                names.append(t)
+        if not names:
+            text = f"{state.get('name','')} {state.get('description','')} {state.get('task','')}".lower()
+            def add_if_present(opts: List[str]):
+                for o in opts:
+                    if o in available and o not in names and (not restrict or o in sel):
+                        names.append(o)
+
+            if any(k in text for k in ['research', 'search', 'gather', 'web', 'news']):
+                add_if_present(['tavily_search', 'http_request', 'file_read'])
+            if any(k in text for k in ['design', 'diagram', 'architecture']):
+                add_if_present(['diagram'])
+            if any(k in text for k in ['develop', 'code', 'script', 'generate code', 'implementation']):
+                add_if_present(['python_repl', 'shell_command'])
+            if any(k in text for k in ['file', 'document', 'write', 'save']):
+                add_if_present(['file_read', 'file_write', 'editor'])
+            if any(k in text for k in ['plan', 'task', 'todo']):
+                add_if_present(['task_planner', 'agent_todo'])
+            if not names:
+                # general-purpose safe defaults
+                add_if_present(['http_request', 'file_read'])
+
+        # Filter out tools that explicitly require approval unless permitted
+        resolved: List[Any] = []
+        for n in names:
+            tool = available.get(n)
+            if not tool:
+                continue
+            requires_approval = getattr(tool, 'requires_approval', False)
+            if requires_approval and not allow_approval:
+                continue
+            resolved.append(tool)
+
+        # Cap the number to keep prompts light
+        return resolved[:6]
+
+    def _alias_tool_name(self, name: str) -> str:
+        if not self._enable_aliases:
+            return name
+        return self._tool_alias_map.get(name, name)
+
+    def _resolve_tool_names_for_state(self, state: Dict[str, Any]) -> List[str]:
+        """Resolve preferred tool NAMES for a state using aliases, prefs, and heuristics."""
+        available = set((self._all_tools or {}).keys())
+        prefs = self.config.get('tool_preferences') or {}
+        sel = set(prefs.get('selected_tools') or [])
+        restrict = bool(prefs.get('restrict_to_selected', False))
+        allow_approval = bool(self.config.get('allow_approval_tools') or prefs.get('allow_approval_tools', False))
+
+        # Start from state-declared tools (after aliasing)
+        declared = [self._alias_tool_name(t) for t in (state.get('tools') or [])]
+        names: List[str] = []
+        for t in declared:
+            if t in available and (not restrict or t in sel):
+                names.append(t)
+
+        # If empty and state is a tool_call, use heuristics via instance resolution
+        if not names and state.get('type') == 'tool_call':
+            tool_objs = self._resolve_tools_for_state(state)
+            # reverse map instance -> name
+            rev = {v: k for k, v in (self._all_tools or {}).items()}
+            for obj in tool_objs:
+                n = rev.get(obj)
+                if not n:
+                    # best-effort: skip unnamed
+                    continue
+                if restrict and n not in sel:
+                    continue
+                # if requires approval and not allowed, coordinator already filtered
+                names.append(n)
+
+        # De-dup and cap
+        seen = set()
+        final: List[str] = []
+        for n in names:
+            if n in seen:
+                continue
+            # respect approval preference again using metadata if available
+            tool = (self._all_tools or {}).get(n)
+            if tool:
+                req = getattr(tool, 'requires_approval', False)
+                if req and not allow_approval:
+                    continue
+            seen.add(n)
+            final.append(n)
+        return final[:6]
+
     async def analyze_and_create_state_machine(self, task: str) -> Dict[str, Any]:
         """Use AI to dynamically generate a complete state machine based on the task"""
         
         # Let AI create the ENTIRE state machine dynamically
+        # Provide allowed tools context so the model doesn't invent tool names
+        prefs = self.config.get('tool_preferences') or {}
+        selected = list(prefs.get('selected_tools') or [])
+        restrict = bool(prefs.get('restrict_to_selected', False))
+        registry_names = list((self.tool_registry.tools or {}).keys()) if hasattr(self.tool_registry, 'tools') else []
+        # Compute allowed tool names for planning
+        if restrict and selected:
+            allowed_tools = [n for n in selected if n in registry_names]
+        else:
+            allowed_tools = registry_names
+
+        allowed_text = ", ".join(allowed_tools) if allowed_tools else ""
+
         prompt = f"""You are an AI state machine architect. Analyze this task and create a sophisticated state machine.
 
 Task: {task}
@@ -156,6 +373,12 @@ Requirements:
 4. Add parallel processing where it makes sense
 5. Include final states for both success and failure scenarios
 6. Make it as complex as needed - don't simplify!
+
+Tool constraints:
+- Do NOT invent tool names.
+- If a state has type "tool_call", its "tools" array MUST be a subset of ALLOWED_TOOLS below.
+- If no allowed tools apply, set "tools": [] for that state.
+ALLOWED_TOOLS: [{allowed_text}]
 
 Example events: success, failure, retry, timeout, validated, invalid, partial_success, needs_review, escalate, rollback, skip, cancel
 
@@ -789,13 +1012,15 @@ Think step-by-step about what this specific task requires and create appropriate
             elif state_type == 'tool_call':
                 # Create agent with tools
                 allowed_events = list(state.get('transitions', {}).keys())
-                # Resolve tools to actual instances; ignore unknown tools
-                requested_tools = state.get('tools', []) or []
+                # Resolve planned tool names and actual tool instances
+                planned_names = self._resolve_tool_names_for_state(state)
+                # Map names to instances (only valid names remain)
                 resolved_tools = []
-                for t in requested_tools:
-                    tool_obj = self.tool_registry.get_tool(t)
-                    if tool_obj:
-                        resolved_tools.append(tool_obj)
+                for n in planned_names:
+                    t = self.tool_registry.get_tool(n)
+                    if t:
+                        resolved_tools.append(t)
+                tool_inventory = self._tool_inventory_text(planned_names)
                 agent_config = StrandsAgentConfig(
                     name=state['name'],
                     system_prompt=f"""You are {state.get('agent_role', 'an AI agent')} in a multi-agent workflow.
@@ -807,6 +1032,9 @@ You must:
 2. Build upon any previous agent outputs provided
 3. Produce clear, actionable output for the next agent
 4. Focus on your role without repeating work already done
+
+Available tools you may call (pre-selected for this state):
+{tool_inventory}
 
 At the very end of your response, output exactly one line:
 NEXT_EVENT: <one of {allowed_events}>
@@ -881,6 +1109,7 @@ No extra commentary after that line.""",
                         task_with_context += "\n\nPrevious agent outputs (truncated):\n" + "\n\n".join(context_parts)
                 
                 allowed_events = list(state.get('transitions', {}).keys())
+                tool_inventory = self._tool_inventory_text()
                 agent_config = StrandsAgentConfig(
                     name=state['name'],
                     system_prompt=f"""You are {state.get('agent_role', 'an AI agent')} in a multi-agent workflow.
@@ -892,6 +1121,9 @@ You must:
 2. Add your unique contribution based on your role
 3. Produce structured, clear output that advances the workflow
 4. Be concise but thorough in your specific domain
+
+Available tools (for reference; prefer reasoning first):
+{tool_inventory}
 
 At the very end of your response, output exactly one line:
 NEXT_EVENT: <one of {allowed_events}>
@@ -937,8 +1169,15 @@ No extra commentary after that line.""",
                 result = output if output else "Analysis completed"
                 # Parse or infer next event from the model output
                 ne = self._parse_next_event(result, allowed_events)
-                if ne:
+                if ne and state_type != 'decision':
                     next_event = ne
+                else:
+                    # For decision states (or if we couldn't infer), ask human if possible
+                    human_choice = await self._await_human_decision(context['exec_id'], state, allowed_events)
+                    if human_choice and human_choice in allowed_events:
+                        next_event = human_choice
+                    elif ne:
+                        next_event = ne
                         
             elif state_type == 'parallel':
                 # Execute parallel operations
@@ -985,6 +1224,27 @@ No extra commentary after that line.""",
                 type="planning_started",
                 payload={"task": task}
             ))
+
+            # Announce tool preferences and effective tools
+            try:
+                prefs = self.config.get('tool_preferences') or {}
+                selected = list(prefs.get('selected_tools') or [])
+                restrict = bool(prefs.get('restrict_to_selected', False))
+                available_names = set((self._all_tools or {}).keys())
+                unknown = [n for n in selected if n not in available_names]
+                effective = [n for n in selected if n in available_names] if restrict else list(available_names)
+                await self.hub.publish_control(ControlFrame(
+                    exec_id=exec_id,
+                    type="tool_preferences",
+                    payload={
+                        "selected": selected,
+                        "restrict_to_selected": restrict,
+                        "effective": effective[:50],
+                        "unknown": unknown
+                    }
+                ))
+            except Exception:
+                pass
             
             state_machine = await self.analyze_and_create_state_machine(task)
             # Deduplicate edges to avoid duplicate React keys client-side
@@ -1011,6 +1271,20 @@ No extra commentary after that line.""",
                     "task": task
                 }
             ))
+            # Also publish planned tools per state so UI can tag nodes immediately
+            try:
+                for s in state_machine.get('states', []):
+                    await self.hub.publish_control(ControlFrame(
+                        exec_id=exec_id,
+                        type="state_tools_resolved",
+                        agent_id=s.get('id'),
+                        payload={
+                            "state_id": s.get('id'),
+                            "tools": s.get('tools', [])
+                        }
+                    ))
+            except Exception:
+                pass
             
             # Step 2: Execute the state machine
             context = {
@@ -1022,13 +1296,27 @@ No extra commentary after that line.""",
             # Build state lookup
             states = {s['id']: s for s in state_machine['states']}
             current_state_id = state_machine['initial_state']
-            visited = set()
+            steps = 0
+            max_steps = int(self.config.get('max_steps', 200))
             
-            # Execute states in sequence
-            while current_state_id and current_state_id not in visited:
-                visited.add(current_state_id)
+            # Execute states in sequence, allowing cycles but with a step cap
+            while current_state_id:
+                if steps >= max_steps:
+                    logger.warning(f"Max steps reached ({max_steps}); stopping execution")
+                    await self.hub.publish_control(ControlFrame(
+                        exec_id=exec_id,
+                        type="workflow_stopped",
+                        payload={"reason": "max_steps_reached", "max_steps": max_steps}
+                    ))
+                    break
                 
                 if current_state_id not in states:
+                    logger.error(f"Next state '{current_state_id}' not found; stopping")
+                    await self.hub.publish_control(ControlFrame(
+                        exec_id=exec_id,
+                        type="error",
+                        payload={"error": f"State '{current_state_id}' not found"}
+                    ))
                     break
                 
                 current_state = states[current_state_id]
@@ -1036,13 +1324,27 @@ No extra commentary after that line.""",
                 # Execute the state
                 event, result = await self.execute_state(current_state, context)
                 
-                # Find next state based on transition
-                transitions = current_state.get('transitions', {})
-                current_state_id = transitions.get(event)
-                
                 # Check if we reached a final state
                 if current_state['type'] == 'final':
                     break
+                
+                # Find next state based on transition
+                transitions = current_state.get('transitions', {})
+                next_state_id = transitions.get(event)
+                if not next_state_id:
+                    # Fallback: if exactly one transition exists, use it
+                    if len(transitions) == 1:
+                        next_state_id = list(transitions.values())[0]
+                    else:
+                        await self.hub.publish_control(ControlFrame(
+                            exec_id=exec_id,
+                            type="error",
+                            payload={"error": f"No transition for event '{event}' from state '{current_state_id}'"}
+                        ))
+                        break
+                
+                current_state_id = next_state_id
+                steps += 1
             
             # Complete
             await self.hub.publish_control(ControlFrame(

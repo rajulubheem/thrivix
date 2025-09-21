@@ -58,6 +58,7 @@ class StreamingRequestV2(BaseModel):
     agents: Optional[List[AgentConfig]] = None  # Optional for dynamic mode
     max_parallel: int = Field(default=5, ge=1, le=20)
     use_mock: bool = False  # For testing without real LLM calls
+    tool_preferences: Optional[Dict[str, Any]] = None
     
     @validator('agents')
     def validate_agents(cls, v, values):
@@ -464,7 +465,8 @@ async def start_state_machine_execution(request: StreamingRequestV2):
     # Create AI state machine coordinator  
     coordinator = AIStateMachineCoordinator(config={
         "use_mock": request.use_mock,
-        "max_parallel": request.max_parallel
+        "max_parallel": request.max_parallel,
+        "tool_preferences": request.tool_preferences or {}
     })
     
     async def run_state_machine():
@@ -494,6 +496,9 @@ async def start_state_machine_execution(request: StreamingRequestV2):
             if exec_id in active_executions:
                 active_executions[exec_id]["status"] = "completed"
     
+    # Attach coordinator so we can accept human decisions
+    active_executions[exec_id]["coordinator"] = coordinator
+
     # Start background task
     task = asyncio.create_task(run_state_machine())
     background_tasks[exec_id] = task
@@ -506,3 +511,23 @@ async def start_state_machine_execution(request: StreamingRequestV2):
         "status": "running",
         "message": "AI state machine workflow started"
     }
+
+
+@router.post("/stream/state-machine/{exec_id}/decision")
+async def submit_state_machine_decision(exec_id: str, payload: Dict[str, Any]):
+    """Submit a human decision for a state in the current execution"""
+    state_id = payload.get("state_id")
+    event = payload.get("event")
+    if not state_id or not event:
+        return {"success": False, "message": "state_id and event are required"}
+
+    exec_info = active_executions.get(exec_id)
+    if not exec_info:
+        return {"success": False, "message": "Execution not found"}
+
+    coordinator = exec_info.get("coordinator")
+    if not coordinator:
+        return {"success": False, "message": "Coordinator not found for execution"}
+
+    ok = coordinator.submit_decision(exec_id, state_id, event)
+    return {"success": ok}
