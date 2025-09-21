@@ -20,6 +20,8 @@ import SettingsPage from './pages/SettingsPage';
 import VercelResearch from './components/research/VercelResearch';
 import EventDrivenSwarmInterface from './components/swarm/EventDrivenSwarmInterface';
 import EfficientSwarmInterface from './components/swarm/EfficientSwarmInterface';
+import ModernFlowInterface from './components/swarm/ModernFlowInterface';
+import FlowSwarmInterface from './components/swarm/FlowSwarmInterface';
 import { TrueDynamicSwarmChatInterface } from './components/swarm/TrueDynamicSwarmChatInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
@@ -68,6 +70,12 @@ function App() {
             
             {/* New Efficient WebSocket-based Swarm */}
             <Route path="/efficient-swarm" element={<EfficientSwarmInterface />} />
+            
+            {/* Modern Flow-Based Interface */}
+            <Route path="/flow" element={<ModernFlowInterface />} />
+            
+            {/* React Flow Based Professional Interface */}
+            <Route path="/flow-pro" element={<FlowSwarmInterface />} />
 
             {/* Redirect any other routes to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

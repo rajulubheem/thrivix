@@ -8,6 +8,45 @@ import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+// Completely suppress ResizeObserver errors
+const debounce = (callback: Function, delay: number) => {
+  let tid: any;
+  return function (...args: any[]) {
+    clearTimeout(tid);
+    tid = setTimeout(() => callback.apply(null, args), delay);
+  };
+};
+
+// Override ResizeObserver to fix the error
+const ResizeObserverOrig = window.ResizeObserver;
+window.ResizeObserver = class ResizeObserver extends ResizeObserverOrig {
+  constructor(callback: ResizeObserverCallback) {
+    super(debounce(callback, 20));
+  }
+} as any;
+
+// Also suppress console errors for ResizeObserver
+const errorHandler = (e: ErrorEvent) => {
+  if (e.message?.includes('ResizeObserver loop') ||
+      e.message?.includes('ResizeObserver loop completed') ||
+      e.message?.includes('ResizeObserver loop limit exceeded')) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    return true;
+  }
+};
+
+window.addEventListener('error', errorHandler);
+
+// Suppress console.error for ResizeObserver
+const originalError = console.error;
+console.error = (...args: any[]) => {
+  if (args[0]?.toString?.()?.includes('ResizeObserver')) {
+    return;
+  }
+  originalError.apply(console, args);
+};
+
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
