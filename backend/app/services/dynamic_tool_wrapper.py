@@ -35,15 +35,47 @@ class DynamicToolWrapper:
 
             # Extract actual parameters (handle nested kwargs)
             actual_params = kwargs
-            if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], (str, dict)):
-                # Handle nested kwargs from Strands
-                if isinstance(kwargs['kwargs'], str):
+            if 'kwargs' in kwargs:
+                val = kwargs['kwargs']
+                # If the model passes a plain string, coerce to expected shape for common tools
+                if isinstance(val, str):
+                    # Try to parse JSON, else map to sensible defaults per tool
+                    parsed = None
                     try:
-                        actual_params = json.loads(kwargs['kwargs'])
-                    except:
-                        actual_params = kwargs
+                        parsed = json.loads(val)
+                    except Exception:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        actual_params = parsed
+                    else:
+                        # Heuristics: map single string to required param for common tools
+                        if current_tool_name in ("tavily_search", "web_search", "tavily_web_search"):
+                            actual_params = {"query": val, "search_depth": "basic", "max_results": 5}
+                        elif current_tool_name == "http_request":
+                            actual_params = {"method": "GET", "url": val, "timeout": 30}
+                        else:
+                            # Fallback: provide as generic text if the tool accepts it
+                            actual_params = {"text": val}
+                elif isinstance(val, dict):
+                    actual_params = val
                 else:
-                    actual_params = kwargs['kwargs']
+                    actual_params = kwargs
+
+            # Final normalization for Tavily-family tools
+            if current_tool_name in ("tavily_search", "web_search", "tavily_web_search"):
+                if not isinstance(actual_params, dict):
+                    actual_params = {"query": str(actual_params)}
+                # Ensure required keys
+                if "query" not in actual_params:
+                    # If a single key provided, coerce it to query
+                    if len(actual_params) == 1:
+                        only_val = next(iter(actual_params.values()))
+                        actual_params = {"query": str(only_val)}
+                    elif "text" in actual_params:
+                        actual_params["query"] = str(actual_params.pop("text"))
+                # Defaults
+                actual_params.setdefault("search_depth", "basic")
+                actual_params.setdefault("max_results", 5)
             
             # Emit structured tool_call for UI (actual tool and wrapper info)
             if self.callback_handler:

@@ -174,6 +174,12 @@ const EfficientSwarmInterface: React.FC = () => {
   const [isDragging, setIsDragging] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [consoleOutput, setConsoleOutput] = useState<Array<{type: string; content: string; timestamp: number}>>([]);
+  // Live chat mirror of tokens
+  const [chatMessages, setChatMessages] = useState<Array<{ agent_id: string; agent_name: string; content: string; final: boolean }>>([]);
+  // DAG state from planning_complete
+  const [graphEdges, setGraphEdges] = useState<Array<{from: string; to: string}>>([]);
+  const [graphEntryPoints, setGraphEntryPoints] = useState<string[]>([]);
+  const graphRef = useRef<HTMLDivElement | null>(null);
 
   // Window management state
   const [windows, setWindows] = useState<Map<string, Window>>(new Map());
@@ -208,12 +214,75 @@ const EfficientSwarmInterface: React.FC = () => {
 
   // Apply layout algorithm
   const applyLayout = useCallback(() => {
-    if (!neuralContainerRef.current || layoutMode === 'manual') return;
+    // If in graph view and we have edges, use a layered DAG layout
+    if (viewMode === 'graph' && graphRef.current && graphEdges.length > 0) {
+      const width = graphRef.current.clientWidth || 800;
+      const height = graphRef.current.clientHeight || 400;
 
+      // Build id list
+      const ids = Array.from(agents.keys());
+      if (ids.length === 0) return;
+
+      // Build in-degree and adjacency
+      const indeg: Record<string, number> = {};
+      const adj: Record<string, string[]> = {};
+      ids.forEach(id => { indeg[id] = 0; adj[id] = []; });
+      graphEdges.forEach(e => {
+        if (adj[e.from]) adj[e.from].push(e.to);
+        if (indeg[e.to] !== undefined) indeg[e.to] += 1;
+      });
+
+      // Determine entry points
+      const entries = graphEntryPoints.length ? graphEntryPoints : ids.filter(id => indeg[id] === 0);
+
+      // BFS layering from entry points
+      const layer: Record<string, number> = {};
+      const q: string[] = [];
+      entries.forEach(id => { layer[id] = 0; q.push(id); });
+      while (q.length) {
+        const u = q.shift()!;
+        const lu = layer[u] || 0;
+        (adj[u] || []).forEach(v => {
+          if (layer[v] === undefined || layer[v] < lu + 1) {
+            layer[v] = lu + 1;
+            q.push(v);
+          }
+        });
+      }
+
+      // Group by layer
+      const maxLayer = Math.max(0, ...ids.map(id => layer[id] ?? 0));
+      const byLayer: Record<number, string[]> = {};
+      ids.forEach(id => {
+        const l = layer[id] ?? 0;
+        byLayer[l] = byLayer[l] || [];
+        byLayer[l].push(id);
+      });
+
+      // Compute positions
+      const paddingX = 80;
+      const paddingY = 60;
+      const layerHeight = Math.max(60, (height - paddingY * 2) / Math.max(1, maxLayer + 1));
+      const positions = new Map<string, NodePosition>();
+      for (let l = 0; l <= maxLayer; l++) {
+        const nodes = byLayer[l] || [];
+        const count = Math.max(1, nodes.length);
+        const spacing = (width - paddingX * 2) / count;
+        nodes.forEach((id, idx) => {
+          const x = paddingX + spacing * (idx + 0.5);
+          const y = paddingY + layerHeight * l + 20;
+          positions.set(id, { x, y });
+        });
+      }
+      setNodePositions(positions);
+      return;
+    }
+
+    // Fallback to existing layout
+    if (!neuralContainerRef.current || layoutMode === 'manual') return;
     const container = neuralContainerRef.current;
     const width = container.clientWidth;
     const height = container.clientHeight;
-
     const algorithm = layoutAlgorithms[layoutMode as keyof typeof layoutAlgorithms];
     if (algorithm) {
       const newPositions = algorithm(agents, width, height);
@@ -226,7 +295,7 @@ const EfficientSwarmInterface: React.FC = () => {
     if (layoutMode !== 'manual') {
       applyLayout();
     }
-  }, [agents.size, layoutMode, applyLayout]);
+  }, [agents.size, layoutMode, viewMode, graphEdges.length, applyLayout]);
 
   // Handle window resize
   useEffect(() => {
@@ -354,6 +423,28 @@ const EfficientSwarmInterface: React.FC = () => {
       totalTokens: prev.totalTokens + 1,
       networkLatency: Date.now() - (frame.ts * 1000)
     }));
+
+    // Mirror into chat stream
+    setChatMessages(prev => {
+      const idx = prev.findIndex(m => m.agent_id === agent_id && !m.final);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], content: (updated[idx].content || '') + (text || ''), final: Boolean(final) };
+        return updated;
+      }
+      const agentName = (agents.get(agent_id)?.name) || agent_id;
+      return [...prev, { agent_id, agent_name: agentName, content: text || '', final: Boolean(final) }];
+    });
+    setChatMessages(prev => {
+      const idx = prev.findIndex(m => m.agent_id === agent_id && !m.final);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], content: (updated[idx].content || '') + (text || ''), final: Boolean(final) };
+        return updated;
+      }
+      const agentName = (agents.get(agent_id)?.name) || agent_id;
+      return [...prev, { agent_id, agent_name: agentName, content: text || '', final: Boolean(final) }];
+    });
   }, []);
 
   const handleControlFrame = useCallback((frame: ControlFrame) => {
@@ -375,6 +466,8 @@ const EfficientSwarmInterface: React.FC = () => {
             });
             return updated;
           });
+          // Start a chat streaming message slot for this agent
+          setChatMessages(prev => [...prev, { agent_id, agent_name: payload?.name || agent_id, content: '', final: false }]);
         }
         break;
 
@@ -412,6 +505,8 @@ const EfficientSwarmInterface: React.FC = () => {
             }
             return updated;
           });
+          // Mark chat message as final so UI stops treating it as streaming
+          setChatMessages(prev => prev.map(m => (m.agent_id === agent_id && !m.final) ? { ...m, final: true } : m));
         }
         break;
 
@@ -431,6 +526,16 @@ const EfficientSwarmInterface: React.FC = () => {
             }
             return updated;
           });
+        }
+        break;
+
+      case 'planning_complete':
+        if (payload?.graph) {
+          const edges = Array.isArray(payload.graph.edges) ? payload.graph.edges : [];
+          const entries = Array.isArray(payload.graph.entry_points) ? payload.graph.entry_points : [];
+          setGraphEdges(edges);
+          setGraphEntryPoints(entries);
+          addConsoleOutput('info', `Graph built: ${payload.plan?.length || 0} nodes, ${edges.length} edges`);
         }
         break;
 
@@ -1203,6 +1308,17 @@ const EfficientSwarmInterface: React.FC = () => {
                       </div>
                     </div>
                 ))}
+                {/* Live Chat Mirror */}
+                <div className="console-view" style={{ marginTop: 16 }}>
+                  <div className="terminal-output">
+                    {chatMessages.map((m, i) => (
+                        <div key={i} className={`terminal-line text_generation`}>
+                          <span className="terminal-timestamp">{m.final ? '✓' : '…'}</span>
+                          <span className="terminal-content"><strong>{m.agent_name}:</strong> {m.content}</span>
+                        </div>
+                    ))}
+                  </div>
+                </div>
               </div>
           )}
 
@@ -1239,6 +1355,36 @@ const EfficientSwarmInterface: React.FC = () => {
                     )}
                   </div>
                   <div className="graph-value">{progress}% Complete</div>
+                </div>
+                {/* Simple DAG renderer using edges from planning_complete */}
+                <div className="dag-canvas" ref={graphRef} style={{ position: 'relative', width: '100%', height: 400, marginTop: 12, background: '#0f1220', borderRadius: 8 }}>
+                  <svg width="100%" height="100%" style={{ position: 'absolute', top: 0, left: 0 }}>
+                    {graphEdges.map((e, idx) => {
+                      const fromPos = nodePositions.get(e.from);
+                      const toPos = nodePositions.get(e.to);
+                      if (!fromPos || !toPos) return null;
+                      return (
+                        <line key={idx} x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y} stroke="#5b83ff" strokeOpacity="0.6" strokeWidth={2} markerEnd="url(#arrow)" />
+                      );
+                    })}
+                    <defs>
+                      <marker id="arrow" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#5b83ff" />
+                      </marker>
+                    </defs>
+                  </svg>
+                  {Array.from(agents.values()).map(ag => {
+                    const pos = nodePositions.get(ag.id);
+                    if (!pos) return null;
+                    return (
+                      <div key={ag.id} style={{ position: 'absolute', transform: 'translate(-50%, -50%)', left: pos.x, top: pos.y }} className={`dag-node ${ag.status}`}>
+                        <div className="dag-node-inner">
+                          <div className="dag-name">{ag.name}</div>
+                          <div className="dag-status">{ag.status}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
           )}
