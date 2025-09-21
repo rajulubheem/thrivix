@@ -58,14 +58,24 @@ class StrandsAgentRuntime(AgentRuntime):
                     storage_dir="./sessions"
                 )
             
-            # Create the Strands agent
+            # Create the Strands agent - Agent class doesn't take temperature directly
+            # Temperature is set on the model
+            from strands.models.openai import OpenAIModel
+            
+            # Create model with temperature
+            # The model_id is required by strands event loop
+            model_instance = OpenAIModel(
+                model=self.config.model,
+                model_id=self.config.model,  # Add model_id for strands compatibility
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+            )
+            
             self._agent = Agent(
                 name=self.config.name,
                 system_prompt=self.config.system_prompt,
-                model=self.config.model,
+                model=model_instance,
                 tools=self.config.tools or [],
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
                 session_manager=session_manager,
                 callback_handler=None  # We'll use async streaming instead
             )

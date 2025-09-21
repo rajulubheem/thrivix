@@ -151,19 +151,19 @@ interface ControlFrame {
 type Frame = TokenFrame | ControlFrame;
 
 // Layout function using dagre
-const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => {
+const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
   if (nodes.length === 0) return { nodes, edges };
   
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
   // Improved spacing for better grid layout
   dagreGraph.setGraph({ 
-    rankdir: direction, 
-    nodesep: 150, 
-    ranksep: 200, 
-    marginx: 100, 
-    marginy: 100,
-    align: 'UL' // Upper-left alignment for better grid
+    rankdir: direction,  // TB = top-bottom for vertical layout
+    nodesep: 100, 
+    ranksep: 120, 
+    marginx: 50, 
+    marginy: 50,
+    align: 'DL' // Down-left alignment for better grid
   });
 
   nodes.forEach((node) => {
@@ -171,7 +171,12 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
   });
 
   edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
+    // Check if both nodes exist before adding edge
+    if (dagreGraph.node(edge.source) && dagreGraph.node(edge.target)) {
+      dagreGraph.setEdge(edge.source, edge.target);
+    } else {
+      console.warn(`Skipping edge ${edge.source} -> ${edge.target}: node not found`);
+    }
   });
 
   try {
@@ -229,6 +234,8 @@ const FlowSwarmInterface: React.FC = () => {
   const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic' | 'neural'>('dynamic');
   const [outputPanelWidth, setOutputPanelWidth] = useState(400);
   const [activelyStreamingAgents, setActivelyStreamingAgents] = useState<Set<string>>(new Set());
+  // When a full state machine graph is provided by backend, keep it as source of truth
+  const [hasStateMachineStructure, setHasStateMachineStructure] = useState<boolean>(false);
   
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -237,7 +244,10 @@ const FlowSwarmInterface: React.FC = () => {
 
   // Node and Edge types
   const nodeTypes = useMemo<NodeTypes>(() => ({ agent: AgentNode }), []);
-  const edgeTypes = useMemo<EdgeTypes>(() => ({ animated: AnimatedEdge }), []);
+  const edgeTypes = useMemo<EdgeTypes>(() => ({ 
+    animated: AnimatedEdge,
+    // Using default smoothstep edge type from React Flow
+  }), []);
   
   // Store layout state to prevent recalculation during streaming
   const layoutCache = useRef<{ nodes: Node[], edges: Edge[] }>({ nodes: [], edges: [] });
@@ -249,6 +259,40 @@ const FlowSwarmInterface: React.FC = () => {
   const updateGraph = useCallback((forceLayout: boolean = false) => {
     // Don't clear nodes if we have agents
     if (agents.size === 0) {
+      return;
+    }
+
+    // If we already have a full state-machine structure rendered,
+    // avoid rebuilding the graph from the (partial) agents map.
+    if (hasStateMachineStructure) {
+      // Only update node statuses/durations and edge animations in-place
+      setNodes(prevNodes => prevNodes.map(node => {
+        const agent = agents.get(node.id);
+        if (!agent) return node;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            status: agent.status,
+            duration: agent.endTime && agent.startTime ? agent.endTime - agent.startTime : (node.data?.duration as any),
+          },
+        };
+      }));
+
+      setEdges(prevEdges => prevEdges.map(edge => {
+        const sourceAgent = agents.get(edge.source);
+        const targetAgent = agents.get(edge.target);
+        if (!sourceAgent || !targetAgent) return edge;
+        return {
+          ...edge,
+          animated: targetAgent.status === 'running',
+          style: {
+            ...edge.style,
+            stroke: targetAgent.status === 'running' ? '#facc15' : targetAgent.status === 'completed' ? '#22c55e' : (edge.style?.stroke || '#52525b'),
+          },
+        };
+      }));
+
       return;
     }
 
@@ -475,6 +519,207 @@ const FlowSwarmInterface: React.FC = () => {
     const { type, agent_id, payload } = frame;
     
     switch (type) {
+      case 'dag_structure':
+        // Switch to DAG structure mode
+        setHasStateMachineStructure(false);
+        // Handle DAG structure from dynamic coordinator
+        if (payload?.nodes && payload?.edges) {
+          const { nodes: dagNodes, edges: dagEdges } = payload;
+          
+          // Convert DAG nodes to React Flow nodes with proper layout
+          const newNodes: Node[] = dagNodes.map((node: any, index: number) => ({
+            id: node.id,
+            type: 'agent',
+            position: { x: 0, y: 0 }, // Will be set by layout
+            data: {
+              label: node.name,
+              name: node.name,
+              role: node.role,
+              task: node.task,
+              status: 'pending',
+              nodeType: node.type
+            },
+          }));
+          
+          // Convert DAG edges to React Flow edges
+          const newEdges: Edge[] = dagEdges.map((edge: any) => ({
+            id: `${edge.source}-${edge.target}`,
+            source: edge.source,
+            target: edge.target,
+            type: 'smoothstep',
+            animated: false,
+            data: {
+              label: edge.type === 'dependency' ? '' : edge.type,
+            },
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              width: 20,
+              height: 20,
+              color: '#52525b',
+            },
+            style: {
+              strokeWidth: 2,
+              stroke: '#52525b',
+            },
+          }));
+          
+          // Apply dagre layout for proper grid positioning
+          const layouted = getLayoutedElements(newNodes, newEdges);
+          setNodes(prevNodes => {
+            // Merge with existing nodes if any
+            const existingNodeIds = new Set(prevNodes.map(n => n.id));
+            const nodesToAdd = layouted.nodes.filter(n => !existingNodeIds.has(n.id));
+            return [...prevNodes, ...nodesToAdd];
+          });
+          setEdges(prevEdges => {
+            // Merge with existing edges if any
+            const existingEdgeIds = new Set(prevEdges.map(e => e.id));
+            const edgesToAdd = layouted.edges.filter(e => !existingEdgeIds.has(e.id));
+            return [...prevEdges, ...edgesToAdd];
+          });
+          
+          // Fit view to show the complete DAG
+          setTimeout(() => {
+            try {
+              fitView({ padding: 0.2, duration: 400, maxZoom: 1 });
+            } catch (e) {
+              // Ignore fit view errors
+            }
+          }, 100);
+        }
+        break;
+        
+      case 'state_machine_created':
+        // AI has created a state machine - visualize it
+        if (payload?.machine) {
+          const { states, edges } = payload.machine;
+          console.log('State machine created with', states?.length, 'states and', edges?.length, 'edges');
+          console.log('Edges data:', edges);
+          
+          // Convert to React Flow nodes
+          const newNodes: Node[] = states.map((state: any) => ({
+            id: state.id,
+            type: 'agent',
+            position: { x: 0, y: 0 },
+            data: {
+              label: state.name,
+              name: state.name,
+              status: 'pending',
+              fluxNodeType: state.type,
+              task: state.task,
+              tools: state.tools,
+            },
+          }));
+          
+          // Convert to React Flow edges
+          const mappedEdges: Edge[] = edges.map((edge: any) => ({
+            id: `${edge.source}-${edge.target}-${edge.event}`,
+            source: edge.source,
+            target: edge.target,
+            type: 'smoothstep',
+            animated: false,
+            label: edge.event !== 'success' ? edge.event : '',
+            labelStyle: { fill: '#94a3b8', fontSize: 11 },
+            labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+            style: {
+              stroke: '#52525b',
+              strokeWidth: 1.5,
+            },
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              width: 20,
+              height: 20,
+              color: '#52525b',
+            },
+          }));
+          // Deduplicate edges by id to avoid React key collisions
+          const edgeMap = new Map<string, Edge>();
+          for (const e of mappedEdges) {
+            if (!edgeMap.has(e.id)) edgeMap.set(e.id, e);
+          }
+          const newEdges = Array.from(edgeMap.values());
+          
+          // Apply layout and set
+          const layouted = getLayoutedElements(newNodes, newEdges);
+          console.log('After layout - nodes:', layouted.nodes.length, 'edges:', layouted.edges.length);
+          // Cache and mark structure as state-machine-driven so we don't overwrite it
+          layoutCache.current = layouted;
+          lastLayoutedAgentIds.current = new Set(states.map((s: any) => s.id));
+          setHasStateMachineStructure(true);
+          setNodes(layouted.nodes);
+          setEdges(layouted.edges);
+          
+          setTimeout(() => fitView({ padding: 0.2, duration: 400, maxZoom: 1 }), 100);
+        }
+        break;
+        
+      case 'state_entered':
+        // A state is being executed
+        if (agent_id) {
+          setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
+          setAgents(prev => {
+            const updated = new Map(prev);
+            updated.set(agent_id, {
+              id: agent_id,
+              name: payload?.state?.name || agent_id,
+              output: '',
+              status: 'running',
+              startTime: Date.now(),
+              parent: payload?.parent,
+              depth: payload?.depth || 0
+            });
+            return updated;
+          });
+          
+          // Update node visualization
+          setNodes(nodes => 
+            nodes.map(node => ({
+              ...node,
+              data: {
+                ...node.data,
+                status: node.id === agent_id ? 'running' : node.data.status,
+              },
+            }))
+          );
+        }
+        break;
+        
+      case 'state_exited':
+        // State completed execution
+        if (agent_id) {
+          setActivelyStreamingAgents(prev => {
+            const updated = new Set(prev);
+            updated.delete(agent_id);
+            return updated;
+          });
+          
+          setAgents(prev => {
+            const updated = new Map(prev);
+            const agent = updated.get(agent_id);
+            if (agent) {
+              updated.set(agent_id, {
+                ...agent,
+                status: 'completed',
+                endTime: Date.now(),
+                output: payload?.result || agent.output,
+              });
+            }
+            return updated;
+          });
+          
+          // Update node visualization
+          setNodes(nodes => 
+            nodes.map(node => ({
+              ...node,
+              data: {
+                ...node.data,
+                status: node.id === agent_id ? 'completed' : node.data.status,
+              },
+            }))
+          );
+        }
+        break;
+        
       case 'agent_started':
         if (agent_id) {
           setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
@@ -491,6 +736,29 @@ const FlowSwarmInterface: React.FC = () => {
             });
             return updated;
           });
+          
+          // Update node status in graph
+          setNodes(nodes => 
+            nodes.map(node => ({
+              ...node,
+              data: {
+                ...node.data,
+                status: node.id === agent_id ? 'running' : node.data.status,
+              },
+            }))
+          );
+          
+          // Animate edges leading to this node
+          setEdges(edges =>
+            edges.map(edge => ({
+              ...edge,
+              animated: edge.target === agent_id,
+              style: {
+                ...edge.style,
+                stroke: edge.target === agent_id ? '#facc15' : edge.style?.stroke || '#52525b',
+              },
+            }))
+          );
         }
         break;
         
@@ -530,6 +798,29 @@ const FlowSwarmInterface: React.FC = () => {
             }
             return updated;
           });
+          
+          // Update node status in graph
+          setNodes(nodes => 
+            nodes.map(node => ({
+              ...node,
+              data: {
+                ...node.data,
+                status: node.id === agent_id ? 'completed' : node.data.status,
+              },
+            }))
+          );
+          
+          // Update edges to show completion
+          setEdges(edges =>
+            edges.map(edge => ({
+              ...edge,
+              animated: false,
+              style: {
+                ...edge.style,
+                stroke: edge.source === agent_id ? '#22c55e' : edge.style?.stroke || '#52525b',
+              },
+            }))
+          );
         }
         break;
         
@@ -579,7 +870,11 @@ const FlowSwarmInterface: React.FC = () => {
         max_parallel: 5
       };
       
-      const apiUrl = `${window.location.origin}/api/v1/streaming/stream/v2`;
+      // Use AI state machine endpoint for dynamic mode
+      const apiUrl = executionMode === 'dynamic' 
+        ? `${window.location.origin}/api/v1/streaming/stream/state-machine`
+        : `${window.location.origin}/api/v1/streaming/stream/v2`;
+        
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -602,6 +897,7 @@ const FlowSwarmInterface: React.FC = () => {
   const stopExecution = () => {
     setIsRunning(false);
     setActivelyStreamingAgents(new Set());
+    setHasStateMachineStructure(false);
     
     if (wsRef.current) {
       wsRef.current.close();
@@ -622,6 +918,7 @@ const FlowSwarmInterface: React.FC = () => {
     layoutCache.current = { nodes: [], edges: [] };
     lastLayoutedAgentIds.current.clear();
     setActivelyStreamingAgents(new Set());
+    setHasStateMachineStructure(false);
   };
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
@@ -690,6 +987,14 @@ const FlowSwarmInterface: React.FC = () => {
             panOnScroll={true}
             panOnDrag={true}
             defaultViewport={{ x: 100, y: 100, zoom: 0.75 }}
+            defaultEdgeOptions={{
+              type: 'smoothstep',
+              animated: false,
+              style: {
+                stroke: '#52525b',
+                strokeWidth: 2,
+              },
+            }}
           >
             <Background 
               variant={BackgroundVariant.Dots}

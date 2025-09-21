@@ -849,6 +849,64 @@ Now create your agents by calling the planning tools (not text descriptions)."""
                             }
                         )
 
+                # Emit DAG structure for visualization after planning
+                if self.planned_agents and len(self.planned_agents) > len(already_executed):
+                    # Build DAG structure for new agents
+                    dag_nodes = []
+                    dag_edges = []
+                    
+                    # Add coordinator node if this is the first round
+                    if round_idx == 1:
+                        dag_nodes.append({
+                            "id": self.agent_id,
+                            "name": self.name,
+                            "role": "Coordinator",
+                            "task": "Analyze task and plan agents",
+                            "type": "coordinator"
+                        })
+                    
+                    for agent in self.planned_agents:
+                        if agent.agent_id not in already_executed:
+                            dag_nodes.append({
+                                "id": agent.agent_id,
+                                "name": agent.name,
+                                "role": agent.role,
+                                "task": agent.task[:100] + "..." if len(agent.task) > 100 else agent.task,
+                                "type": "tool_agent" if agent.tools else "specialist_agent"
+                            })
+                            
+                            # Add edges for dependencies
+                            if agent.depends_on:
+                                for dep in agent.depends_on:
+                                    # Resolve dependency ID
+                                    dep_id = dep
+                                    if dep in self.agent_name_to_id:
+                                        dep_id = self.agent_name_to_id[dep]
+                                    dag_edges.append({
+                                        "source": dep_id,
+                                        "target": agent.agent_id,
+                                        "type": "dependency"
+                                    })
+                            else:
+                                # If no dependencies, connect to coordinator
+                                dag_edges.append({
+                                    "source": self.agent_id,
+                                    "target": agent.agent_id,
+                                    "type": "spawned"
+                                })
+                    
+                    # Emit DAG structure
+                    yield ControlFrame(
+                        exec_id=context.exec_id,
+                        type="dag_structure",
+                        agent_id=self.agent_id,
+                        payload={
+                            "nodes": dag_nodes,
+                            "edges": dag_edges,
+                            "round": round_idx
+                        }
+                    )
+                
                 # Phase 2: Execution with dependency resolution (streaming preserved)
                 logger.info(f"About to execute agents. Planned count: {len(self.planned_agents)}; already executed: {len(already_executed)}")
                 if self.planned_agents:

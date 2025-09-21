@@ -441,3 +441,68 @@ async def test_streaming_v2():
         "websocket_url": response.websocket_url,
         "instructions": f"Connect to ws://localhost:8000{response.websocket_url} to see streaming output"
     }
+
+
+@router.post("/stream/state-machine")
+async def start_state_machine_execution(request: StreamingRequestV2):
+    """Start an AI-driven state machine workflow execution"""
+    
+    # Import AI state machine coordinator
+    from app.services.ai_state_machine_coordinator import AIStateMachineCoordinator
+    
+    exec_id = f"exec_{uuid.uuid4().hex[:8]}"
+    
+    # Store execution info
+    active_executions[exec_id] = {
+        "exec_id": exec_id,
+        "task": request.task,
+        "type": "state_machine",
+        "status": "running",
+        "created_at": None  # Will be set when execution starts
+    }
+    
+    # Create AI state machine coordinator  
+    coordinator = AIStateMachineCoordinator(config={
+        "use_mock": request.use_mock,
+        "max_parallel": request.max_parallel
+    })
+    
+    async def run_state_machine():
+        """Background task to run state machine"""
+        try:
+            hub = get_event_hub()
+            await hub.connect()
+            
+            # Execute state machine (it publishes directly to hub)
+            await coordinator.execute(
+                task=request.task,
+                exec_id=exec_id,
+                execution_mode=request.execution_mode
+            )
+                
+        except Exception as e:
+            logger.error(f"State machine execution error: {e}")
+            await hub.publish_control(ControlFrame(
+                exec_id=exec_id,
+                type="error",
+                payload={"error": str(e)}
+            ))
+        finally:
+            # Clean up
+            if exec_id in background_tasks:
+                del background_tasks[exec_id]
+            if exec_id in active_executions:
+                active_executions[exec_id]["status"] = "completed"
+    
+    # Start background task
+    task = asyncio.create_task(run_state_machine())
+    background_tasks[exec_id] = task
+    
+    logger.info(f"Started state machine execution {exec_id}")
+    
+    return {
+        "exec_id": exec_id,
+        "websocket_url": f"/api/v1/ws/{exec_id}",
+        "status": "running",
+        "message": "AI state machine workflow started"
+    }

@@ -22,6 +22,8 @@ import EventDrivenSwarmInterface from './components/swarm/EventDrivenSwarmInterf
 import EfficientSwarmInterface from './components/swarm/EfficientSwarmInterface';
 import ModernFlowInterface from './components/swarm/ModernFlowInterface';
 import FlowSwarmInterface from './components/swarm/FlowSwarmInterface';
+import StateMachineInterface from './components/swarm/StateMachineInterface';
+import ProfessionalStateMachine from './components/swarm/ProfessionalStateMachine';
 import { TrueDynamicSwarmChatInterface } from './components/swarm/TrueDynamicSwarmChatInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
@@ -76,6 +78,12 @@ function App() {
             
             {/* React Flow Based Professional Interface */}
             <Route path="/flow-pro" element={<FlowSwarmInterface />} />
+            
+            {/* State Machine Workflow Interface */}
+            <Route path="/state-machine" element={<StateMachineInterface />} />
+            
+            {/* Professional State Machine Designer */}
+            <Route path="/state-designer" element={<ProfessionalStateMachine />} />
 
             {/* Redirect any other routes to home */}
             <Route path="*" element={<Navigate to="/" replace />} />
