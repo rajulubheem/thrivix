@@ -342,12 +342,45 @@ class DynamicToolWrapper:
         """Wrap a tool from strands-tools package"""
         
         try:
+            # First try to load from strands registry (for ALL dynamic tools)
+            try:
+                from app.tools.strands_tool_registry import get_dynamic_tools
+                import asyncio
+                
+                # Get or create event loop
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # Get the registry
+                registry = loop.run_until_complete(get_dynamic_tools())
+                if registry and hasattr(registry, 'tools') and tool_name in registry.tools:
+                    tool_obj = registry.tools[tool_name]
+                    if hasattr(tool_obj, 'handler'):
+                        logger.info(f"✅ Loaded tool {tool_name} from strands registry")
+                        return self.create_visible_wrapper(tool_name, tool_obj.handler, agent_name)
+            except Exception as e:
+                logger.debug(f"Could not load {tool_name} from strands registry: {e}")
+            
+            # Fallback: Check local tools directory
+            if tool_name == 'tavily_search':
+                try:
+                    from tools.tavily_search_tool import tavily_search
+                    logger.info(f"✅ Loaded tool {tool_name} from tools.tavily_search_tool")
+                    return self.create_visible_wrapper(tool_name, tavily_search, agent_name)
+                except ImportError:
+                    pass
+            
             # Prefer app.tools implementations first (stable call signatures)
             app_tool_modules = [
                 'app.tools.python_repl_tool',
                 'app.tools.file_tools',
                 'app.tools.web_tools',
                 'app.tools.system_tools',
+                'app.tools.strands_tavily_search',  # Add this for tavily_search
+                'app.tools.tavily_search_tool',  # And this one
             ]
             
             for module_name in app_tool_modules:

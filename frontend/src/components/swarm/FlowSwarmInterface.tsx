@@ -995,8 +995,13 @@ const FlowSwarmInterface: React.FC = () => {
   const startExecution = async () => {
     if (!task.trim()) return;
     
-    // Reset view before starting
-    resetView();
+    // If we have an existing state machine structure, preserve it (soft reset)
+    // Otherwise do a full reset
+    if (hasStateMachineStructure && nodes.length > 0) {
+      softReset();
+    } else {
+      resetView();
+    }
     setIsRunning(true);
     agentSequences.current.clear();
     
@@ -1061,6 +1066,35 @@ const FlowSwarmInterface: React.FC = () => {
     lastLayoutedAgentIds.current.clear();
     setActivelyStreamingAgents(new Set());
     setHasStateMachineStructure(false);
+  };
+  
+  const softReset = () => {
+    // Reset agents and execution state but preserve visualization structure
+    setAgents(new Map());
+    setSelectedAgent(null);
+    setActivelyStreamingAgents(new Set());
+    // Reset node statuses but keep the structure
+    setNodes(nodes => 
+      nodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          status: 'pending',
+          toolsUsed: []
+        }
+      }))
+    );
+    // Reset edge animations
+    setEdges(edges =>
+      edges.map(edge => ({
+        ...edge,
+        animated: false,
+        style: {
+          ...edge.style,
+          stroke: '#52525b'
+        }
+      }))
+    );
   };
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
@@ -1227,18 +1261,22 @@ const FlowSwarmInterface: React.FC = () => {
 
       {/* Main Content */}
       <div className="flow-content">
-        {/* Tool preferences banner */}
+        {/* Tool preferences banner - compact */}
         {toolPrefs && (toolPrefs.unknown.length > 0) && (
           <div style={{
-            margin: '8px 12px',
-            padding: '8px 12px',
-            borderRadius: 6,
-            background: '#3f1d1d',
-            color: '#fecaca',
-            border: '1px solid #7f1d1d'
+            margin: '4px 12px',
+            padding: '4px 10px',
+            borderRadius: 4,
+            background: 'rgba(239, 68, 68, 0.1)',
+            color: '#fca5a5',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
           }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Some selected tools are not registered and will be ignored:</div>
-            <div style={{ fontSize: 12 }}>{toolPrefs.unknown.join(', ')}</div>
+            <span style={{ color: '#f87171' }}>⚠</span>
+            <span>Unknown tools: <strong>{toolPrefs.unknown.join(', ')}</strong></span>
           </div>
         )}
         {/* React Flow Graph */}

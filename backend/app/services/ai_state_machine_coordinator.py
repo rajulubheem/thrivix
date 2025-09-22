@@ -11,12 +11,31 @@ from typing import AsyncIterator, Dict, Any, Optional, List, Union, Set, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from strands import Agent
-from strands.models.openai import OpenAIModel
 import os
+
+# Optional strands imports
+try:
+    from strands import Agent
+    from strands.models.openai import OpenAIModel
+    STRANDS_AVAILABLE = True
+except ImportError:
+    STRANDS_AVAILABLE = False
+    Agent = None
+    OpenAIModel = None
 
 from app.services.event_hub import TokenFrame, ControlFrame, ControlType, get_event_hub
 from app.tools.tool_registry import ToolRegistry
+
+# Optional tool imports
+try:
+    from app.tools.strands_tool_registry import get_dynamic_tools, StrandsToolRegistry
+    from app.services.dynamic_tool_wrapper import DynamicToolWrapper
+    TOOLS_AVAILABLE = True
+except ImportError:
+    TOOLS_AVAILABLE = False
+    get_dynamic_tools = None
+    StrandsToolRegistry = None
+    DynamicToolWrapper = None
 from app.services.strands_agent_runtime import StrandsAgentRuntime, StrandsAgentConfig
 from app.services.agent_runtime import AgentContext
 
@@ -44,6 +63,7 @@ class AIStateMachineCoordinator:
         self.config = config or {}
         self.tool_registry = ToolRegistry()
         self.active_agents: Dict[str, StrandsAgentRuntime] = {}
+        self.strands_registry = None  # Will be initialized on first use
         # Cache of available tools
         try:
             self._all_tools = self.tool_registry.get_all_tools()  # name -> instance
@@ -67,6 +87,7 @@ class AIStateMachineCoordinator:
     def _decision_key(self, exec_id: str, state_id: str) -> str:
         return f"{exec_id}:{state_id}"
 
+    
     def submit_decision(self, exec_id: str, state_id: str, event: str) -> bool:
         key = self._decision_key(exec_id, state_id)
         fut = self._decision_waiters.get(key)
@@ -206,14 +227,22 @@ class AIStateMachineCoordinator:
 
         list_names: List[str]
         if names is not None:
-            list_names = [n for n in names if n in tools]
+            list_names = names  # Use provided names directly
         elif restrict and sel:
-            list_names = [n for n in sel if n in tools]
+            list_names = list(sel)
         else:
-            list_names = list(tools.keys())
+            list_names = list(tools.keys()) if tools else []
+        
         lines = []
         for n in list_names[:50]:
-            desc = getattr(tools.get(n), 'description', '') or ''
+            # Get description from tool registry or use empty string
+            desc = ''
+            if n in tools:
+                tool = tools.get(n)
+                if isinstance(tool, dict):
+                    desc = tool.get('description', '')
+                else:
+                    desc = getattr(tool, 'description', '') or ''
             lines.append(f"- {n}: {desc}")
         return "\n".join(lines)
 
@@ -334,11 +363,20 @@ class AIStateMachineCoordinator:
         else:
             allowed_tools = registry_names
 
-        allowed_text = ", ".join(allowed_tools) if allowed_tools else ""
+        # Format tools as a proper list for clarity
+        if allowed_tools:
+            allowed_text = "[" + ", ".join(f'"{tool}"' for tool in allowed_tools) + "]"
+        else:
+            allowed_text = "[]"
 
         prompt = f"""You are an AI state machine architect. Analyze this task and create a sophisticated state machine.
 
 Task: {task}
+
+IMPORTANT: You have access to these tools: {allowed_text}
+- States that perform research MUST include ["tavily_search"] in their tools array
+- Any state that needs to gather information should be type "tool_call" with appropriate tools
+- For satellite launch planning, many states will need to research data - USE THE TOOLS!
 
 Return a JSON object with this EXACT structure:
 {{
@@ -374,15 +412,24 @@ Requirements:
 5. Include final states for both success and failure scenarios
 6. Make it as complex as needed - don't simplify!
 
-Tool constraints:
-- Do NOT invent tool names.
-- If a state has type "tool_call", its "tools" array MUST be a subset of ALLOWED_TOOLS below.
-- If no allowed tools apply, set "tools": [] for that state.
-ALLOWED_TOOLS: [{allowed_text}]
+Tool Usage Guidelines:
+- AVAILABLE TOOLS: {allowed_text}
+- For states that need to search for information, USE tavily_search in the tools array
+- For states that involve research, data gathering, or external information, ADD tavily_search to tools
+- States with type "tool_call" SHOULD use relevant tools from the available list
+- If a task involves finding information, researching, or gathering data, the state MUST include appropriate tools
+- Example: A state for "Research launch requirements" should have tools: ["tavily_search"]
+- Only use tool names from AVAILABLE TOOLS list above - do not invent tool names
 
 Example events: success, failure, retry, timeout, validated, invalid, partial_success, needs_review, escalate, rollback, skip, cancel
 
 Think step-by-step about what this specific task requires and create appropriate states.
+
+For the given task, identify which states would benefit from using tools:
+- Research states should use tavily_search
+- States gathering external information should use tavily_search  
+- States that need current data should use appropriate tools
+Remember: tool_call states MUST specify which tools they will use!
 """
         
         try:
@@ -1012,14 +1059,33 @@ Think step-by-step about what this specific task requires and create appropriate
             elif state_type == 'tool_call':
                 # Create agent with tools
                 allowed_events = list(state.get('transitions', {}).keys())
-                # Resolve planned tool names and actual tool instances
+                # Resolve planned tool names and wrap them properly for Strands
                 planned_names = self._resolve_tool_names_for_state(state)
-                # Map names to instances (only valid names remain)
+                
+                # Use DynamicToolWrapper to properly wrap tools for Strands if available
                 resolved_tools = []
-                for n in planned_names:
-                    t = self.tool_registry.get_tool(n)
-                    if t:
-                        resolved_tools.append(t)
+                if TOOLS_AVAILABLE and DynamicToolWrapper:
+                    try:
+                        tool_wrapper = DynamicToolWrapper(callback_handler=None)
+                        for tool_name in planned_names:
+                            wrapped_tool = tool_wrapper.wrap_strands_tool(tool_name, state['name'])
+                            if wrapped_tool:
+                                resolved_tools.append(wrapped_tool)
+                                logger.info(f"✅ Added tool {tool_name} to state {state_id}")
+                            else:
+                                logger.warning(f"⚠️ Could not wrap tool {tool_name} for state {state_id}")
+                    except Exception as e:
+                        logger.warning(f"Tool wrapping failed for state {state_id}: {e}")
+                else:
+                    # If DynamicToolWrapper not available, try direct import as fallback
+                    for tool_name in planned_names:
+                        if tool_name == 'tavily_search':
+                            try:
+                                from tools.tavily_search_tool import tavily_search
+                                resolved_tools.append(tavily_search)
+                                logger.info(f"✅ Directly loaded tavily_search for state {state_id}")
+                            except ImportError:
+                                logger.warning(f"Could not import tavily_search")
                 tool_inventory = self._tool_inventory_text(planned_names)
                 agent_config = StrandsAgentConfig(
                     name=state['name'],
@@ -1028,13 +1094,15 @@ Think step-by-step about what this specific task requires and create appropriate
 Your specific responsibility: {state.get('description', state.get('task', 'Execute your role'))}
 
 You must:
-1. Complete your specific task thoroughly
+1. Complete your specific task thoroughly using the tools provided
 2. Build upon any previous agent outputs provided
 3. Produce clear, actionable output for the next agent
 4. Focus on your role without repeating work already done
 
-Available tools you may call (pre-selected for this state):
+IMPORTANT: You have been given specific tools for this task. You MUST use the appropriate tools from the list below to complete your work:
 {tool_inventory}
+
+If tools are available, use them to research, analyze, or perform your task. Do not just describe what you would do - actually use the tools to do it.
 
 At the very end of your response, output exactly one line:
 NEXT_EVENT: <one of {allowed_events}>
@@ -1043,6 +1111,12 @@ No extra commentary after that line.""",
                     temperature=0.7,
                     tools=resolved_tools
                 )
+                
+                # Log the tools being passed
+                logger.info(f"Creating agent {state_id} with {len(resolved_tools)} tools")
+                if resolved_tools:
+                    tool_names = [getattr(t, '__name__', str(t)) for t in resolved_tools]
+                    logger.info(f"Tools for {state_id}: {tool_names}")
                 
                 agent_runtime = StrandsAgentRuntime(
                     agent_id=state_id,
@@ -1132,6 +1206,9 @@ No extra commentary after that line.""",
                     temperature=0.7,
                     tools=[]  # Analysis agents typically don't need tools
                 )
+                
+                # Log that no tools for analysis agents
+                logger.info(f"Creating analysis agent {state_id} with no tools")
                 
                 agent_runtime = StrandsAgentRuntime(
                     agent_id=state_id,
@@ -1230,7 +1307,25 @@ No extra commentary after that line.""",
                 prefs = self.config.get('tool_preferences') or {}
                 selected = list(prefs.get('selected_tools') or [])
                 restrict = bool(prefs.get('restrict_to_selected', False))
+                
+                # Get all available tools from both registries dynamically
                 available_names = set((self._all_tools or {}).keys())
+                
+                # Get ALL tools from strands registry - no hardcoding
+                if TOOLS_AVAILABLE:
+                    try:
+                        # Initialize strands registry if not done
+                        if not self.strands_registry:
+                            from app.tools.strands_tool_registry import get_dynamic_tools
+                            self.strands_registry = await get_dynamic_tools()
+                        
+                        # Add ALL strands tool names to available
+                        if self.strands_registry and hasattr(self.strands_registry, 'tools'):
+                            available_names.update(self.strands_registry.tools.keys())
+                            logger.debug(f"Available tools from strands: {list(self.strands_registry.tools.keys())[:20]}...")
+                    except Exception as e:
+                        logger.debug(f"Could not get strands tools: {e}")
+                
                 unknown = [n for n in selected if n not in available_names]
                 effective = [n for n in selected if n in available_names] if restrict else list(available_names)
                 await self.hub.publish_control(ControlFrame(
@@ -1243,8 +1338,8 @@ No extra commentary after that line.""",
                         "unknown": unknown
                     }
                 ))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Error announcing tool preferences: {e}")
             
             state_machine = await self.analyze_and_create_state_machine(task)
             # Deduplicate edges to avoid duplicate React keys client-side
