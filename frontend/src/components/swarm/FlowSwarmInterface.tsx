@@ -1387,6 +1387,8 @@ const FlowSwarmInterface: React.FC = () => {
             <div className="output-list">
               {Array.from(agents.values()).map(agent => {
                 const isExpanded = selectedAgent === agent.id || (!selectedAgent && agent.status === 'running');
+                const node = nodes.find(n => n.id === agent.id);
+                const nodeData = node?.data;
                 
                 return (
                   <div
@@ -1399,7 +1401,12 @@ const FlowSwarmInterface: React.FC = () => {
                     >
                       <div className="card-header-left">
                         <span className={`status-dot ${agent.status}`} />
-                        <span className="agent-name">{agent.name}</span>
+                        <div className="agent-info">
+                          <span className="agent-name">{agent.name}</span>
+                          {nodeData?.agentRole && (
+                            <span className="agent-role">{nodeData.agentRole}</span>
+                          )}
+                        </div>
                       </div>
                       <div className="card-header-right">
                         {agent.status === 'running' && (
@@ -1409,14 +1416,20 @@ const FlowSwarmInterface: React.FC = () => {
                           </span>
                         )}
                         {agent.status === 'completed' && (
-                          <span className="status-text">✓</span>
+                          <span className="status-text success">✓ Done</span>
                         )}
                         {agent.status === 'failed' && (
-                          <span className="status-text error">✗</span>
+                          <span className="status-text error">✗ Failed</span>
                         )}
-                        {agent.startTime && agent.endTime && (
+                        {agent.status === 'pending' && (
+                          <span className="status-text pending">⏳ Waiting</span>
+                        )}
+                        {agent.startTime && (
                           <span className="duration">
-                            {((agent.endTime - agent.startTime) / 1000).toFixed(1)}s
+                            {agent.endTime ? 
+                              `${((agent.endTime - agent.startTime) / 1000).toFixed(1)}s` :
+                              `${((Date.now() - agent.startTime) / 1000).toFixed(0)}s`
+                            }
                           </span>
                         )}
                         <span className="expand-icon">
@@ -1427,6 +1440,45 @@ const FlowSwarmInterface: React.FC = () => {
                     
                     {isExpanded && (
                       <div className="card-body">
+                        {/* Agent metadata section */}
+                        {(nodeData?.task || nodeData?.description || (nodeData?.toolsPlanned && nodeData.toolsPlanned.length > 0)) && (
+                          <div className="agent-metadata">
+                            {nodeData?.task && (
+                              <div className="metadata-item">
+                                <span className="metadata-label">Task:</span>
+                                <span className="metadata-value">{nodeData.task}</span>
+                              </div>
+                            )}
+                            {nodeData?.description && (
+                              <div className="metadata-item">
+                                <span className="metadata-label">Description:</span>
+                                <span className="metadata-value">{nodeData.description}</span>
+                              </div>
+                            )}
+                            {nodeData?.toolsPlanned && nodeData.toolsPlanned.length > 0 && (
+                              <div className="metadata-item">
+                                <span className="metadata-label">Tools:</span>
+                                <div className="tools-list">
+                                  {nodeData.toolsPlanned.map((tool: string, idx: number) => (
+                                    <span key={idx} className="tool-badge">{tool}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {agent.parent && (
+                              <div className="metadata-item">
+                                <span className="metadata-label">Parent:</span>
+                                <span className="metadata-value">{agent.parent}</span>
+                              </div>
+                            )}
+                            {agent.depth !== undefined && agent.depth > 0 && (
+                              <div className="metadata-item">
+                                <span className="metadata-label">Depth Level:</span>
+                                <span className="metadata-value">Level {agent.depth}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <div className="card-content">
                           {agent.output ? (
                             <div className="markdown-output">
@@ -1457,6 +1509,11 @@ const FlowSwarmInterface: React.FC = () => {
                                   ul: ({children}) => <ul className="markdown-list">{children}</ul>,
                                   ol: ({children}) => <ol className="markdown-list ordered">{children}</ol>,
                                   li: ({children}) => <li className="markdown-li">{children}</li>,
+                                  h1: ({children}) => <h4 className="markdown-h1">{children}</h4>,
+                                  h2: ({children}) => <h5 className="markdown-h2">{children}</h5>,
+                                  h3: ({children}) => <h6 className="markdown-h3">{children}</h6>,
+                                  blockquote: ({children}) => <blockquote className="markdown-blockquote">{children}</blockquote>,
+                                  a: ({href, children}) => <a href={href} target="_blank" rel="noopener noreferrer" className="markdown-link">{children}</a>,
                                 }}
                               >
                                 {agent.output}

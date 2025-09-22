@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import './ModernFlowInterface.css';
 import ReactMarkdown from 'react-markdown';
+import { HomeButton } from '../ui/HomeButton';
 // @ts-ignore
 import remarkGfm from 'remark-gfm';
 
@@ -535,9 +536,10 @@ const ModernFlowInterface: React.FC = () => {
       {/* Header */}
       <header className="flow-header">
         <div className="header-brand">
+          <HomeButton variant="both" />
           <div className="brand-icon">⚡</div>
           <div className="brand-text">
-            <h1>Dynamic Agent System</h1>
+            <h1>Flow Interface</h1>
             <div className="connection-indicator">
               <span className={`indicator-dot ${connectionStatus}`}></span>
               <span className="indicator-text">{connectionStatus}</span>

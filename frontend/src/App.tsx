@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import './utils/auth'; // Initialize authentication
 import HomePage from './pages/HomePage';
 import { ModernHomePage } from './pages/ModernHomePage';
+import ProfessionalHomePage from './pages/ProfessionalHomePage';
 import { EnhancedSwarmChat } from './pages/EnhancedSwarmChat';
 import { ModernSwarmChat } from './pages/ModernSwarmChat';
 import { ModernSwarmChatFixed } from './pages/ModernSwarmChatFixed';
@@ -35,8 +36,8 @@ function App() {
       <ThemeProvider>
         <Router>
           <Routes>
-            {/* Main landing page - using new Modern UI */}
-            <Route path="/" element={<ModernHomePage />} />
+            {/* Main landing page - using Professional UI */}
+            <Route path="/" element={<ProfessionalHomePage />} />
 
             {/* Swarm Chat - Clean UI (SSE version) */}
             <Route path="/swarm" element={<CleanSwarmChat />} />

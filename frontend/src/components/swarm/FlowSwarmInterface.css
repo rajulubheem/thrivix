@@ -543,8 +543,13 @@
 
 .duration {
   font-size: 11px;
-  color: #71717a;
+  color: #a1a1aa;
   font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Monaco', monospace;
 }
 
 .card-content {
@@ -617,6 +622,24 @@
   gap: 8px;
 }
 
+.agent-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-name {
+  font-weight: 600;
+  color: #f4f4f5;
+  font-size: 14px;
+}
+
+.agent-role {
+  font-size: 11px;
+  color: #71717a;
+  font-style: italic;
+}
+
 .card-header-right {
   display: flex;
   align-items: center;
@@ -666,12 +689,22 @@
 
 .status-text {
   font-size: 12px;
-  color: #22c55e;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-text.success {
+  color: #22c55e;
 }
 
 .status-text.error {
   color: #ef4444;
+}
+
+.status-text.pending {
+  color: #71717a;
 }
 
 .expand-icon {
@@ -683,6 +716,51 @@
 .card-body {
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   animation: slideDown 0.2s ease-out;
+}
+
+/* Agent Metadata Section */
+.agent-metadata {
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metadata-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.metadata-label {
+  color: #71717a;
+  font-weight: 600;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.metadata-value {
+  color: #d4d4d8;
+  line-height: 1.4;
+}
+
+.tools-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tool-badge {
+  padding: 2px 8px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid rgba(59, 130, 246, 0.25);
 }
 
 @keyframes slideDown {
@@ -766,17 +844,18 @@
 }
 
 .markdown-output .code-block {
-  margin: 8px 0;
-  border-radius: 6px;
+  margin: 12px 0;
+  border-radius: 8px;
   overflow: hidden;
-  background: #0a0a0a;
+  background: linear-gradient(135deg, #0a0a0a, #0d0d0d);
   border: 1px solid #27272a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .markdown-output .code-header {
-  padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid #27272a;
+  padding: 8px 12px;
+  background: linear-gradient(to bottom, rgba(39, 39, 42, 0.6), rgba(39, 39, 42, 0.3));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -784,8 +863,13 @@
 
 .markdown-output .code-lang {
   font-size: 11px;
-  color: #71717a;
+  color: #60a5fa;
   text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  background: rgba(59, 130, 246, 0.15);
+  border-radius: 4px;
   letter-spacing: 0.5px;
 }
 
@@ -953,17 +1037,70 @@
 }
 
 /* Markdown Styles in Output */
-.card-content h1,
-.card-content h2,
-.card-content h3 {
+.markdown-output {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown-h1 {
   color: #f4f4f5;
   margin: 12px 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+}
+
+.markdown-h2 {
+  color: #e4e4e7;
+  margin: 10px 0 6px;
   font-size: 14px;
   font-weight: 600;
 }
 
-.card-content p {
+.markdown-h3 {
+  color: #d4d4d8;
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.markdown-p {
   margin: 8px 0;
+  color: #e4e4e7;
+}
+
+.markdown-list {
+  margin: 8px 0 8px 20px;
+  color: #e4e4e7;
+}
+
+.markdown-list.ordered {
+  list-style-type: decimal;
+}
+
+.markdown-li {
+  margin: 4px 0;
+}
+
+.markdown-blockquote {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid #3f3f46;
+  color: #a1a1aa;
+  font-style: italic;
+}
+
+.markdown-link {
+  color: #60a5fa;
+  text-decoration: none;
+  border-bottom: 1px dotted #60a5fa;
+  transition: all 0.15s;
+}
+
+.markdown-link:hover {
+  color: #93bbfc;
+  border-bottom-color: #93bbfc;
 }
 
 .card-content code {

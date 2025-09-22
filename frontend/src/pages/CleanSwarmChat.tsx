@@ -16,6 +16,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import AgentPipeline from '../components/swarm/AgentPipeline';
 import { useNavigate } from 'react-router-dom';
+import { HomeButton } from '../components/ui/HomeButton';
 
 // API Configuration
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -1369,6 +1370,9 @@ export function CleanSwarmChat() {
       >
         {/* Sidebar Header */}
         <div className="p-4 border-b border-gray-200 dark:border-gray-800">
+          <div className="mb-3">
+            <HomeButton variant={sidebarCollapsed ? 'icon' : 'both'} />
+          </div>
           <div className="flex items-center justify-between">
             <motion.div 
               className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}
@@ -1380,7 +1384,7 @@ export function CleanSwarmChat() {
               {!sidebarCollapsed && (
                 <div>
                   <h1 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                    Swarm Intelligence
+                    Agent Swarm
                   </h1>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Multi-Agent Orchestration</p>
                 </div>

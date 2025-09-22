@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import './EfficientSwarmInterface.css';
 import NeuralThinkingSimple from './NeuralThinkingSimple';
+import { HomeButton } from '../ui/HomeButton';
 
 interface TokenFrame {
   exec_id: string;
@@ -915,10 +916,11 @@ const EfficientSwarmInterface: React.FC = () => {
         {/* Control Bar */}
         <div className="control-bar">
           <div className="control-section">
+            <HomeButton variant="icon" />
             <div className="logo-section">
               <div className="quantum-logo">Σ</div>
               <div className="system-title">
-                <h1>SWARM.AI</h1>
+                <h1>Efficient Swarm</h1>
                 <div className="system-status">
                   <span className={`status-light ${connectionStatus}`}></span>
                   <span>{connectionStatus}</span>

@@ -1,0 +1,467 @@
+/* Professional State Machine Designer Styles */
+
+.professional-state-machine-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', sans-serif;
+}
+
+/* Header */
+.state-machine-header {
+  height: 60px;
+  background: linear-gradient(to right, #252525, #1f1f1f);
+  border-bottom: 1px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.state-machine-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: #f0f0f0;
+}
+
+.machine-name {
+  padding: 4px 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  font-size: 13px;
+  color: #60a5fa;
+  font-family: 'SF Mono', monospace;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.current-state-label {
+  font-size: 13px;
+  color: #888;
+}
+
+.current-state-value {
+  padding: 4px 12px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 4px;
+  font-size: 13px;
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.simulate-btn {
+  padding: 8px 20px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.simulate-btn:hover {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.simulate-btn:disabled {
+  background: #444;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Main Content */
+.state-machine-main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Canvas */
+.state-machine-canvas {
+  flex: 1;
+  position: relative;
+  background: #0f0f0f;
+}
+
+/* State Node Styles */
+.state-machine-node {
+  background: linear-gradient(135deg, #1f1f1f, #1a1a1a);
+  border: 2px solid #333;
+  color: #e0e0e0;
+  padding: 0;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.state-machine-node.atomic {
+  border-radius: 8px;
+}
+
+.state-machine-node.compound {
+  border-radius: 8px;
+  border-style: solid;
+  border-width: 2px;
+  background: linear-gradient(135deg, #1a1a1a, #161616);
+}
+
+.state-machine-node.parallel {
+  border-radius: 0;
+  border-style: dashed;
+  border-color: #666;
+}
+
+.state-machine-node.final {
+  border-radius: 50%;
+  border-width: 3px;
+  border-color: #ef4444;
+  background: #1a1a1a;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.final-state-inner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.state-machine-node:hover {
+  border-color: #555;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.state-machine-node.selected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.state-machine-node.active {
+  border-color: #4ade80;
+  background: linear-gradient(135deg, #1a2f1a, #1a1a1a);
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
+}
+
+.state-header {
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.state-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+.state-type {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.state-description {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #888;
+  line-height: 1.4;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.state-actions {
+  padding: 6px 14px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.action-label {
+  color: #666;
+  font-weight: 600;
+}
+
+.action-item {
+  padding: 2px 6px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+  border-radius: 3px;
+  font-family: 'SF Mono', monospace;
+}
+
+.nested-states-container {
+  padding: 10px;
+  min-height: 60px;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nested-states-placeholder {
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Transition Edge Styles */
+.transition-edge {
+  stroke: #444;
+  transition: all 0.2s;
+}
+
+.transition-edge:hover {
+  stroke: #666;
+}
+
+.transition-edge.selected {
+  stroke: #3b82f6;
+  stroke-width: 3;
+}
+
+.transition-edge.active {
+  stroke: #4ade80;
+  stroke-width: 3;
+  animation: pulse-edge 1s infinite;
+}
+
+@keyframes pulse-edge {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Sidebar */
+.state-machine-sidebar {
+  width: 320px;
+  background: #1f1f1f;
+  border-left: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Properties Panel */
+.properties-panel {
+  padding: 20px;
+  border-bottom: 1px solid #333;
+}
+
+.properties-panel h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: #f0f0f0;
+}
+
+.property-group {
+  margin-bottom: 12px;
+}
+
+.property-group label {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+}
+
+.property-group input,
+.property-group select {
+  width: 100%;
+  padding: 6px 10px;
+  background: #2a2a2a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 13px;
+}
+
+.property-group input:focus,
+.property-group select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+/* History Panel */
+.history-panel {
+  padding: 20px;
+  border-bottom: 1px solid #333;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-panel h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: #f0f0f0;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.history-state {
+  color: #60a5fa;
+  font-weight: 500;
+}
+
+.history-arrow {
+  color: #666;
+}
+
+.history-event {
+  color: #4ade80;
+  font-weight: 500;
+  flex: 1;
+}
+
+.history-time {
+  color: #666;
+  font-size: 11px;
+}
+
+/* Events Panel */
+.events-panel {
+  padding: 20px;
+}
+
+.events-panel h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: #f0f0f0;
+}
+
+.event-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.event-button {
+  padding: 6px 14px;
+  background: linear-gradient(135deg, #2a2a2a, #252525);
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.event-button:hover {
+  background: linear-gradient(135deg, #333, #2a2a2a);
+  border-color: #444;
+  transform: translateY(-1px);
+}
+
+/* Toolbar Panel */
+.toolbar-panel {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(31, 31, 31, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.toolbar-panel button {
+  padding: 6px 12px;
+  background: #2a2a2a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toolbar-panel button:hover {
+  background: #333;
+  border-color: #444;
+  transform: translateY(-1px);
+}
+
+/* React Flow Customization */
+.react-flow__renderer {
+  background: #0f0f0f !important;
+}
+
+.react-flow__minimap {
+  background: #1a1a1a !important;
+  border: 1px solid #333 !important;
+}
+
+.react-flow__controls {
+  background: #1f1f1f !important;
+  border: 1px solid #333 !important;
+}
+
+.react-flow__controls-button {
+  background: #2a2a2a !important;
+  border-bottom: 1px solid #333 !important;
+  color: #888 !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #333 !important;
+  color: #e0e0e0 !important;
+}
