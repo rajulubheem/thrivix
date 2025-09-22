@@ -14,6 +14,7 @@ from strands.session.file_session_manager import FileSessionManager
 
 from app.services.agent_runtime import AgentRuntime, AgentContext
 from app.services.event_hub import TokenFrame, ControlFrame, ControlType
+from app.services.safe_tool_executor import SafeToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class StrandsAgentRuntime(AgentRuntime):
         super().__init__(agent_id, config.name, config.model)
         self.config = config
         self._agent = None
+        self.safe_executor = SafeToolExecutor()
         self._initialize_agent()
     
     def _initialize_agent(self):

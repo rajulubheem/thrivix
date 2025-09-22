@@ -10,7 +10,8 @@
   flex-direction: column;
   height: 100vh;
   width: 100vw;
-  background: #0a0a0a;
+  /* Softer, modern canvas background */
+  background: radial-gradient(1200px 800px at 20% 0%, #0f172a 0%, #0b1220 40%, #0a0f1a 100%);
   color: #e4e4e7;
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', sans-serif;
   overflow: hidden;
@@ -20,8 +21,8 @@
 /* Header */
 .flow-header {
   height: 52px;
-  background: linear-gradient(to right, #111111, #0f0f0f);
-  border-bottom: 1px solid #27272a;
+  background: linear-gradient(90deg, rgba(15,23,42,0.9), rgba(2,6,23,0.9));
+  border-bottom: 1px solid rgba(148,163,184,0.15);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -133,7 +134,8 @@
 .flow-graph-panel {
   flex: 1;
   position: relative;
-  background: radial-gradient(ellipse at center, #0f0f14, #0a0a0a);
+  background: radial-gradient(1400px 900px at 75% 20%, rgba(30,41,59,0.25) 0%, rgba(2,6,23,0.05) 40%, rgba(2,6,23,0.0) 80%),
+              linear-gradient(180deg, rgba(15,23,42,0.45), rgba(2,6,23,0.6));
   min-height: 0;
   min-width: 0;
 }
@@ -143,15 +145,13 @@
   background: transparent !important;
 }
 
-.react-flow__background {
-  background: #0a0a0a !important;
-}
+.react-flow__background { background: transparent !important; }
 
 .react-flow__minimap {
   background: #111111 !important;
-  border: 1px solid #27272a !important;
+  border: 1px solid rgba(148,163,184,0.2) !important;
   border-radius: 8px !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+  box-shadow: 0 8px 24px rgba(2,6,23,0.5) !important;
 }
 
 .react-flow__minimap-mask {
@@ -183,27 +183,24 @@
 /* Custom Agent Node */
 .agent-node {
   min-width: 220px;
-  background: linear-gradient(135deg, #1a1a1a, #0f0f0f);
-  border: 1.5px solid #2a2a2a;
+  background: linear-gradient(135deg, rgba(30,41,59,0.8), rgba(15,23,42,0.8));
+  border: 1.5px solid rgba(148,163,184,0.25);
   border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
-              0 1px 2px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 30px rgba(2,6,23,0.6), 0 2px 6px rgba(2,6,23,0.5);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   cursor: pointer;
 }
 
 .agent-node:hover {
-  border-color: #3f3f46;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5),
-              0 2px 4px rgba(0, 0, 0, 0.3);
-  transform: translateY(-1px);
+  border-color: rgba(99,102,241,0.6);
+  box-shadow: 0 16px 40px rgba(36,99,235,0.25), 0 4px 10px rgba(2,6,23,0.5);
+  transform: translateY(-1px) scale(1.005);
 }
 
 .agent-node.selected {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15),
-              0 4px 16px rgba(0, 0, 0, 0.5);
+  border-color: rgba(59,130,246,0.9);
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.4), 0 18px 50px rgba(59,130,246,0.25);
 }
 
 .agent-node.running {
@@ -338,11 +335,40 @@
   border-color: #3f3f46;
 }
 
+.panel-button.active {
+  background: #3b82f6;
+  color: white;
+  border-color: #3b82f6;
+}
+
+.light-mode .panel-button {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #cbd5e1;
+  color: #475569;
+}
+
+.light-mode .panel-button:hover {
+  background: #ffffff;
+  border-color: #94a3b8;
+  color: #1e293b;
+}
+
+.light-mode .panel-button.active {
+  background: #3b82f6;
+  color: white;
+  border-color: #3b82f6;
+}
+
 /* Improved Output Panel */
 .flow-output-panel {
   display: flex;
   flex-direction: column;
   background: linear-gradient(to bottom, #0f0f0f, #0a0a0a);
+  transition: background 0.3s ease;
+}
+
+.light-mode .flow-output-panel {
+  background: linear-gradient(to bottom, #ffffff, #f8fafc);
   border-left: 1px solid #27272a;
   overflow: hidden;
   flex-shrink: 0;
