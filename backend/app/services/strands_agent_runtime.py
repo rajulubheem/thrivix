@@ -228,22 +228,55 @@ class StrandsAgentRuntime(AgentRuntime):
             )
     
     def _build_prompt(self, context: AgentContext) -> str:
-        """Build the prompt with context from parent agents"""
-        prompt_parts = []
-        
-        # Add the main task
-        prompt_parts.append(f"Task: {context.task}")
-        
-        # Add parent result if available
+        """Build a richer, tool-aware prompt with strict output footer."""
+        parts: List[str] = []
+        parts.append(f"Task: {context.task}")
+
+        # Summarize prior outputs briefly
         if context.parent_result:
-            prompt_parts.append(f"\nContext from previous agent:\n{context.parent_result}")
-        
-        # Add any additional metadata
+            parts.append("\nContext from previous agent (truncated if long):\n" + str(context.parent_result)[:1500])
+
+        # Provide compact metadata
         if context.metadata:
-            for key, value in context.metadata.items():
-                prompt_parts.append(f"\n{key}: {value}")
-        
-        return "\n".join(prompt_parts)
+            meta_lines = []
+            for k, v in list(context.metadata.items())[:10]:
+                sv = str(v)
+                meta_lines.append(f"- {k}: {sv[:200] + ('...' if len(sv) > 200 else '')}")
+            if meta_lines:
+                parts.append("\nAdditional metadata:\n" + "\n".join(meta_lines))
+
+        # If tools are configured for this agent, list their names to avoid unknown tool attempts
+        tool_names: List[str] = []
+        try:
+            tool_names = [getattr(t, "__name__", "") for t in (self.config.tools or []) if t]
+            tool_names = [n for n in tool_names if n]
+        except Exception:
+            tool_names = []
+        if tool_names:
+            parts.append("\nPERMITTED_TOOLS (exact names):\n- " + "\n- ".join(tool_names))
+            parts.append(
+                "\nTOOL POLICY:\n"
+                "- Call a tool only if it materially advances your task.\n"
+                "- Never call tools not listed above.\n"
+                "- If a tool returns an error or is unavailable, do not retry endlessly—adapt your plan and continue.\n"
+                "- Prefer fewer, higher‑value calls over many redundant calls.\n"
+            )
+
+        # Strict footer to force a next event
+        allowed = ["success", "failure"]
+        try:
+            meta_allowed = context.metadata.get('allowed_events') if context.metadata else None
+            if isinstance(meta_allowed, list) and meta_allowed:
+                # sanitize to strings
+                allowed = [str(x) for x in meta_allowed if isinstance(x, (str, bytes))] or allowed
+        except Exception:
+            pass
+        parts.append(
+            "\nAt the very end of your response, output exactly one line:\n"
+            f"NEXT_EVENT: <one of {allowed}>\n"
+            "No extra commentary after that line."
+        )
+        return "\n".join(parts)
 
 
 class StrandsAgentFactory:

@@ -76,8 +76,15 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "build:prod": "GENERATE_SOURCEMAP=false react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "test:coverage": "react-scripts test --coverage --watchAll=false",
+    "eject": "react-scripts eject",
+    "lint": "eslint src --ext .ts,.tsx,.js,.jsx",
+    "lint:fix": "eslint src --ext .ts,.tsx,.js,.jsx --fix",
+    "type-check": "tsc --noEmit",
+    "analyze": "source-map-explorer 'build/static/js/*.js'",
+    "serve:build": "serve -s build -l 3000"
   },
   "eslintConfig": {
     "extends": [
@@ -99,6 +106,10 @@
   },
   "devDependencies": {
     "@types/dagre": "^0.7.53",
-    "@types/html2pdf.js": "^0.10.0"
+    "@types/html2pdf.js": "^0.10.0",
+    "eslint": "^8.57.0",
+    "eslint-config-react-app": "^7.0.1",
+    "source-map-explorer": "^2.5.3",
+    "serve": "^14.2.3"
   }
 }

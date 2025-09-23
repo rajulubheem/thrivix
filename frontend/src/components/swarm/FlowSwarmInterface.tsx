@@ -31,6 +31,7 @@ import remarkGfm from 'remark-gfm';
 import { NodeData, EdgeData } from './types/FlowTypes';
 import ProfessionalAgentNode from './components/ProfessionalAgentNode';
 import OptimizedSmoothEdge from './components/OptimizedSmoothEdge';
+import ChatbotOutput from './components/ChatbotOutput';
 import { useTheme } from '../../contexts/ThemeContext';
 
 // Clean Professional Node Component (v3)
@@ -325,7 +326,7 @@ type Frame = TokenFrame | ControlFrame;
 // Main Component
 const FlowSwarmInterface: React.FC = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { fitView, setCenter } = useReactFlow();
+  const { fitView, setCenter, getViewport } = useReactFlow();
   
   // State
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -357,18 +358,64 @@ const FlowSwarmInterface: React.FC = () => {
   const [showMinimap, setShowMinimap] = useState(false);
   const [toolsLoading, setToolsLoading] = useState(false);
   const [highlightPath, setHighlightPath] = useState(false);
+  const [followActive, setFollowActive] = useState<boolean>(true);
+  const followActiveRef = useRef<boolean>(true);
+  useEffect(() => { followActiveRef.current = followActive; }, [followActive]);
+  // Replay/trace controls
+  const [executionTrace, setExecutionTrace] = useState<string[]>([]);
+  const [replayMode, setReplayMode] = useState<boolean>(false);
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
   const [availableTools, setAvailableTools] = useState<string[]>([]);
   const [toolDetails, setToolDetails] = useState<Record<string, { description?: string; category?: string }>>({});
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-  const [restrictToSelected, setRestrictToSelected] = useState<boolean>(false);
   const [toolSearch, setToolSearch] = useState('');
   const [toolPrefs, setToolPrefs] = useState<null | { unknown: string[]; effective: string[] }>(null);
+  // Parallel UI helpers
+  const [childrenOverrides, setChildrenOverrides] = useState<Record<string, string[]>>({});
+  const [showChildrenEditor, setShowChildrenEditor] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [parallelTooltip, setParallelTooltip] = useState<null | { id: string; x: number; y: number; lines: Array<{ child: string; event: string; durationMs: number }> }>(null);
   // Search overlay state
   
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
   const agentSequences = useRef<Map<string, number>>(new Map());
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Camera follow helpers
+  const pendingFocusIdRef = useRef<string | null>(null);
+  const focusAttemptsRef = useRef<number>(0);
+
+  // Focus loop: tries a few times until node dimensions are known
+  useEffect(() => {
+    let t: any;
+    const tick = () => {
+      const id = pendingFocusIdRef.current;
+      if (!id || !followActive) return;
+      const node = (layoutCache.current.nodes as Node[]).find(n => n.id === id) || nodes.find(n => n.id === id);
+      if (node) {
+        const width = (node as any).width || 0;
+        const height = (node as any).height || 0;
+        const cx = node.position.x + (width || 280) / 2;
+        const cy = node.position.y + (height || 140) / 2;
+        const ready = width > 0 && height > 0;
+        setCenter(cx, cy, { zoom: 0.95, duration: ready ? 320 : 200 });
+        if (ready) {
+          pendingFocusIdRef.current = null;
+          return;
+        }
+      }
+      focusAttemptsRef.current += 1;
+      if (focusAttemptsRef.current < 10) {
+        t = setTimeout(tick, 120);
+      } else {
+        pendingFocusIdRef.current = null;
+      }
+    };
+    if (pendingFocusIdRef.current) {
+      t = setTimeout(tick, 60);
+    }
+    return () => { if (t) clearTimeout(t); };
+  }, [nodes, setCenter, followActive]);
 
   // Improved layout function with better spacing
   const getLayoutedElements = useCallback((nodes: Node[], edges: Edge[], direction: 'TB' | 'LR' = 'LR') => {
@@ -663,8 +710,7 @@ const FlowSwarmInterface: React.FC = () => {
           try {
             const rawSel = localStorage.getItem('flowswarm_selected_tools');
             if (rawSel) setSelectedTools(new Set(JSON.parse(rawSel)));
-            const rawRestrict = localStorage.getItem('flowswarm_restrict_tools');
-            if (rawRestrict) setRestrictToSelected(rawRestrict === 'true');
+            // Removed restrictToSelected - no longer needed
           } catch {}
         }
       } finally {
@@ -673,13 +719,53 @@ const FlowSwarmInterface: React.FC = () => {
     })();
   }, []);
 
+  // Keyboard shortcuts for replay navigation
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!replayMode) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (executionTrace.length === 0) return;
+        setReplayIndex((i: number | null) => {
+          const next = Math.max(0, (i ?? 0) - 1);
+          const id = executionTrace[next];
+          if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+          return next;
+        });
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (executionTrace.length === 0) return;
+        setReplayIndex((i: number | null) => {
+          const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
+          const id = executionTrace[next];
+          if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+          return next;
+        });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [replayMode, executionTrace]);
+
   // Persist tool prefs
   useEffect(() => {
     try { localStorage.setItem('flowswarm_selected_tools', JSON.stringify(Array.from(selectedTools))); } catch {}
   }, [selectedTools]);
+
+  // Load saved parallel children overrides once
   useEffect(() => {
-    try { localStorage.setItem('flowswarm_restrict_tools', restrictToSelected ? 'true' : 'false'); } catch {}
-  }, [restrictToSelected]);
+    try {
+      const raw = localStorage.getItem('flowswarm_parallel_children');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') setChildrenOverrides(parsed);
+      }
+    } catch {}
+  }, []);
+  // Persist overrides on change
+  useEffect(() => {
+    try { localStorage.setItem('flowswarm_parallel_children', JSON.stringify(childrenOverrides)); } catch {}
+  }, [childrenOverrides]);
 
   // WebSocket handlers
   const connectWebSocket = useCallback((execId: string, isReconnect: boolean = false) => {
@@ -769,6 +855,94 @@ const FlowSwarmInterface: React.FC = () => {
     const { type, agent_id, payload } = frame;
     
     switch (type) {
+      case 'parallel_start': {
+        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
+          ...n,
+          data: {
+            ...n.data,
+            parallelRunning: true,
+            parallelChildren: payload?.children || [],
+            parallelCompleted: 0,
+            parallelStartTs: Date.now(),
+            parallelChildEvents: {}
+          }
+        } : n));
+        break;
+      }
+      case 'parallel_child_completed': {
+        const childId = payload?.child;
+        const ev = payload?.event;
+        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
+          ...n,
+          data: {
+            ...n.data,
+            parallelCompleted: (n.data?.parallelCompleted || 0) + 1,
+            parallelChildEvents: {
+              ...(n.data as any)?.parallelChildEvents,
+              [childId]: {
+                event: ev,
+                durationMs: Math.max(0, Date.now() - ((n.data as any)?.parallelStartTs || Date.now()))
+              }
+            }
+          }
+        } : n));
+        break;
+      }
+      case 'parallel_aggregated': {
+        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
+          ...n,
+          data: { ...n.data, parallelRunning: false, parallelSummary: payload?.next_event }
+        } : n));
+        break;
+      }
+      case 'parallel_start': {
+        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
+          ...n,
+          data: { ...n.data, parallelRunning: true, parallelChildren: payload?.children || [] }
+        } : n));
+        if (payload?.children) {
+          const childSet = new Set<string>(payload.children);
+          setEdges(edges => edges.map(e => childSet.has(e.source) && e.target === agent_id ? {
+            ...e,
+            style: { ...e.style, stroke: '#fde047', strokeWidth: 3 },
+          } : e));
+          setTimeout(() => {
+            setEdges(edges => edges.map(e => childSet.has(e.source) && e.target === agent_id ? {
+              ...e,
+              style: { ...e.style, stroke: '#94a3b8', strokeWidth: 2 },
+            } : e));
+          }, 800);
+        }
+        break;
+      }
+      case 'parallel_child_completed': {
+        const childId = payload?.child;
+        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
+          ...n,
+          data: { ...n.data, parallelCompleted: (n.data?.parallelCompleted || 0) + 1 }
+        } : n));
+        if (childId) {
+          setEdges(edges => edges.map(e => e.source === childId && e.target === agent_id ? {
+            ...e,
+            style: { ...e.style, stroke: payload?.event === 'failure' ? '#ef4444' : '#22c55e', strokeWidth: 3 },
+          } : e));
+          setTimeout(() => {
+            setEdges(edges => edges.map(e => e.source === childId && e.target === agent_id ? {
+              ...e,
+              style: { ...e.style, stroke: '#94a3b8', strokeWidth: 2 },
+            } : e));
+          }, 900);
+        }
+        break;
+      }
+      case 'parallel_aggregated': {
+        const nextEvent = payload?.next_event;
+        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
+          ...n,
+          data: { ...n.data, parallelRunning: false, parallelSummary: nextEvent, parallelCompleted: 0 }
+        } : n));
+        break;
+      }
       case 'tool_preferences': {
         const unknown = Array.isArray(payload?.unknown) ? payload.unknown : [];
         const effective = Array.isArray(payload?.effective) ? payload.effective : [];
@@ -1024,6 +1198,13 @@ const FlowSwarmInterface: React.FC = () => {
               },
             }))
           );
+          // Append to trace (de-dupe consecutive)
+          setExecutionTrace((prev: string[]) => (prev.length === 0 || prev[prev.length - 1] !== agent_id) ? [...prev, agent_id] : prev);
+          // Request focus on this node; loop will center when ready
+          if (followActiveRef.current) {
+            pendingFocusIdRef.current = agent_id;
+            focusAttemptsRef.current = 0;
+          }
         }
         break;
         
@@ -1127,6 +1308,12 @@ const FlowSwarmInterface: React.FC = () => {
               },
             }))
           );
+          // Append to trace (de-dupe consecutive)
+          setExecutionTrace((prev: string[]) => (prev.length === 0 || prev[prev.length - 1] !== agent_id) ? [...prev, agent_id] : prev);
+          if (followActiveRef.current) {
+            pendingFocusIdRef.current = agent_id;
+            focusAttemptsRef.current = 0;
+          }
         }
         break;
         
@@ -1243,7 +1430,7 @@ const FlowSwarmInterface: React.FC = () => {
         max_parallel: 5,
         tool_preferences: {
           selected_tools: Array.from(selectedTools),
-          restrict_to_selected: restrictToSelected,
+          restrict_to_selected: selectedTools.size > 0,  // If tools are selected, restrict to them
         }
       };
       
@@ -1271,11 +1458,48 @@ const FlowSwarmInterface: React.FC = () => {
     }
   };
 
+  // Memoized callbacks for ChatbotOutput to prevent re-renders
+  const handleAgentSelect = useCallback((agentId: string | null) => {
+    setSelectedAgent(agentId);
+    if (agentId) {
+      // Highlight the corresponding node when an agent is selected
+      setNodes((nds) =>
+        nds.map((node) => ({
+          ...node,
+          selected: node.id === agentId,
+        }))
+      );
+      // Optionally bring selected into view
+      const node = nodes.find(n => n.id === agentId);
+      if (node) {
+        setCenter(node.position.x + (((node as any).width) || 280) / 2, node.position.y + (((node as any).height) || 140) / 2, { zoom: 1.0, duration: 300 });
+      }
+    }
+  }, [setNodes]);
+
+  const handleNodeFocus = useCallback((agentId: string) => {
+    const node = nodes.find(n => n.id === agentId);
+    if (node) {
+      setCenter(node.position.x + 110, node.position.y + 50, { zoom: 1.2, duration: 300 });
+    }
+  }, [nodes, setCenter]);
+
+  // Create a stable agents reference to prevent ChatbotOutput re-renders
+  const stableAgents = useMemo(() => {
+    // Only recreate Map when content actually changes
+    return agents;
+  }, [
+    // Create a stable dependency based on actual content
+    Array.from(agents.entries())
+      .map(([k, v]) => `${k}:${v.status}:${v.output?.length || 0}:${v.startTime}:${v.endTime}`)
+      .join(',')
+  ]);
+
   const stopExecution = () => {
     setIsRunning(false);
     setActivelyStreamingAgents(new Set());
     setHasStateMachineStructure(false);
-    
+
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -1457,26 +1681,67 @@ const FlowSwarmInterface: React.FC = () => {
     <div className={`flow-swarm-container ${isDarkMode ? 'dark-mode' : 'light-mode'}`}>
       {/* Tools Hub Modal */}
       {showToolsHub && (
-        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={() => setShowToolsHub(false)}>
-          <div style={{ background:'#0f172a', color:'#e2e8f0', width:640, maxHeight:'80vh', borderRadius:8, padding:16, overflow:'auto' }} onClick={(e)=>e.stopPropagation()} onMouseDown={(e)=>e.stopPropagation()}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-              <h3 style={{ margin:0 }}>Select Tools</h3>
-              <button className="panel-button" onClick={()=>setShowToolsHub(false)}>Close</button>
-            </div>
-            <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
-              <input className="task-input" placeholder="Search tools..." value={toolSearch} onChange={e=>setToolSearch(e.target.value)} />
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setRestrictToSelected(prev => !prev)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setRestrictToSelected(prev => !prev); } }}
-                style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none', padding:'4px 8px', border:'1px solid #334155', borderRadius:6 }}
-              >
-                <div style={{ width:16, height:16, border:'1px solid #475569', borderRadius:4, background: restrictToSelected ? '#22c55e' : 'transparent' }} />
-                <span>Restrict to selected</span>
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={() => setShowToolsHub(false)}>
+          <div style={{
+            background: isDarkMode ? '#0f172a' : '#ffffff',
+            color: isDarkMode ? '#e2e8f0' : '#1e293b',
+            width: 720,
+            maxHeight: '85vh',
+            borderRadius: 12,
+            padding: 24,
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            display: 'flex',
+            flexDirection: 'column' as const
+          }} onClick={(e)=>e.stopPropagation()} onMouseDown={(e)=>e.stopPropagation()}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 20 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Tool Selection</h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: 14, color: isDarkMode ? '#94a3b8' : '#64748b' }}>
+                  Choose which tools the AI can use. Leave empty to allow all tools.
+                </p>
               </div>
-              <button className="panel-button" onClick={()=>setSelectedTools(new Set(availableTools))}>Select All</button>
-              <button className="panel-button" onClick={()=>setSelectedTools(new Set())}>Clear</button>
+              <button
+                className="panel-button"
+                onClick={()=>setShowToolsHub(false)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: `1px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
+                  background: isDarkMode ? '#1e293b' : '#f8fafc'
+                }}
+              >
+                ✕ Close
+              </button>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <input
+                className="task-input"
+                placeholder="Search tools..."
+                value={toolSearch}
+                onChange={e=>setToolSearch(e.target.value)}
+                style={{ width: '100%', marginBottom: 12 }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div style={{ color: '#64748b', fontSize: 14 }}>
+                  {selectedTools.size > 0 ? `${selectedTools.size} tool${selectedTools.size === 1 ? '' : 's'} selected` : 'No tools selected (AI will use all available tools)'}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="panel-button"
+                    onClick={()=>setSelectedTools(new Set(availableTools))}
+                    style={{ padding: '6px 12px', fontSize: 13 }}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    className="panel-button"
+                    onClick={()=>setSelectedTools(new Set())}
+                    style={{ padding: '6px 12px', fontSize: 13 }}
+                  >
+                    Clear All
+                  </button>
+                </div>
+              </div>
             </div>
             {/* Unknown selection warning inside modal */}
             {(() => {
@@ -1496,49 +1761,110 @@ const FlowSwarmInterface: React.FC = () => {
                 </div>
               );
             })()}
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-              {availableTools.filter(t => t.toLowerCase().includes(toolSearch.toLowerCase())).map(t => (
-                <div
-                  key={t}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    setSelectedTools(prev => {
-                      const n = new Set(prev);
-                      if (n.has(t)) n.delete(t); else n.add(t);
-                      return n;
-                    });
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setSelectedTools(prev => {
-                        const n = new Set(prev);
-                        if (n.has(t)) n.delete(t); else n.add(t);
-                        return n;
-                      });
-                    }
-                  }}
-                  style={{
-                    border:'1px solid #334155',
-                    borderRadius:8,
-                    padding:10,
-                    display:'flex',
-                    gap:8,
-                    cursor:'pointer',
-                    background: selectedTools.has(t) ? '#0b1324' : 'transparent'
-                  }}
-                >
-                  <div style={{ width:18, height:18, border:'1px solid #475569', borderRadius:4, background: selectedTools.has(t) ? '#22c55e' : 'transparent' }} />
-                  <div style={{ minWidth:0 }}>
-                    <div style={{ fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t}</div>
-                    {toolDetails[t]?.description && (
-                      <div style={{ fontSize:12, color:'#94a3b8' }}>{toolDetails[t]?.description}</div>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {toolsLoading && <div>Loading tools…</div>}
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              marginBottom: 16,
+              border: `1px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
+              borderRadius: 8,
+              padding: 12
+            }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10 }}>
+                {availableTools.filter(t => t.toLowerCase().includes(toolSearch.toLowerCase())).map(t => {
+                  const isSelected = selectedTools.has(t);
+                  return (
+                    <div
+                      key={t}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setSelectedTools(prev => {
+                          const n = new Set(prev);
+                          if (n.has(t)) n.delete(t); else n.add(t);
+                          return n;
+                        });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedTools(prev => {
+                            const n = new Set(prev);
+                            if (n.has(t)) n.delete(t); else n.add(t);
+                            return n;
+                          });
+                        }
+                      }}
+                      style={{
+                        border: `2px solid ${isSelected ? '#3b82f6' : isDarkMode ? '#334155' : '#e2e8f0'}`,
+                        borderRadius: 10,
+                        padding: 12,
+                        display: 'flex',
+                        gap: 12,
+                        cursor: 'pointer',
+                        background: isSelected
+                          ? (isDarkMode ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.05)')
+                          : 'transparent',
+                        transition: 'all 0.2s',
+                        position: 'relative' as const
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.background = isDarkMode ? 'rgba(148, 163, 184, 0.1)' : 'rgba(148, 163, 184, 0.05)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.background = 'transparent';
+                        }
+                      }}
+                    >
+                      {/* Checkbox */}
+                      <div style={{
+                        width: 20,
+                        height: 20,
+                        border: `2px solid ${isSelected ? '#3b82f6' : isDarkMode ? '#475569' : '#cbd5e1'}`,
+                        borderRadius: 4,
+                        background: isSelected ? '#3b82f6' : 'transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        transition: 'all 0.2s'
+                      }}>
+                        {isSelected && (
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                            <path d="M2 6L5 9L10 3" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        )}
+                      </div>
+                      {/* Tool info */}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          fontWeight: 600,
+                          fontSize: 14,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          color: isSelected ? '#3b82f6' : (isDarkMode ? '#f1f5f9' : '#1e293b')
+                        }}>
+                          {t}
+                        </div>
+                        {toolDetails[t]?.description && (
+                          <div style={{
+                            fontSize: 12,
+                            color: isDarkMode ? '#94a3b8' : '#64748b',
+                            marginTop: 2,
+                            lineHeight: 1.4
+                          }}>
+                            {toolDetails[t]?.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {toolsLoading && <div>Loading tools…</div>}
+              </div>
             </div>
           </div>
         </div>
@@ -1582,21 +1908,6 @@ const FlowSwarmInterface: React.FC = () => {
           <div className={`connection-status ${connectionStatus}`}>
             <span className="status-dot" />
             <span>{connectionStatus}</span>
-          </div>
-        </div>
-        
-        <div className="header-stats">
-          <div className="stat">
-            <span className="stat-value">{agents.size}</span>
-            <span className="stat-label">Agents</span>
-          </div>
-          <div className="stat">
-            <span className="stat-value">{Array.from(agents.values()).filter(a => a.status === 'running').length}</span>
-            <span className="stat-label">Active</span>
-          </div>
-          <div className="stat">
-            <span className="stat-value">{Array.from(agents.values()).filter(a => a.status === 'completed').length}</span>
-            <span className="stat-label">Completed</span>
           </div>
         </div>
       </header>
@@ -1694,15 +2005,165 @@ const FlowSwarmInterface: React.FC = () => {
               strokeWidth: 2,
             }}
           >
+            {/* Parallel Group Overlay */}
+            <div style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:0 }}>
+              {(() => {
+                const running = nodes.filter(n => (n.data as any)?.parallelRunning);
+                if (running.length === 0) return null;
+                const groups = running.map(n => {
+                  const children: string[] = (n.data as any)?.parallelChildren || [];
+                  const members = [n, ...nodes.filter(nn => children.includes(nn.id))];
+                  if (members.length === 0) return null;
+                  const minX = Math.min(...members.map(m => m.position.x)) - 20;
+                  const minY = Math.min(...members.map(m => m.position.y)) - 30;
+                  const maxX = Math.max(...members.map(m => m.position.x + ((m as any).width || 260))) + 20;
+                  const maxY = Math.max(...members.map(m => m.position.y + ((m as any).height || 120))) + 30;
+                  return { id: n.id, x: minX, y: minY, w: maxX - minX, h: maxY - minY, label: (n.data as any)?.label || n.id };
+                }).filter(Boolean) as Array<{ id:string; x:number; y:number; w:number; h:number; label:string }>;
+                if (groups.length === 0) return null;
+                const xs = groups.flatMap(g => [g.x, g.x + g.w]);
+                const ys = groups.flatMap(g => [g.y, g.y + g.h]);
+                const minX = Math.min(...xs), minY = Math.min(...ys);
+                const maxX = Math.max(...xs), maxY = Math.max(...ys);
+                return (
+                  <svg viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} style={{ width:'100%', height:'100%' }}>
+                    {groups.map(g => (
+                      <g key={g.id}>
+                        <rect x={g.x} y={g.y} rx={10} ry={10} width={g.w} height={g.h} fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.35)" strokeWidth={2} />
+                        <text x={g.x + 10} y={g.y + 18} fill="#93c5fd" fontSize={12} fontWeight={700}>Parallel Group · {g.label}</text>
+                      </g>
+                    ))}
+                  </svg>
+                );
+              })()}
+            </div>
             <Background
               variant={showGrid ? BackgroundVariant.Lines : BackgroundVariant.Dots}
               gap={showGrid ? 16 : 24}
               size={showGrid ? 1.25 : 1.5}
               color={isDarkMode ? '#334155' : '#cbd5e1'}
             />
+            {/* Parallel Group Overlay with ribbons, summary, and tooltip */}
+            <div style={{ position:'absolute', inset:0, pointerEvents:'auto', zIndex:0 }}>
+              {(() => {
+                const running = nodes.filter(n => (n.data as any)?.parallelRunning || (n.data as any)?.parallelSummary);
+                if (running.length === 0) return null;
+                const groups = running.map(n => {
+                  const data: any = n.data || {};
+                  const children: string[] = data.parallelChildren || [];
+                  const members = [n, ...nodes.filter(nn => children.includes(nn.id))];
+                  if (members.length === 0) return null;
+                  const minX = Math.min(...members.map(m => m.position.x)) - 20;
+                  const minY = Math.min(...members.map(m => m.position.y)) - 30;
+                  const maxX = Math.max(...members.map(m => m.position.x + ((m as any).width || 260))) + 20;
+                  const maxY = Math.max(...members.map(m => m.position.y + ((m as any).height || 120))) + 30;
+                  return { id: n.id, node: n, data, x: minX, y: minY, w: maxX - minX, h: maxY - minY, label: data?.label || n.id, children };
+                }).filter(Boolean) as Array<{ id:string; node: Node; data:any; x:number; y:number; w:number; h:number; label:string; children:string[] }>;
+                if (groups.length === 0) return null;
+                const xs = groups.flatMap(g => [g.x, g.x + g.w]);
+                const ys = groups.flatMap(g => [g.y, g.y + g.h]);
+                const minX = Math.min(...xs), minY = Math.min(...ys);
+                const maxX = Math.max(...xs), maxY = Math.max(...ys);
+                return (
+                  <svg viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} style={{ width:'100%', height:'100%' }}>
+                    {groups.map(g => {
+                      const aggCenterX = g.node.position.x + (((g.node as any).width) || 260) / 2;
+                      const aggCenterY = g.node.position.y + (((g.node as any).height) || 120) / 2;
+                      const collapsed = !!collapsedGroups[g.id];
+                      return (
+                        <g key={g.id}>
+                          {/* Group box */}
+                          <rect
+                            x={g.x}
+                            y={g.y}
+                            rx={10}
+                            ry={10}
+                            width={g.w}
+                            height={g.h}
+                            fill={g.data.parallelRunning ? 'rgba(59,130,246,0.10)' : 'rgba(59,130,246,0.06)'}
+                            stroke="rgba(59,130,246,0.35)"
+                            strokeWidth={2}
+                            onMouseEnter={(e) => {
+                              const vp = getViewport();
+                              const tooltipLines: Array<{child:string; event:string; durationMs:number}> = [];
+                              const childEvents = (g.data.parallelChildEvents || {}) as Record<string, {event:string; durationMs:number}>;
+                              g.children.forEach(cid => {
+                                const ce = childEvents[cid];
+                                tooltipLines.push({ child: cid, event: ce?.event || 'pending', durationMs: ce?.durationMs || 0 });
+                              });
+                              const screenX = (aggCenterX * vp.zoom) + vp.x;
+                              const screenY = (g.y * vp.zoom) + vp.y + 24;
+                              setParallelTooltip({ id: g.id, x: screenX, y: screenY, lines: tooltipLines });
+                            }}
+                            onMouseLeave={() => setParallelTooltip(null)}
+                          />
+                          {/* Label and summary */}
+                          <text x={g.x + 12} y={g.y + 18} fill="#93c5fd" fontSize={12} fontWeight={700}>Parallel Group · {g.label}</text>
+                          {g.data.parallelCompleted ? (
+                            <text x={g.x + 12} y={g.y + 34} fill="#93c5fd" fontSize={11}>Completed: {g.data.parallelCompleted}/{g.children.length} · {g.data.parallelSummary ? `Result: ${g.data.parallelSummary}` : (g.data.parallelRunning ? 'Aggregating…' : '')}</text>
+                          ) : null}
+                          {/* Ribbons */}
+                          {g.children.map(cid => {
+                            const child = nodes.find(nn => nn.id === cid);
+                            if (!child) return null;
+                            const ccenterX = child.position.x + (((child as any).width) || 260) / 2;
+                            const ccenterY = child.position.y + (((child as any).height) || 120) / 2;
+                            const mx = (ccenterX + aggCenterX) / 2;
+                            const my = (ccenterY + aggCenterY) / 2 - 20; // upward bow
+                            const ev = (g.data.parallelChildEvents || {})[cid]?.event;
+                            const stroke = ev ? (ev === 'failure' ? '#ef4444' : '#22c55e') : '#fde047';
+                            const width = ev ? 2.5 : 2;
+                            return (
+                              <path key={`${g.id}-${cid}`} d={`M ${ccenterX} ${ccenterY} Q ${mx} ${my} ${aggCenterX} ${aggCenterY}`} fill="none" stroke={stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" opacity={collapsed ? 0.2 : 0.9} />
+                            );
+                          })}
+                        </g>
+                      );
+                    })}
+                  </svg>
+                );
+              })()}
+              {/* Tooltip overlay */}
+              {parallelTooltip && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: parallelTooltip.x,
+                    top: parallelTooltip.y,
+                    transform: 'translate(-50%, 0)',
+                    background: isDarkMode ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.98)',
+                    color: isDarkMode ? '#e2e8f0' : '#111',
+                    border: `1px solid ${isDarkMode ? '#334155' : '#cbd5e1'}`,
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    boxShadow: '0 12px 30px rgba(0,0,0,0.25)',
+                    pointerEvents: 'none',
+                    minWidth: 240,
+                    zIndex: 2
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12 }}>Branch Summary</div>
+                  {parallelTooltip.lines.length === 0 ? (
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>No children</div>
+                  ) : (
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap: 6 }}>
+                      {parallelTooltip.lines.map((ln) => (
+                        <>
+                          <div style={{ fontSize: 12, opacity: 0.9, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{ln.child}</div>
+                          <div style={{ fontSize: 12, textAlign:'right' }}>
+                            <span style={{ color: ln.event === 'failure' ? '#ef4444' : ln.event === 'pending' ? '#eab308' : '#22c55e', fontWeight: 700 }}>{ln.event}</span>
+                            <span style={{ opacity: 0.7 }}> · {(ln.durationMs/1000).toFixed(1)}s</span>
+                          </div>
+                        </>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <Controls />
-            {showMinimap && (
-              <MiniMap 
+          {showMinimap && (
+            <MiniMap 
               nodeColor={node => {
                 switch (node.data?.status) {
                   case 'running': return '#facc15';
@@ -1714,7 +2175,44 @@ const FlowSwarmInterface: React.FC = () => {
               pannable
               zoomable
               />
-            )}
+          )}
+          {/* Children Editor Modal */}
+          {showChildrenEditor && (
+            <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex: 1000, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setShowChildrenEditor(null)}>
+              <div style={{ background: isDarkMode ? '#0f172a' : '#fff', color: isDarkMode ? '#e2e8f0' : '#111', width: 640, maxHeight: '80vh', borderRadius: 8, padding: 16, overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 12 }}>
+                  <h3 style={{ margin: 0 }}>Parallel Children for: {showChildrenEditor}</h3>
+                  <button className="panel-button" onClick={() => setShowChildrenEditor(null)}>Close</button>
+                </div>
+                <p style={{ marginTop: 0, opacity: 0.8 }}>Select the contributor nodes whose outputs should aggregate into this parallel block.</p>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8 }}>
+                  {nodes.map(n => (
+                    <label key={n.id} style={{ display:'flex', alignItems:'center', gap: 8, border:'1px solid #334155', borderRadius: 8, padding: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={(childrenOverrides[showChildrenEditor!] || []).includes(n.id)}
+                        onChange={e => {
+                          setChildrenOverrides(prev => {
+                            const cur = new Set(prev[showChildrenEditor!] || []);
+                            if (e.target.checked) cur.add(n.id); else cur.delete(n.id);
+                            return { ...prev, [showChildrenEditor!]: Array.from(cur) };
+                          });
+                        }}
+                      />
+                      <span style={{ fontWeight: 600 }}>{(n.data as any)?.label || n.id}</span>
+                      <span style={{ opacity: 0.7, fontSize: 12 }}>({n.id})</span>
+                    </label>
+                  ))}
+                </div>
+                <div style={{ marginTop: 12, display:'flex', gap: 8, justifyContent:'flex-end' }}>
+                  <button className="panel-button" onClick={() => setShowChildrenEditor(null)}>Done</button>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
+                  Changes apply during this run for aggregation and are also sent with the start request for future runs.
+                </div>
+              </div>
+            </div>
+          )}
             <Panel position="top-left">
               <div className="panel-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <button onClick={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })} className="panel-button">
@@ -1758,6 +2256,52 @@ const FlowSwarmInterface: React.FC = () => {
                 </button>
 
                 <button
+                  className="panel-button"
+                  onClick={() => setFollowActive(prev => !prev)}
+                  title="Follow active node"
+                >
+                  Follow: {followActive ? 'On' : 'Off'}
+                </button>
+
+                {/* Replay Controls */}
+                <button
+                  className={`panel-button ${replayMode ? 'active' : ''}`}
+                  onClick={() => {
+                    setReplayMode(!replayMode);
+                    setReplayIndex((prev: number | null) => (prev == null ? 0 : prev));
+                  }}
+                  title="Toggle replay mode"
+                >
+                  Replay: {replayMode ? 'On' : 'Off'}
+                </button>
+                <button
+                  className="panel-button"
+                  onClick={() => {
+                    if (!replayMode || executionTrace.length === 0) return;
+                    setReplayIndex((i: number | null) => {
+                      const next = Math.max(0, (i ?? 0) - 1);
+                      const id = executionTrace[next];
+                      if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+                      return next;
+                    });
+                  }}
+                  title="Previous (←)"
+                >Prev</button>
+                <button
+                  className="panel-button"
+                  onClick={() => {
+                    if (!replayMode || executionTrace.length === 0) return;
+                    setReplayIndex((i: number | null) => {
+                      const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
+                      const id = executionTrace[next];
+                      if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+                      return next;
+                    });
+                  }}
+                  title="Next (→)"
+                >Next</button>
+
+                <button
                   className={`panel-button ${highlightPath ? 'active' : ''}`}
                   onClick={() => {
                     preventRerender.current = true;
@@ -1768,14 +2312,57 @@ const FlowSwarmInterface: React.FC = () => {
                 >
                   Path: {highlightPath ? 'On' : 'Off'}
                 </button>
+
+                {/* Collapse / Expand for selected parallel */}
+                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || (n.data as any)?.nodeType === 'parallel')) && (
+                  <button
+                    className="panel-button"
+                    onClick={() => {
+                      const id = selectedAgent!;
+                      setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }));
+                      const children = (nodes.find(n => n.id === id)?.data as any)?.parallelChildren || [];
+                      const childSet = new Set(children);
+                      // Hide/unhide child nodes
+                      setNodes(nds => nds.map(n => childSet.has(n.id) ? ({ ...n, hidden: !collapsedGroups[id] ? true : false }) : n));
+                      // Dim/undim child edges
+                      setEdges(eds => eds.map(e => childSet.has(e.source) || childSet.has(e.target) ? ({ ...e, style: { ...e.style, opacity: !collapsedGroups[id] ? 0.08 : 1 } }) : e));
+                    }}
+                    title="Collapse/Expand selected parallel group"
+                  >
+                    {collapsedGroups[selectedAgent!] ? 'Expand Group' : 'Collapse Group'}
+                  </button>
+                )}
+
+                {/* Edit Children for selected parallel */}
+                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || (n.data as any)?.nodeType === 'parallel')) && (
+                  <button className="panel-button" onClick={() => setShowChildrenEditor(selectedAgent!)} title="Edit parallel children">Edit Children</button>
+                )}
+
+                {/* Show editor button if a parallel node is selected */}
+                {selectedAgent && nodes.find(n => n.id === selectedAgent && (n.data as any)?.nodeType === 'parallel') && (
+                  <button className="panel-button" onClick={() => setShowChildrenEditor(selectedAgent!)} title="Edit parallel children">Edit Children</button>
+                )}
               </div>
             </Panel>
 
           </ReactFlow>
         </div>
 
-        {/* Improved Output Panel */}
+        {/* Chatbot Output Panel */}
         <div className="flow-output-panel" style={{ width: `${outputPanelWidth}px` }}>
+          <ChatbotOutput
+            agents={stableAgents}
+            nodes={nodes}
+            selectedAgent={selectedAgent}
+            onAgentSelect={handleAgentSelect}
+            onNodeFocus={handleNodeFocus}
+          />
+        </div>
+      </div>
+
+      {/* Original implementation kept below, commented out */}
+      {false && (
+        <>
           <div className="output-panel-header">
             <h2 className="panel-title">Agent Output</h2>
             <div className="header-actions">
@@ -1975,8 +2562,8 @@ const FlowSwarmInterface: React.FC = () => {
               )}
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      )} {/* End of false block - old implementation */}
 
       {/* Command Bar */}
       <div className="command-bar">

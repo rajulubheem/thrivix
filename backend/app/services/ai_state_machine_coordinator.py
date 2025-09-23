@@ -205,6 +205,15 @@ class AIStateMachineCoordinator:
                 continue
             state_map[src]['transitions'][ev] = tgt
 
+        # Infer decision states by transition vocabulary if type is missing/incorrect
+        decision_markers = {'approve', 'reject', 'escalate'}
+        for s in state_map.values():
+            if s.get('type') == 'final':
+                continue
+            trans = set((s.get('transitions') or {}).keys())
+            if trans & decision_markers:
+                s['type'] = 'decision'
+
         # Ensure initial_state exists
         init = machine.get('initial_state')
         if not init or init not in state_map:
@@ -348,37 +357,44 @@ class AIStateMachineCoordinator:
             final.append(n)
         return final[:6]
 
-    async def analyze_and_create_state_machine(self, task: str) -> Dict[str, Any]:
-        """Use AI to dynamically generate a complete state machine based on the task"""
-        
-        # Let AI create the ENTIRE state machine dynamically
-        # Provide allowed tools context so the model doesn't invent tool names
-        prefs = self.config.get('tool_preferences') or {}
-        selected = list(prefs.get('selected_tools') or [])
-        restrict = bool(prefs.get('restrict_to_selected', False))
-        registry_names = list((self.tool_registry.tools or {}).keys()) if hasattr(self.tool_registry, 'tools') else []
-        # Compute allowed tool names for planning
-        if restrict and selected:
-            allowed_tools = [n for n in selected if n in registry_names]
-        else:
-            allowed_tools = registry_names
-
-        # Format tools as a proper list for clarity
-        if allowed_tools:
-            allowed_text = "[" + ", ".join(f'"{tool}"' for tool in allowed_tools) + "]"
-        else:
-            allowed_text = "[]"
-
-        prompt = f"""You are an AI state machine architect. Analyze this task and create a sophisticated state machine.
+    def _build_planner_prompt(
+        self,
+        task: str,
+        allowed_tools_text: str,
+        min_states: int,
+        max_states: int,
+        min_parallel_branches: int
+    ) -> str:
+        phase_min = max(1, min_states // 6)  # rough phase quota
+        return f"""You are an AI state‑machine architect. Design a rigorous, production‑grade workflow for the task below. Be ambitious (parallelism, retries, validation), yet precise and minimal in assumptions.
 
 Task: {task}
 
-IMPORTANT: You have access to these tools: {allowed_text}
-- States that perform research MUST include ["tavily_search"] in their tools array
-- Any state that needs to gather information should be type "tool_call" with appropriate tools
-- For satellite launch planning, many states will need to research data - USE THE TOOLS!
+AVAILABLE_TOOLS = {allowed_tools_text}
 
-Return a JSON object with this EXACT structure:
+TARGET COMPLEXITY
+- Minimum states: {min_states}
+- Preferred range: {min_states}–{max_states}
+- Parallel branches: at least {min_parallel_branches} independent branches somewhere in the flow
+
+HARD RULES
+- Use ONLY names listed in AVAILABLE_TOOLS for any tool_call state. Never invent or alias names.
+- If a state performs external research/search/browsing and 'tavily_search' is available, include it in tools.
+- Every state MUST have a unique, slug‑style id (lowercase, a–z, 0–9, underscores only) and a concise, human‑readable name.
+- Every non‑final state MUST declare transitions for at least success and one alternative (failure, retry, timeout, needs_review, etc.).
+- Prefer parallel where independent work exists; gate with decision/validation states when necessary.
+- Include explicit validation, rollback/error‑recovery, and a clear success and failure final state.
+
+DESIGN GUIDELINES
+- Phase the flow: initialization → research/planning → execution → validation → reporting → finals.
+- Use tool_call states only when tool use is actually needed; analysis states elsewhere.
+- Add proactive quality checks: schema checks, invariants, canary/shadow tests, and synthetic monitoring where applicable.
+- Build retry loops with capped attempts and exponential backoff; add timeout branches.
+- Where helpful, add decision (human‑in‑the‑loop) states with allowed events like approve/reject/escalate.
+- Prefer smaller focused states over mega‑states; keep descriptions actionable.
+- Rough quotas (not fields in output): ≥{phase_min} states per major phase where applicable.
+
+Return a JSON object with this EXACT structure (no extra text before/after):
 {{
     "name": "Dynamic Workflow for [task name]",
     "initial_state": "initialization",
@@ -404,32 +420,103 @@ Return a JSON object with this EXACT structure:
     ]
 }}
 
-Requirements:
-1. Create AS MANY states as needed for the task (could be 5, could be 50)
-2. Each state can have MULTIPLE transition events (not just success/failure)
-3. Include retry loops, error recovery, validation steps
-4. Add parallel processing where it makes sense
-5. Include final states for both success and failure scenarios
-6. Make it as complex as needed - don't simplify!
+CHECKLIST (must satisfy before returning JSON)
+- Tool names are strictly from AVAILABLE_TOOLS; omit any that aren’t present.
+- Research/gathering states include "tavily_search" when available.
+- Parallel stages for independent work; explicit joins via decision/validation states.
+- Retries with capped attempts (e.g., 2–3) and backoff via retry/timeout transitions.
+- Final states for both success and failure with clear entry conditions.
 
-Tool Usage Guidelines:
-- AVAILABLE TOOLS: {allowed_text}
-- For states that need to search for information, USE tavily_search in the tools array
-- For states that involve research, data gathering, or external information, ADD tavily_search to tools
-- States with type "tool_call" SHOULD use relevant tools from the available list
-- If a task involves finding information, researching, or gathering data, the state MUST include appropriate tools
-- Example: A state for "Research launch requirements" should have tools: ["tavily_search"]
-- Only use tool names from AVAILABLE TOOLS list above - do not invent tool names
+HINTS
+- Favor more, smaller states with tight responsibilities.
+- Prefer descriptive events (validated, invalid, timeout, partial_success, needs_review, rollback, escalate).
+- Where human approval matters, add a decision state with allowed events (approve/reject/escalate).
+"""
 
-Example events: success, failure, retry, timeout, validated, invalid, partial_success, needs_review, escalate, rollback, skip, cancel
+    async def analyze_and_create_state_machine(self, task: str) -> Dict[str, Any]:
+        """Use AI to dynamically generate a complete state machine based on the task"""
+        
+        # Let AI create the ENTIRE state machine dynamically
+        # Provide allowed tools context so the model doesn't invent tool names
+        prefs = self.config.get('tool_preferences') or {}
+        selected = list(prefs.get('selected_tools') or [])
+        restrict = bool(prefs.get('restrict_to_selected', False))
+        registry_names = list((self.tool_registry.tools or {}).keys()) if hasattr(self.tool_registry, 'tools') else []
+        # Compute allowed tool names for planning
+        if restrict and selected:
+            allowed_tools = [n for n in selected if n in registry_names]
+        else:
+            allowed_tools = registry_names
 
-Think step-by-step about what this specific task requires and create appropriate states.
+        # Format tools as a proper list for clarity
+        if allowed_tools:
+            allowed_text = "[" + ", ".join(f'"{tool}"' for tool in allowed_tools) + "]"
+        else:
+            allowed_text = "[]"
 
-For the given task, identify which states would benefit from using tools:
-- Research states should use tavily_search
-- States gathering external information should use tavily_search  
-- States that need current data should use appropriate tools
-Remember: tool_call states MUST specify which tools they will use!
+        prompt = f"""You are an AI state‑machine architect. Design a rigorous, production‑grade workflow for the task below. Be ambitious (parallelism, retries, validation), yet precise and minimal in assumptions.
+
+Task: {task}
+
+AVAILABLE_TOOLS = {allowed_text}
+
+HARD RULES
+- Use ONLY names listed in AVAILABLE_TOOLS for any tool_call state. Never invent or alias names.
+- If a state performs external research/search/browsing, include "tavily_search" when present in AVAILABLE_TOOLS.
+- Every state MUST have a unique, slug‑style id (lowercase, a–z, 0–9, underscores only) and a concise, human‑readable name.
+- Every non‑final state MUST declare transitions for at least success and one alternative (failure, retry, timeout, needs_review, etc.).
+- Prefer parallel where independent work exists; gate with decision states when necessary.
+- Include explicit validation, rollback/error‑recovery, and a clear success and failure final state.
+
+DESIGN GUIDELINES
+- Think in phases: initialization → research/planning → generation/execution → validation → rollout/reporting → final.
+- Use tool_call states only when tool use is actually needed; analysis states elsewhere.
+- Add proactive quality checks: data validation, consistency checks, guardrails, shadow tests, and synthetic monitoring.
+- Build retry loops with capped attempts and exponential backoff; add timeout branches.
+- Where helpful, add decision (human‑in‑the‑loop) states with allowed events like approve/reject/escalate.
+- Prefer smaller focused states over mega‑states; keep descriptions actionable.
+
+Return a JSON object with this EXACT structure (no extra text before/after):
+{{
+    "name": "Dynamic Workflow for [task name]",
+    "initial_state": "initialization",
+    "states": [
+        {{
+            "id": "unique_state_id",
+            "name": "State Display Name", 
+            "type": "analysis|tool_call|decision|parallel|final",
+            "description": "What this state does",
+            "agent_role": "Role of the agent",
+            "tools": ["tool1", "tool2"],  // if type is tool_call
+            "transitions": {{
+                "event_name": "target_state_id"
+            }}
+        }}
+    ],
+    "edges": [
+        {{
+            "source": "source_state_id",
+            "target": "target_state_id", 
+            "event": "success|failure|retry|timeout|validated|etc"
+        }}
+    ]
+}}
+
+CHECKLIST (must satisfy before returning JSON)
+- Tool names are strictly from AVAILABLE_TOOLS; omit any that aren’t present.
+- Research/gathering states include "tavily_search" when available.
+- Parallel stages for independent work; explicit joins via decision/validation states.
+- Retries with capped attempts (e.g., 2–3) and backoff via retry/timeout transitions.
+- Final states for both success and failure with clear entry conditions.
+
+HINTS\n"
+"- Favor more, smaller states with tight responsibilities.\n"
+"- Prefer descriptive events (validated, invalid, timeout, partial_success, needs_review, rollback, escalate).\n"
+"- Where human approval matters, add a decision state with allowed events (approve/reject/escalate).\n"
+
+Example events you can use: success, failure, retry, timeout, validated, invalid, partial_success, needs_review, approve, reject, escalate, rollback, skip, cancel.
+
+Output only the JSON object. No commentary.
 """
         
         try:
@@ -448,10 +535,46 @@ Remember: tool_call states MUST specify which tools they will use!
             
             planner = Agent(
                 name="state_machine_planner",
-                system_prompt="You are a state machine architect that designs complex workflows. Always respond with valid JSON.",
+                system_prompt=(
+                    "ROLE\n"
+                    "You are an elite state‑machine architect for mission‑critical systems. You design layered,\n"
+                    "fault‑tolerant workflows that balance parallelism, guardrails, and clear exit criteria.\n\n"
+                    "CONSTRAINTS\n"
+                    "- OUTPUT: Return STRICT, valid JSON only (no prose).\n"
+                    "- IDS: slug_case only (a–z, 0–9, underscores), unique.\n"
+                    "- TRANSITIONS: Every non‑final state declares at least success + one alternative.\n"
+                    "- TOOLS: Use only names provided by the caller (no aliases or inventions).\n"
+                    "- PRIVACY: Do not include chain‑of‑thought or explanations.\n\n"
+                    "ARCHITECTURE DIRECTIVES\n"
+                    "- Phase the flow: initialization → research/planning → execution → validation → reporting → finals.\n"
+                    "- Parallelize independent work; join via decision/validation gates.\n"
+                    "- Add quality gates: schema checks, invariants, canary/shadow tests where applicable.\n"
+                    "- Add robust failure handling: retry (capped), timeout, rollback, escalate/needs_review.\n"
+                    "- Provide clear final_success and final_failure states.\n\n"
+                    "TOOL DISCIPLINE\n"
+                    "- Mark a state as type=tool_call only if a tool is actually needed.\n"
+                    "- Include only permitted tool names. If research/browsing is needed and available, include 'tavily_search'.\n\n"
+                    "VALIDATION BEFORE OUTPUT\n"
+                    "- Validate edges reference existing states.\n"
+                    "- Validate every tool name is permitted.\n"
+                    "- Validate initial_state exists.\n"
+                ),
                 model=model
             )
-            
+
+            # Complexity knobs
+            min_states = int(self.config.get('min_states', 16))
+            max_states = int(self.config.get('max_states', 40))
+            min_parallel_branches = int(self.config.get('min_parallel_branches', 2))
+
+            prompt = self._build_planner_prompt(
+                task=task,
+                allowed_tools_text=allowed_text,
+                min_states=min_states,
+                max_states=max_states,
+                min_parallel_branches=min_parallel_branches,
+            )
+
             response = planner(prompt)
             response_text = str(response)
             
@@ -465,7 +588,18 @@ Remember: tool_call states MUST specify which tools they will use!
                 json_str = response_text[json_start:json_end]
                 state_machine = json.loads(json_str)
                 
-                logger.info(f"AI generated state machine with {len(state_machine.get('states', []))} states")
+                count = len(state_machine.get('states', []) or [])
+                logger.info(f"AI generated state machine with {count} states")
+                if count < min_states:
+                    logger.info(f"Regenerating with higher granularity: target >= {min_states} states (had {count})")
+                    regen_prompt = prompt + f"\n\nNOTE: Your previous attempt produced only {count} states. Regenerate with AT LEAST {min_states} states, more granular steps, and explicit parallel branches. Maintain the same JSON schema."
+                    response2 = planner(regen_prompt)
+                    response_text2 = str(response2)
+                    js_start2 = response_text2.find('{')
+                    js_end2 = response_text2.rfind('}') + 1
+                    if js_start2 >= 0 and js_end2 > js_start2:
+                        state_machine2 = json.loads(response_text2[js_start2:js_end2])
+                        return self._normalize_state_machine(state_machine2)
                 return self._normalize_state_machine(state_machine)
             
         except Exception as e:
@@ -1014,8 +1148,10 @@ Remember: tool_call states MUST specify which tools they will use!
         # Heuristics
         t = text.lower()
         pri = [
-            (['validated', 'approve', 'approved', 'ok', 'ready', 'all_ready', 'proceed', 'success', 'pass'], 'validated'),
-            (['invalid', 'reject', 'rejected', 'fail', 'failure', 'error', 'unresolved', 'timeout'], 'failure'),
+            (['approve', 'approved'], 'approve'),
+            (['reject', 'rejected'], 'reject'),
+            (['validated', 'ok', 'ready', 'all_ready', 'proceed', 'success', 'pass'], 'validated'),
+            (['invalid', 'fail', 'failure', 'error', 'unresolved', 'timeout'], 'failure'),
             (['needs_review', 'review', 'revise', 'partial', 'partial_success'], 'needs_review'),
             (['retry', 're-try', 'try again'], 'retry'),
         ]
@@ -1134,7 +1270,10 @@ No extra commentary after that line.""",
                     task=state.get('description', state.get('task', context.get('task', 'Execute assigned task'))),
                     config=agent_config.__dict__,
                     parent_result=context.get('previous_results', {}).get(context.get('last_state'), ""),
-                    metadata=context.get('previous_results', {})
+                    metadata={
+                        **(context.get('previous_results', {})),
+                        'allowed_events': allowed_events,
+                    }
                 )
                 async for frame in agent_runtime.stream(agent_context):
                     # Publish based on frame type
@@ -1226,7 +1365,10 @@ No extra commentary after that line.""",
                     task=task_with_context,
                     config=agent_config.__dict__,
                     parent_result=context.get('previous_results', {}).get(context.get('last_state'), ""),
-                    metadata=context.get('previous_results', {})
+                    metadata={
+                        **(context.get('previous_results', {})),
+                        'allowed_events': allowed_events,
+                    }
                 )
                 async for frame in agent_runtime.stream(agent_context):
                     # Publish based on frame type
@@ -1257,10 +1399,94 @@ No extra commentary after that line.""",
                         next_event = ne
                         
             elif state_type == 'parallel':
-                # Execute parallel operations
-                # This would spawn multiple agents in parallel
-                result = "Parallel execution completed"
-                
+                # Execute contributing branches whose transitions feed back into this parallel aggregator.
+                graph = context.get('graph') or {}
+                edges: List[Dict[str, Any]] = graph.get('edges', [])
+                states_map: Dict[str, Dict[str, Any]] = graph.get('states', {})
+
+                # Prefer explicit children if provided; else infer via heuristic (sources targeting this id)
+                # UI override children mapping can come from context
+                overrides = (context.get('ui_overrides') or {}).get('parallel_children', {})
+                explicit_children = state.get('children') or overrides.get(state_id) or []
+                if explicit_children:
+                    contributor_ids = [cid for cid in explicit_children if cid in states_map]
+                else:
+                    contributor_ids = [e.get('source') for e in edges if e.get('target') == state_id]
+                # Filter valid, non-final contributors
+                contributors = [states_map[cid] for cid in contributor_ids if cid in states_map and states_map[cid].get('type') != 'final']
+
+                # Avoid re-running the same child many times within this exec
+                executed_map: Dict[str, set] = context.setdefault('parallel_executed', {})
+                already: set = executed_map.setdefault(state_id, set())
+
+                # Telemetry: parallel start
+                await self.hub.publish_control(ControlFrame(
+                    exec_id=context['exec_id'],
+                    type="parallel_start",
+                    agent_id=state_id,
+                    payload={"children": [c['id'] for c in contributors]}
+                ))
+
+                branch_events: List[str] = []
+                # If we just came from one of the contributors, count it as completed based on last_event, avoid immediate re-run
+                last_state = context.get('last_state')
+                last_event = context.get('last_event') or 'success'
+                if last_state and any(c.get('id') == last_state for c in contributors) and last_state not in already:
+                    already.add(last_state)
+                    branch_events.append(str(last_event))
+                for child in contributors:
+                    cid = child['id']
+                    if cid in already:
+                        continue
+                    try:
+                        ev, _ = await self.execute_state(child, context)
+                        branch_events.append(ev)
+                        already.add(cid)
+                        # Telemetry: child completed
+                        await self.hub.publish_control(ControlFrame(
+                            exec_id=context['exec_id'],
+                            type="parallel_child_completed",
+                            agent_id=state_id,
+                            payload={"child": cid, "event": ev}
+                        ))
+                    except Exception as ce:
+                        logger.warning(f"Parallel child {cid} failed: {ce}")
+                        branch_events.append('failure')
+                        await self.hub.publish_control(ControlFrame(
+                            exec_id=context['exec_id'],
+                            type="parallel_child_completed",
+                            agent_id=state_id,
+                            payload={"child": cid, "event": "failure", "error": str(ce)}
+                        ))
+
+                # Simple aggregation: success if no failures/timeouts, else failure
+                bad = any(ev in ('failure', 'timeout', 'reject') for ev in branch_events)
+                # Map to allowed transitions on this parallel node
+                allowed = set((state.get('transitions') or {}).keys())
+                if bad:
+                    if 'failure' in allowed:
+                        next_event = 'failure'
+                    elif 'invalid' in allowed:
+                        next_event = 'invalid'
+                    else:
+                        next_event = next(iter(allowed)) if allowed else 'failure'
+                else:
+                    if 'validated' in allowed:
+                        next_event = 'validated'
+                    elif 'success' in allowed:
+                        next_event = 'success'
+                    else:
+                        next_event = next(iter(allowed)) if allowed else 'success'
+                result = f"Parallel executed {len(contributors)} branches: {', '.join(branch_events) or 'none'}"
+
+                # Telemetry: aggregated
+                await self.hub.publish_control(ControlFrame(
+                    exec_id=context['exec_id'],
+                    type="parallel_aggregated",
+                    agent_id=state_id,
+                    payload={"children": [c['id'] for c in contributors], "events": branch_events, "next_event": next_event}
+                ))
+
         except Exception as e:
             logger.error(f"State execution error: {e}")
             result = str(e)
@@ -1385,11 +1611,19 @@ No extra commentary after that line.""",
             context = {
                 'exec_id': exec_id,
                 'task': task,
-                'results': {}
+                'results': {},
+                'visits': {},
+                # Optional UI overrides passed via request body
+                'ui_overrides': kwargs.get('ui_overrides', {}) if kwargs else {}
             }
             
             # Build state lookup
             states = {s['id']: s for s in state_machine['states']}
+            # Persist graph in context for inner execution (e.g., parallel aggregation)
+            context['graph'] = {
+                'states': states,
+                'edges': state_machine.get('edges', [])
+            }
             current_state_id = state_machine['initial_state']
             steps = 0
             max_steps = int(self.config.get('max_steps', 200))
@@ -1437,7 +1671,81 @@ No extra commentary after that line.""",
                             payload={"error": f"No transition for event '{event}' from state '{current_state_id}'"}
                         ))
                         break
-                
+                # Remember last transition for nested aggregators
+                context['last_state'] = current_state_id
+                context['last_event'] = event
+                # Anti‑loop guard: if a state is visited too often, try alternative branch or fail
+                visits = context.get('visits', {})
+                visits[current_state_id] = visits.get(current_state_id, 0) + 1
+                context['visits'] = visits
+                max_visits_per_state = int(self.config.get('max_visits_per_state', 3))
+
+                if visits.get(next_state_id, 0) >= max_visits_per_state:
+                    # Try an alternative event that leads to a less-visited state
+                    alt = None
+                    for ev, tgt in transitions.items():
+                        if ev == event:
+                            continue
+                        if visits.get(tgt, 0) < max_visits_per_state:
+                            alt = tgt
+                            break
+                    if alt:
+                        next_state_id = alt
+                    else:
+                        # Escalate to any failure/timeout branch if present
+                        for pref in ['failure', 'timeout', 'cancel', 'rollback']:
+                            if pref in transitions:
+                                next_state_id = transitions[pref]
+                                break
+                # Record last transition for downstream logic (e.g., parallel aggregator)
+                context['last_state'] = current_state_id
+                context['last_event'] = event
+
+                # Pair loop breaker: if we bounce A -> B -> A repeatedly, reroute after cap
+                try:
+                    pair_cycles = context.setdefault('pair_cycles', {})
+                    last_state = context.get('last_state')
+                    # last_state just set to current_state_id above; we need the previous-last-state instead
+                    prev_state = context.get('prev_state')
+                    # Keep a rolling previous state
+                    context['prev_state'] = current_state_id
+                    if prev_state and next_state_id == prev_state:
+                        key = '::'.join(sorted([current_state_id, next_state_id]))
+                        pair_cycles[key] = pair_cycles.get(key, 0) + 1
+                        cap = int(self.config.get('pair_loop_cap', 2))
+                        if pair_cycles[key] >= cap:
+                            # Try alternative transition target different from prev_state
+                            alt = None
+                            pref = ['failure', 'timeout', 'rollback', 'cancel', 'escalate', 'needs_review']
+                            for ev in pref:
+                                if ev in transitions and transitions[ev] != prev_state:
+                                    alt = transitions[ev]
+                                    event = ev
+                                    break
+                            if not alt:
+                                for ev, tgt in transitions.items():
+                                    if tgt != prev_state:
+                                        alt = tgt
+                                        event = ev
+                                        break
+                            if alt:
+                                await self.hub.publish_control(ControlFrame(
+                                    exec_id=exec_id,
+                                    type='loop_breaker',
+                                    agent_id=current_state_id,
+                                    payload={
+                                        'pair': [current_state_id, prev_state],
+                                        'count': pair_cycles[key],
+                                        'reroute_event': event,
+                                        'reroute_target': alt
+                                    }
+                                ))
+                                next_state_id = alt
+                                # Reset counter so we don't immediately trigger again
+                                pair_cycles[key] = 0
+                except Exception:
+                    pass
+
                 current_state_id = next_state_id
                 steps += 1
             

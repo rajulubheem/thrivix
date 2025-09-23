@@ -1,46 +1,131 @@
 version: '3.8'
 
 services:
-  backend:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: thrivix-db
+    environment:
+      POSTGRES_DB: thrivix
+      POSTGRES_USER: thrivix_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thrivix_user -d thrivix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - thrivix-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: thrivix-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - thrivix-network
+
+  # Thrivix Application
+  app:
     build:
       context: .
-      dockerfile: Dockerfile.backend
-    container_name: strands-backend
+      dockerfile: Dockerfile
+    container_name: thrivix-app
+    env_file:
+      - ./backend/.env
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      - DATABASE_URL=sqlite+aiosqlite:///./data/strands_swarm.db
-      - BACKEND_CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:3000
-    volumes:
-      - ./data:/app/data
-      - ./sessions:/app/sessions
-      - ./logs:/app/logs
+      - DATABASE_URL=postgresql+asyncpg://thrivix_user:${DB_PASSWORD:-changeme}@postgres:5432/thrivix
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      - ENVIRONMENT=production
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    networks:
+      - thrivix-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    container_name: strands-frontend
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: thrivix-nginx
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
     depends_on:
-      - backend
+      - app
+    networks:
+      - thrivix-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+
+  # Celery Worker (for background tasks)
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: thrivix-celery
+    command: celery -A backend.app.core.celery_app worker --loglevel=info
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://thrivix_user:${DB_PASSWORD:-changeme}@postgres:5432/thrivix
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    networks:
+      - thrivix-network
+    restart: unless-stopped
+
+  # Flower (Celery monitoring)
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: thrivix-flower
+    command: celery -A backend.app.core.celery_app flower --port=5555
+    env_file:
+      - ./backend/.env
+    environment:
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery
+    networks:
+      - thrivix-network
+    restart: unless-stopped
+
+networks:
+  thrivix-network:
+    driver: bridge
 
 volumes:
-  data:
-  sessions:
-  logs:
+  postgres_data:
+  redis_data:
