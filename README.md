@@ -36,17 +36,23 @@
 <tr>
 <td width="33%" align="center">
   <b>🔄 Flow Pro</b><br/>
-  <!-- <img src="./docs/images/flow-pro.gif" alt="Flow Pro Demo" width="250"/> -->
+  <a href="https://youtu.be/WDMEXh4r6-Q">
+    <img src="https://img.youtube.com/vi/WDMEXh4r6-Q/0.jpg" alt="Flow Pro Demo" width="250"/>
+  </a>
   <br/>AI generates & executes state machines from natural language
 </td>
 <td width="33%" align="center">
   <b>🔬 Research Assistant</b><br/>
-  <!-- <img src="./docs/images/research.gif" alt="Research Demo" width="250"/> -->
+  <a href="https://youtu.be/SHlG25Bw-w8">
+    <img src="https://img.youtube.com/vi/SHlG25Bw-w8/0.jpg" alt="Research Demo" width="250"/>
+  </a>
   <br/>Deep analysis with web search and citations
 </td>
 <td width="33%" align="center">
   <b>🐝 Agent Swarm</b><br/>
-  <!-- <img src="./docs/images/swarm.gif" alt="Swarm Demo" width="250"/> -->
+  <a href="https://youtu.be/bzpWFTz18do">
+    <img src="https://img.youtube.com/vi/bzpWFTz18do/0.jpg" alt="Swarm Demo" width="250"/>
+  </a>
   <br/>Multi-agent collaboration with live visualization
 </td>
 </tr>
