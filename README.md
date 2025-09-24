@@ -24,7 +24,7 @@
 
 <div align="center">
 
-  [![Watch the Demo](https://img.youtube.com/vi/WDMEXh4r6-Q/maxresdefault.jpg)](https://youtu.be/WDMEXh4r6-Q)
+  [![Watch the Demo](https://img.youtube.com/vi/WDMEXh4r6-Q/0.jpg)](https://youtu.be/WDMEXh4r6-Q)
 
   *Click to watch: AI generates a complete microservices architecture from natural language*
 
