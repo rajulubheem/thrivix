@@ -1,486 +1,221 @@
-# Thrivix AI Platform - Visual AI Workflow Orchestration
+# Thrivix - Multi-Agent Workflow Platform
 
 <div align="center">
 
-  <!-- Logo placeholder - add your logo here -->
-  <!-- <img src="./docs/images/logo.png" alt="Thrivix Logo" width="120"/> -->
-
-  <h3>🚀 Transform natural language into executable AI workflows</h3>
-
 [![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/rajulubheem/thrivix)
+[![Python](https://img.shields.io/badge/Python-3.11+-green.svg)](https://www.python.org/)
+[![React](https://img.shields.io/badge/React-19.1.1-blue.svg)](https://reactjs.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
-[![Strands SDK](https://img.shields.io/badge/Built%20with-Strands%20SDK%201.6.0-purple.svg)](https://github.com/strands-agents/sdk-python)
-[![React](https://img.shields.io/badge/React-19.1.1-blue?logo=react)](https://reactjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-green?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-4.9.5-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-[Watch Demo](https://youtu.be/WDMEXh4r6-Q) • [GitHub](https://github.com/rajulubheem/thrivix) • [Documentation](https://docs.thrivix.ai)
+**A platform for building and visualizing agent-based workflows using natural language**
+
+[Watch Demo](https://youtu.be/WDMEXh4r6-Q) • [GitHub](https://github.com/rajulubheem/thrivix)
 
 </div>
 
 ---
 
-## 🎬 See It In Action
+## 🎬 Demo Videos
 
 <div align="center">
-
-  [![Watch the Demo](https://img.youtube.com/vi/WDMEXh4r6-Q/0.jpg)](https://youtu.be/WDMEXh4r6-Q)
-
-  *Click to watch: AI generates a complete microservices architecture from natural language*
-
-</div>
-
-## ✨ Features at a Glance
 
 <table>
 <tr>
 <td width="33%" align="center">
-  <b>🔄 Flow Pro</b><br/>
+  <b>Flow Pro</b><br/>
   <a href="https://youtu.be/WDMEXh4r6-Q">
     <img src="https://img.youtube.com/vi/WDMEXh4r6-Q/0.jpg" alt="Flow Pro Demo" width="250"/>
   </a>
-  <br/>AI generates & executes state machines from natural language
+  <br/>State machine generation from text
 </td>
 <td width="33%" align="center">
-  <b>🔬 Research Assistant</b><br/>
+  <b>Research Mode</b><br/>
   <a href="https://youtu.be/SHlG25Bw-w8">
     <img src="https://img.youtube.com/vi/SHlG25Bw-w8/0.jpg" alt="Research Demo" width="250"/>
   </a>
-  <br/>Deep analysis with web search and citations
+  <br/>Web search and analysis
 </td>
 <td width="33%" align="center">
-  <b>🐝 Agent Swarm</b><br/>
+  <b>Sequential Agents</b><br/>
   <a href="https://youtu.be/bzpWFTz18do">
     <img src="https://img.youtube.com/vi/bzpWFTz18do/0.jpg" alt="Swarm Demo" width="250"/>
   </a>
-  <br/>Multi-agent collaboration with live visualization
+  <br/>Agent collaboration workflow
 </td>
 </tr>
 </table>
 
 </div>
 
----
-
 ## 🚀 Quick Start
 
 ```bash
-# Clone and setup
+# Clone repository
 git clone https://github.com/rajulubheem/thrivix.git
 cd thrivix
 
-# Backend setup (requires Python 3.11+)
+# Backend setup (Python 3.11+ required)
 cd backend
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure environment
+# Configure API keys
 cp .env.template .env
-# Edit .env with your API keys
+# Edit .env and add your OpenAI and Tavily API keys
 
-# Start backend server
+# Start backend
 uvicorn app.main:app --reload --port 8000
 
 # Frontend setup (new terminal)
-cd ../frontend
+cd frontend
 npm install
 npm start
 ```
 
-**Open http://localhost:3000** - You're ready to go! 🎉
+Open http://localhost:3000 to use the application.
 
----
+## ✨ What It Does
 
-## ✨ Core Features
+Thrivix is a platform that helps you create and execute workflows using multiple AI agents. You describe what you want in plain language, and the system:
 
-### 🔄 **Flow Pro** - AI-Powered State Machine Workflow Engine
-- **Task to workflow transformation**: GPT-4 analyzes your task and designs a complete state machine with phases (initialization → research → execution → validation → final)
-- **Intelligent state architecture**: AI creates focused states with specific types (analysis, tool_call, decision, parallel, final) and defines all transitions (success, failure, retry, timeout)
-- **Dynamic tool integration**: Each state automatically assigns appropriate tools from available options (Tavily search, file operations, etc.)
-- **Real-time visual execution**: Watch agents execute the AI-generated workflow live with React Flow visualization
-- **Fault-tolerant design**: Built-in retry logic, timeout handling, validation checkpoints, and rollback capabilities
-- **Human-in-the-loop**: Decision states for approval workflows when human intervention is needed
+1. **Generates a workflow** - Creates a state machine with steps to accomplish your task
+2. **Executes with agents** - Different agents handle different parts of the workflow
+3. **Visualizes progress** - Shows the workflow execution in real-time
+4. **Provides results** - Delivers the analysis, code, or documentation you requested
 
-### 🔬 **Research Assistant** - Advanced Conversational AI
-- **Three research modes**:
-  - **Fast**: Quick responses with minimal processing
-  - **Deep**: Comprehensive analysis with web search and multiple sources
-  - **Scholar**: Academic-style research with proper citations
-- **Real-time streaming** with progressive thought display
-- **Web search integration** via Tavily API for current information
-- **Session persistence** to continue conversations across sessions
-- **Source citations** with screenshots and links
+## 🛠️ Main Features
 
-### 🐝 **Agent Swarm** - Multi-Agent Collaboration System
-- **Specialized agent roles**:
-  - Research Agent (information gathering)
-  - Architect Agent (system design)
-  - Coder Agent (implementation)
-  - Reviewer Agent (quality assurance)
-  - Analyst Agent (data analysis)
-- **Shared context** across all agents
-- **Automatic task handoffs** between specialists
-- **Parallel execution** for independent tasks
-- **Human-in-the-loop** decisions when needed
+### Flow Pro (`/flow-pro`)
+- Enter a task description (e.g., "Design a payment system architecture")
+- System generates a state machine with research, planning, and execution phases
+- Agents execute each state with appropriate tools (web search, analysis)
+- Visual diagram shows progress through the workflow
 
-### ⚡ **Efficient Swarm** - High-Performance WebSocket System
-- **WebSocket-based** real-time communication
-- **Minimal latency** with optimized message handling
-- **Event-driven architecture** for scalability
-- **Resource pooling** for efficient agent management
-- **Automatic reconnection** with state recovery
+### Research Assistant (`/conversation`)
+- Three modes: Fast (quick answers), Deep (web research), Scholar (citations)
+- Real-time streaming responses
+- Web search using Tavily API
+- Session history preserved
 
-### 📡 **Event-Driven Swarm** - Dynamic Agent Spawning
-- **Task complexity analysis** to determine agent needs
-- **Dynamic agent creation** based on requirements
-- **Event-based coordination** via Redis Pub/Sub
-- **Approval workflows** for critical operations
-- **Audit logging** for compliance and debugging
+### Agent Swarm (`/swarm`)
+- Multiple agents work on different aspects of a task
+- Sequential handoffs between specialized agents
+- Each agent has specific expertise (research, coding, review)
+- Visual tracking of agent activity
 
----
+### Settings (`/settings`)
+- Configure which tools agents can use
+- Set API keys
+- Manage tool permissions
 
-## 🏗️ Architecture
+## 🏗️ Technical Stack
 
-### Technology Stack
+### Backend
+- **FastAPI** - Web framework
+- **Strands Agents SDK** - Agent orchestration
+- **OpenAI GPT-4** - Language model
+- **Tavily API** - Web search
+- **WebSocket/SSE** - Real-time updates
+- **Redis** - Event pub/sub (optional)
+- **SQLite** - Session storage
 
-| Component | Technology | Version |
-|-----------|------------|---------|
-| **AI Framework** | Strands Agents SDK | 1.6.0 |
-| **Backend** | FastAPI + Asyncio | 0.115.0 |
-| **Frontend** | React + TypeScript | 19.1.1 |
-| **Flow Visualization** | React Flow + Dagre | 11.11.4 |
-| **UI Components** | Radix UI + Tailwind | 3.2.1 |
-| **Search Tool** | Tavily API | 0.5.0 |
-| **Streaming** | WebSocket + SSE | - |
-| **Event System** | Redis Pub/Sub | 5.0.7 |
-| **Database** | SQLAlchemy + SQLite | 2.0.35 |
-| **Authentication** | JWT + Passlib | 3.3.0 |
-
-### System Architecture
-
-```mermaid
-graph TB
-    subgraph Frontend
-        UI[React UI] --> WS[WebSocket Client]
-        UI --> SSE[SSE Client]
-    end
-
-    subgraph Backend
-        API[FastAPI Server] --> Swarm[Strands Swarm]
-        API --> Tools[Tool Registry]
-        API --> Session[Session Manager]
-
-        Swarm --> Agents[Agent Pool]
-        Agents --> Tavily[Tavily Search]
-        Agents --> LLM[OpenAI/Claude]
-
-        API --> Redis[Redis Pub/Sub]
-        API --> DB[(SQLite DB)]
-    end
-
-    WS <--> API
-    API --> SSE
-```
-
----
+### Frontend
+- **React 19** with TypeScript
+- **React Flow** - Workflow visualization
+- **Tailwind CSS** - Styling
+- **Radix UI** - UI components
 
 ## 🔧 Configuration
 
 ### Required API Keys
 
-Create a `.env` file in the backend directory:
+Edit `backend/.env`:
 
 ```env
-# AI Models (Required - at least one)
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
+# Required
+OPENAI_API_KEY=your_openai_key_here
+TAVILY_API_KEY=your_tavily_key_here
 
-# Search Tool (Required for web search features)
-TAVILY_API_KEY=tvly-...
-
-# Optional Services
+# Optional
+ANTHROPIC_API_KEY=your_anthropic_key_here
 REDIS_URL=redis://localhost:6379/0
-DATABASE_URL=sqlite+aiosqlite:///./thrivix.db
-
-# Application Settings
-APP_NAME=Thrivix AI Platform
-APP_VERSION=2.0.0
-API_V1_STR=/api/v1
-CORS_ORIGINS=["http://localhost:3000"]
-
-# Performance Tuning
-MAX_AGENTS_PER_SWARM=10
-AGENT_TIMEOUT_SECONDS=300
-MAX_CONCURRENT_TOOLS=5
 ```
 
-### Frontend Configuration
+### Environment Requirements
 
-The frontend automatically connects to the backend at `http://localhost:8000`. To change this:
+- Python 3.11 or higher
+- Node.js 18 or higher
+- 8GB RAM recommended
+- 2GB disk space
 
-1. Update `proxy` in `frontend/package.json`
-2. Or set `REACT_APP_API_URL` environment variable
+## 📝 How It Works
 
----
+### Example: "Create a REST API for user management"
 
-## 📚 API Documentation
+1. **Input** - You type your request in the UI
+2. **Planning** - GPT-4 generates a workflow with states like:
+   - Research best practices
+   - Design API endpoints
+   - Create database schema
+   - Implement authentication
+   - Add validation
+   - Write documentation
+3. **Execution** - Agents work through each state:
+   - Research agent searches for current best practices
+   - Architect agent designs the system
+   - Coder agent provides implementation
+   - Reviewer agent checks the work
+4. **Output** - You receive complete API specification, code samples, and documentation
 
-### Core Endpoints
+## 🐛 Known Limitations
 
-#### Start a Research Session
-```http
-POST /api/v1/conversation/start
-Content-Type: application/json
-
-{
-  "message": "Research quantum computing applications",
-  "mode": "deep",
-  "session_id": "optional-session-id"
-}
-```
-
-#### Execute Swarm Task
-```http
-POST /api/v1/swarm/execute
-Content-Type: application/json
-
-{
-  "task": "Build a REST API for user management",
-  "agents": ["researcher", "architect", "coder", "reviewer"],
-  "config": {
-    "max_iterations": 10,
-    "enable_tools": true
-  }
-}
-```
-
-#### Create Visual Workflow
-```http
-POST /api/v1/flow-pro/create
-Content-Type: application/json
-
-{
-  "description": "Create a data pipeline that fetches, processes, and visualizes data",
-  "auto_generate": true
-}
-```
-
-#### Stream Responses (SSE)
-```http
-GET /api/v1/sse/stream/{session_id}
-Accept: text/event-stream
-```
-
-### WebSocket Connection
-```javascript
-const ws = new WebSocket('ws://localhost:8000/ws');
-ws.send(JSON.stringify({
-  type: 'swarm.execute',
-  payload: { task: 'Analyze this code' }
-}));
-```
-
-Full API documentation available at **http://localhost:8000/docs** when the server is running.
-
----
-
-## 🎯 Use Cases
-
-### 1. **Flow Pro Example: Microservices Architecture**
-When you ask: *"Create a microservices architecture for a payment processing system with fault tolerance"*
-
-GPT-4 will generate a complete state machine:
-1. **Initialization** → Requirements gathering and scope analysis
-2. **Parallel Research** → Simultaneous states for: API Gateway patterns, Payment Service design, Database strategies, Message Queue options
-3. **Architecture Design** → Synthesize research into cohesive architecture with tool calls to Tavily for best practices
-4. **Validation** → Check design against fault tolerance requirements, security standards
-5. **Decision Gate** → Human approval point for the proposed architecture
-6. **Documentation** → Generate implementation guides and deployment strategies
-7. **Final States** → Success path with deliverables, or failure path with retry options
-
-Each state executes with specific agents, tools, and clear transitions. Watch the workflow unfold visually as agents work through each phase.
-
-### 2. **AI-Powered Development**
-- Generate complete applications from task descriptions
-- Architecture design with best practices analysis
-- API design and documentation generation
-- Implementation roadmaps with detailed steps
-
-### 3. **Research & Analysis**
-- Market research with competitive analysis
-- Technical documentation research
-- Academic paper summarization
-- Data analysis and visualization
-
-### 4. **Workflow Automation**
-- CI/CD pipeline design
-- Data processing workflows
-- Content generation pipelines
-- Report generation systems
-
-### 5. **Team Collaboration**
-- Multi-agent problem solving
-- Distributed task execution
-- Knowledge sharing across teams
-- Approval workflows
-
----
+- Requires API keys (OpenAI, Tavily)
+- Web search limited by Tavily API quota
+- Large workflows may take 30-60 seconds
+- Some experimental features may have bugs
+- Session storage is local (not distributed)
 
 ## 🚦 Production Deployment
 
-### Docker Deployment
+### Using Docker
 
-```dockerfile
-# Dockerfile included in repo
+```bash
 docker-compose up -d
 ```
 
-### Environment Setup
+### Manual Deployment
 
-```bash
-# Production environment
-export NODE_ENV=production
-export REACT_APP_API_URL=https://api.yourdomain.com
-
-# Backend production settings
-export ENVIRONMENT=production
-export LOG_LEVEL=INFO
-export WORKERS=4
-```
-
-### Performance Optimization
-
-1. **Enable Redis** for session management and caching
-2. **Use PostgreSQL** instead of SQLite for production
-3. **Configure CDN** for static assets
-4. **Enable rate limiting** in production
-5. **Set up monitoring** with Prometheus metrics
-
-### Security Best Practices
-
-- ✅ API key rotation policy
-- ✅ HTTPS enforcement
-- ✅ Rate limiting per API key
-- ✅ Input validation and sanitization
-- ✅ Audit logging for compliance
-- ✅ Secrets management with environment variables
-
----
-
-## 📈 Monitoring & Observability
-
-### Available Metrics
-
-- Request latency histograms
-- Agent execution times
-- Tool usage statistics
-- Error rates by endpoint
-- Active WebSocket connections
-- Memory and CPU usage
-
-### Health Checks
-
-```bash
-# Basic health check
-curl http://localhost:8000/health
-
-# Readiness check (includes DB connectivity)
-curl http://localhost:8000/ready
-
-# Metrics endpoint (Prometheus format)
-curl http://localhost:8000/metrics
-```
-
----
-
-## 🧪 Testing
-
-```bash
-# Backend tests
-cd backend
-pytest tests/ -v --cov=app
-
-# Frontend tests
-cd frontend
-npm test
-
-# E2E tests
-npm run test:e2e
-```
-
----
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-| Issue | Solution |
-|-------|----------|
-| **WebSocket disconnects** | Check CORS settings and firewall rules |
-| **Slow responses** | Increase `AGENT_TIMEOUT_SECONDS` |
-| **Search not working** | Verify Tavily API key is valid |
-| **Memory issues** | Reduce `MAX_AGENTS_PER_SWARM` |
-| **Session loss** | Enable Redis for persistent sessions |
-
-### Debug Mode
-
-```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-export FASTAPI_DEBUG=true
-
-# View real-time logs
-tail -f logs/thrivix.log
-```
-
----
+1. Use production requirements: `pip install -r requirements-prod.txt`
+2. Set environment to production: `export ENVIRONMENT=production`
+3. Use proper database: PostgreSQL recommended
+4. Enable Redis for better performance
+5. Configure nginx for reverse proxy
 
 ## 🤝 Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome! Areas to improve:
 
-### Development Setup
-
-```bash
-# Install dev dependencies
-pip install -r requirements-dev.txt
-npm install --save-dev
-
-# Run linters
-black backend/
-npm run lint
-
-# Pre-commit hooks
-pre-commit install
-```
-
----
+- Bug fixes and stability improvements
+- Documentation and examples
+- New agent types
+- UI/UX enhancements
+- Performance optimization
 
 ## 📄 License
 
-Apache License 2.0 - see [LICENSE](LICENSE) file for details.
+Apache License 2.0 - See [LICENSE](LICENSE)
 
----
+## 🙏 Credits
 
-## 🙏 Acknowledgments
-
-- **[Strands SDK](https://github.com/strands-agents/sdk-python)** - Production-ready multi-agent orchestration
-- **[Tavily](https://tavily.com)** - Advanced search API
-- **[React Flow](https://reactflow.dev)** - Interactive flow diagrams
-- **[Radix UI](https://radix-ui.com)** - Accessible UI components
-- **OpenAI & Anthropic** - AI model providers
+Built with:
+- [Strands Agents SDK](https://github.com/strands-agents/sdk-python)
+- [OpenAI API](https://openai.com)
+- [Tavily Search](https://tavily.com)
+- [React Flow](https://reactflow.dev)
 
 ---
 
 <div align="center">
-  <strong>Built with ❤️ by the Thrivix Team</strong>
-  <br>
-  <sub>Empowering developers with visual AI workflow orchestration</sub>
-  <br><br>
-  <a href="https://github.com/rajulubheem/thrivix/issues">Report Bug</a>
-  ·
-  <a href="https://github.com/rajulubheem/thrivix/discussions">Request Feature</a>
-  ·
-  <a href="https://docs.thrivix.ai">Documentation</a>
+  <strong>Questions?</strong> Open an issue on <a href="https://github.com/rajulubheem/thrivix/issues">GitHub</a>
 </div>
