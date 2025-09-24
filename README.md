@@ -49,13 +49,13 @@ npm start
 
 ## ✨ Core Features
 
-### 🔄 **Flow Pro** - Visual State Machine Designer
-- **Drag-and-drop** workflow creation with React Flow
-- **Real-time execution monitoring** with live status updates
-- **AI-powered state generation** from natural language descriptions
-- **Dynamic agent orchestration** with automatic handoffs
-- **Tool integration** with Tavily search, file operations, and custom tools
-- **Export/Import** workflows as JSON for sharing and version control
+### 🔄 **Flow Pro** - AI-Powered State Machine Workflow Engine
+- **Task to workflow transformation**: GPT-4 analyzes your task and designs a complete state machine with phases (initialization → research → execution → validation → final)
+- **Intelligent state architecture**: AI creates focused states with specific types (analysis, tool_call, decision, parallel, final) and defines all transitions (success, failure, retry, timeout)
+- **Dynamic tool integration**: Each state automatically assigns appropriate tools from available options (Tavily search, file operations, etc.)
+- **Real-time visual execution**: Watch agents execute the AI-generated workflow live with React Flow visualization
+- **Fault-tolerant design**: Built-in retry logic, timeout handling, validation checkpoints, and rollback capabilities
+- **Human-in-the-loop**: Decision states for approval workflows when human intervention is needed
 
 ### 🔬 **Research Assistant** - Advanced Conversational AI
 - **Three research modes**:
@@ -242,25 +242,39 @@ Full API documentation available at **http://localhost:8000/docs** when the serv
 
 ## 🎯 Use Cases
 
-### 1. **AI-Powered Development**
-- Generate complete applications from descriptions
-- Code review and refactoring suggestions
-- API design and documentation
-- Test case generation
+### 1. **Flow Pro Example: Microservices Architecture**
+When you ask: *"Create a microservices architecture for a payment processing system with fault tolerance"*
 
-### 2. **Research & Analysis**
+GPT-4 will generate a complete state machine:
+1. **Initialization** → Requirements gathering and scope analysis
+2. **Parallel Research** → Simultaneous states for: API Gateway patterns, Payment Service design, Database strategies, Message Queue options
+3. **Architecture Design** → Synthesize research into cohesive architecture with tool calls to Tavily for best practices
+4. **Validation** → Check design against fault tolerance requirements, security standards
+5. **Decision Gate** → Human approval point for the proposed architecture
+6. **Documentation** → Generate implementation guides and deployment strategies
+7. **Final States** → Success path with deliverables, or failure path with retry options
+
+Each state executes with specific agents, tools, and clear transitions. Watch the workflow unfold visually as agents work through each phase.
+
+### 2. **AI-Powered Development**
+- Generate complete applications from task descriptions
+- Architecture design with best practices analysis
+- API design and documentation generation
+- Implementation roadmaps with detailed steps
+
+### 3. **Research & Analysis**
 - Market research with competitive analysis
 - Technical documentation research
 - Academic paper summarization
 - Data analysis and visualization
 
-### 3. **Workflow Automation**
+### 4. **Workflow Automation**
 - CI/CD pipeline design
 - Data processing workflows
 - Content generation pipelines
 - Report generation systems
 
-### 4. **Team Collaboration**
+### 5. **Team Collaboration**
 - Multi-agent problem solving
 - Distributed task execution
 - Knowledge sharing across teams
