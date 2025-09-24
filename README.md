@@ -104,10 +104,10 @@ Thrivix is a platform that helps you create and execute workflows using multiple
 - Each agent has specific expertise (research, coding, review)
 - Visual tracking of agent activity
 
-### Settings (`/settings`)
-- Configure which tools agents can use
-- Set API keys
-- Manage tool permissions
+### Additional Routes
+- `/settings` - Basic configuration page (experimental)
+- `/orchestrator` - Alternative orchestrator interface
+- Various experimental swarm interfaces
 
 ## 🏗️ Technical Stack
 
