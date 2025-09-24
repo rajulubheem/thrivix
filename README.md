@@ -2,6 +2,11 @@
 
 <div align="center">
 
+  <!-- Logo placeholder - add your logo here -->
+  <!-- <img src="./docs/images/logo.png" alt="Thrivix Logo" width="120"/> -->
+
+  <h3>🚀 Transform natural language into executable AI workflows</h3>
+
 [![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/rajulubheem/thrivix)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Strands SDK](https://img.shields.io/badge/Built%20with-Strands%20SDK%201.6.0-purple.svg)](https://github.com/strands-agents/sdk-python)
@@ -9,9 +14,43 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-green?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-4.9.5-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-**Build AI workflows visually. Orchestrate intelligent agents that search, analyze, and execute complex tasks.**
+[Watch Demo](https://youtu.be/WDMEXh4r6-Q) • [GitHub](https://github.com/rajulubheem/thrivix) • [Documentation](https://docs.thrivix.ai)
 
-[Live Demo](https://thrivix.ai) | [Documentation](https://docs.thrivix.ai) | [API Reference](https://api.thrivix.ai/docs)
+</div>
+
+---
+
+## 🎬 See It In Action
+
+<div align="center">
+
+  [![Watch the Demo](https://img.youtube.com/vi/WDMEXh4r6-Q/maxresdefault.jpg)](https://youtu.be/WDMEXh4r6-Q)
+
+  *Click to watch: AI generates a complete microservices architecture from natural language*
+
+</div>
+
+## ✨ Features at a Glance
+
+<table>
+<tr>
+<td width="33%" align="center">
+  <b>🔄 Flow Pro</b><br/>
+  <!-- <img src="./docs/images/flow-pro.gif" alt="Flow Pro Demo" width="250"/> -->
+  <br/>AI generates & executes state machines from natural language
+</td>
+<td width="33%" align="center">
+  <b>🔬 Research Assistant</b><br/>
+  <!-- <img src="./docs/images/research.gif" alt="Research Demo" width="250"/> -->
+  <br/>Deep analysis with web search and citations
+</td>
+<td width="33%" align="center">
+  <b>🐝 Agent Swarm</b><br/>
+  <!-- <img src="./docs/images/swarm.gif" alt="Swarm Demo" width="250"/> -->
+  <br/>Multi-agent collaboration with live visualization
+</td>
+</tr>
+</table>
 
 </div>
 
