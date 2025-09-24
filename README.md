@@ -192,6 +192,14 @@ docker-compose up -d
 4. Enable Redis for better performance
 5. Configure nginx for reverse proxy
 
+## 🚧 Roadmap
+
+### In Development
+- **AWS Bedrock Integration** - Support for Claude and other Bedrock models
+- **AgentCore Support** - Integration with AgentCore framework
+- More agent specializations
+- Improved error handling
+
 ## 🤝 Contributing
 
 Contributions welcome! Areas to improve:
@@ -201,6 +209,7 @@ Contributions welcome! Areas to improve:
 - New agent types
 - UI/UX enhancements
 - Performance optimization
+- Help with Bedrock/AgentCore integration
 
 ## 📄 License
 
