@@ -135,7 +135,7 @@ graph TB
     end
 
     WS <--> API
-    SSE <-- API
+    API --> SSE
 ```
 
 ---
