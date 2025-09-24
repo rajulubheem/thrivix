@@ -69,7 +69,7 @@
 git clone https://github.com/rajulubheem/thrivix.git
 cd thrivix
 
-# Backend setup
+# Backend setup (requires Python 3.11+)
 cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
