@@ -25,6 +25,8 @@ import ModernFlowInterface from './components/swarm/ModernFlowInterface';
 import FlowSwarmInterface from './components/swarm/FlowSwarmInterface';
 import StateMachineInterface from './components/swarm/StateMachineInterface';
 import ProfessionalStateMachine from './components/swarm/ProfessionalStateMachine';
+import MessengerSwarmInterface from './components/swarm/MessengerSwarmInterface';
+import CleanSwarmDashboard from './components/swarm/CleanSwarmDashboard';
 import { TrueDynamicSwarmChatInterface } from './components/swarm/TrueDynamicSwarmChatInterface';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
@@ -85,6 +87,12 @@ function App() {
             
             {/* Professional State Machine Designer */}
             <Route path="/state-designer" element={<ProfessionalStateMachine />} />
+
+            {/* Messenger-Style Swarm Interface with Enhanced Visualization */}
+            <Route path="/messenger-swarm" element={<MessengerSwarmInterface />} />
+
+            {/* Clean, Simple Swarm Dashboard */}
+            <Route path="/clean-swarm" element={<CleanSwarmDashboard />} />
 
             {/* Redirect any other routes to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

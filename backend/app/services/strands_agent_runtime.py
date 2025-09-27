@@ -8,6 +8,8 @@ import time
 import logging
 from typing import AsyncIterator, Dict, Any, Optional, Union, List
 from dataclasses import dataclass
+import sys
+from pathlib import Path
 
 from strands import Agent
 from strands.session.file_session_manager import FileSessionManager
@@ -15,6 +17,14 @@ from strands.session.file_session_manager import FileSessionManager
 from app.services.agent_runtime import AgentRuntime, AgentContext
 from app.services.event_hub import TokenFrame, ControlFrame, ControlType
 from app.services.safe_tool_executor import SafeToolExecutor
+
+# Import tool definitions for proper parameter instruction
+sys.path.append(str(Path(__file__).parent))
+try:
+    from strands_tool_definitions import create_system_prompt_for_tools
+except ImportError:
+    def create_system_prompt_for_tools(tools: list) -> str:
+        return ""
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +82,27 @@ class StrandsAgentRuntime(AgentRuntime):
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens
             )
-            
+
+            # Enhance system prompt with tool usage instructions
+            enhanced_prompt = self.config.system_prompt
+            if self.config.tools:
+                # Get tool names from the tools list
+                tool_names = []
+                for tool in self.config.tools:
+                    if hasattr(tool, '__name__'):
+                        tool_names.append(tool.__name__)
+                    elif hasattr(tool, 'name'):
+                        tool_names.append(tool.name)
+
+                # Add tool usage instructions if we have tools
+                if tool_names:
+                    tool_instructions = create_system_prompt_for_tools(tool_names)
+                    if tool_instructions:
+                        enhanced_prompt = f"{self.config.system_prompt}\n\n{tool_instructions}"
+
             self._agent = Agent(
                 name=self.config.name,
-                system_prompt=self.config.system_prompt,
+                system_prompt=enhanced_prompt,
                 model=model_instance,
                 tools=self.config.tools or [],
                 session_manager=session_manager,
@@ -261,6 +288,16 @@ class StrandsAgentRuntime(AgentRuntime):
                 "- If a tool returns an error or is unavailable, do not retry endlessly—adapt your plan and continue.\n"
                 "- Prefer fewer, higher‑value calls over many redundant calls.\n"
             )
+            # Add concise usage hints for commonly misused tools
+            hints: list[str] = []
+            if "file_read" in tool_names:
+                hints.append("file_read expects {\"path\": \"...\"} (example: {\"path\": \"document.txt\"})")
+            if "file_write" in tool_names:
+                hints.append("file_write requires {\"path\": \"...\", \"content\": \"...\"}")
+            if "tavily_search" in tool_names:
+                hints.append("tavily_search needs {\"query\": \"...\"}")
+            if hints:
+                parts.append("\nUSAGE HINTS:\n- " + "\n- ".join(hints))
 
         # Strict footer to force a next event
         allowed = ["success", "failure"]

@@ -6,6 +6,19 @@ from fastapi import APIRouter, HTTPException
 from typing import Any, Dict, List, Optional
 import structlog
 import asyncio
+import sys
+from pathlib import Path
+
+# Import correct tool definitions
+sys.path.append(str(Path(__file__).parent.parent.parent / 'services'))
+try:
+    from strands_tool_definitions import STRANDS_TOOL_SCHEMAS, get_tool_schema, get_tool_instruction
+except ImportError:
+    STRANDS_TOOL_SCHEMAS = {}
+    def get_tool_schema(tool_name: str):
+        return None
+    def get_tool_instruction(tool_name: str):
+        return ""
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -66,6 +79,57 @@ async def list_tools() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Tools list failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/schema/{tool_name}")
+async def get_tool_schema_endpoint(tool_name: str) -> Dict[str, Any]:
+    """Get the correct parameter schema for a tool"""
+    schema = get_tool_schema(tool_name)
+    if schema:
+        return {
+            "tool": tool_name,
+            "schema": schema,
+            "instruction": get_tool_instruction(tool_name)
+        }
+
+    # Fallback to basic schema
+    return {
+        "tool": tool_name,
+        "schema": {
+            "name": tool_name,
+            "description": f"Tool: {tool_name}",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        "instruction": f"Use the {tool_name} tool with appropriate parameters."
+    }
+
+
+@router.get("/instructions")
+async def get_all_tool_instructions() -> Dict[str, Any]:
+    """Get usage instructions for all available tools"""
+    instructions = {}
+    for tool_name, schema in STRANDS_TOOL_SCHEMAS.items():
+        instructions[tool_name] = {
+            "schema": schema,
+            "instruction": get_tool_instruction(tool_name)
+        }
+
+    return {
+        "tools": instructions,
+        "system_prompt": """When using tools, you MUST use the exact parameter names as specified.
+Do NOT use 'kwargs' as a parameter name. Use the actual parameter names like 'code', 'command', 'path', etc.
+
+Examples:
+- For python_repl, use: {"code": "your python code"}
+- For shell, use: {"command": "your shell command"}
+- For file_read, use: {"path": "file path"}
+- For file_write, use: {"path": "file path", "content": "file content"}
+"""
+    }
 
 
 @router.post("/test")

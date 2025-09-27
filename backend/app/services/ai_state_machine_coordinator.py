@@ -64,6 +64,9 @@ class AIStateMachineCoordinator:
         self.tool_registry = ToolRegistry()
         self.active_agents: Dict[str, StrandsAgentRuntime] = {}
         self.strands_registry = None  # Will be initialized on first use
+        # Persist graphs and execution context per execution id for reruns/patches
+        self.graph_by_exec: Dict[str, Dict[str, Any]] = {}
+        self.context_by_exec: Dict[str, Dict[str, Any]] = {}
         # Cache of available tools
         try:
             self._all_tools = self.tool_registry.get_all_tools()  # name -> instance
@@ -1514,8 +1517,10 @@ No extra commentary after that line.""",
         
         return next_event, result
     
-    async def execute(self, task: str, exec_id: str, **kwargs) -> AsyncIterator[Union[TokenFrame, ControlFrame]]:
-        """Main execution: AI creates state machine, then executes it"""
+    async def execute(self, task: str, exec_id: str, machine_override: Optional[Dict[str, Any]] = None, **kwargs) -> AsyncIterator[Union[TokenFrame, ControlFrame]]:
+        """Main execution: create or accept a provided state machine, then execute it.
+        If machine_override is provided, it is used (after normalization) instead of AI planning.
+        """
         
         # Ensure hub is connected
         await self.hub.connect()
@@ -1567,7 +1572,10 @@ No extra commentary after that line.""",
             except Exception as e:
                 logger.debug(f"Error announcing tool preferences: {e}")
             
-            state_machine = await self.analyze_and_create_state_machine(task)
+            if machine_override:
+                state_machine = self._normalize_state_machine(machine_override)
+            else:
+                state_machine = await self.analyze_and_create_state_machine(task)
             # Deduplicate edges to avoid duplicate React keys client-side
             try:
                 edges = state_machine.get('edges', []) or []
@@ -1592,6 +1600,11 @@ No extra commentary after that line.""",
                     "task": task
                 }
             ))
+            # Persist graph for this execution so we can patch/rerun later
+            try:
+                self.graph_by_exec[exec_id] = state_machine
+            except Exception:
+                logger.debug("Failed to persist state machine graph for exec %s", exec_id)
             # Also publish planned tools per state so UI can tag nodes immediately
             try:
                 for s in state_machine.get('states', []):
@@ -1624,6 +1637,8 @@ No extra commentary after that line.""",
                 'states': states,
                 'edges': state_machine.get('edges', [])
             }
+            # Save live context reference for reruns
+            self.context_by_exec[exec_id] = context
             current_state_id = state_machine['initial_state']
             steps = 0
             max_steps = int(self.config.get('max_steps', 200))
@@ -1770,3 +1785,197 @@ No extra commentary after that line.""",
         finally:
             # Connect to hub if not connected
             await self.hub.connect()
+
+    async def update_graph(self, exec_id: str, graph_patch: Dict[str, Any]) -> Dict[str, Any]:
+        """Patch/extend the current state machine graph for an execution and notify UI.
+        Supports:
+        - states: list of state objects to upsert (merge)
+        - edges: list of edges to add
+        - remove_states: list of state ids to remove
+        - remove_edges: list of {source,target,event} edges to remove
+        - set_initial_state: string to switch initial state (if exists)
+        Returns the updated machine.
+        """
+        machine = self.graph_by_exec.get(exec_id)
+        if not machine:
+            raise RuntimeError(f"No state machine for execution {exec_id}")
+
+        # Merge states
+        states = machine.get('states', []) or []
+        edges = machine.get('edges', []) or []
+        state_map = {s.get('id'): s for s in states if s.get('id')}
+
+        # Optional removals first
+        remove_states = set(graph_patch.get('remove_states') or [])
+        remove_edges = graph_patch.get('remove_edges') or []
+        if remove_states:
+            for sid in remove_states:
+                state_map.pop(sid, None)
+            edges = [e for e in edges if e.get('source') not in remove_states and e.get('target') not in remove_states]
+
+        for s in (graph_patch.get('states') or []):
+            sid = s.get('id') or s.get('name')
+            if not sid:
+                continue
+            s['id'] = sid
+            state_map[sid] = {**state_map.get(sid, {}), **s}
+        states = list(state_map.values())
+
+        # Merge edges and dedupe, applying edge removals
+        def edge_key(e: Dict[str, Any]):
+            return (e.get('source'), e.get('target'), e.get('event'))
+
+        if remove_edges:
+            remove_keys = set(edge_key(e) for e in remove_edges)
+            edges = [e for e in edges if edge_key(e) not in remove_keys]
+
+        merged_edges = edges + (graph_patch.get('edges') or [])
+        seen = set()
+        unique_edges = []
+        for e in merged_edges:
+            key = (e.get('source'), e.get('target'), e.get('event'))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_edges.append(e)
+
+        updated = {
+            **machine,
+            'states': states,
+            'edges': unique_edges,
+        }
+        # Switch initial state if requested
+        if isinstance(graph_patch.get('set_initial_state'), str):
+            cand = graph_patch['set_initial_state']
+            if cand in state_map:
+                updated['initial_state'] = cand
+
+        # Normalize and persist
+        updated = self._normalize_state_machine(updated)
+        self.graph_by_exec[exec_id] = updated
+
+        # Broadcast to UI
+        await self.hub.publish_control(ControlFrame(
+            exec_id=exec_id,
+            type="graph_updated",
+            payload={
+                "machine": updated
+            }
+        ))
+        return updated
+
+    async def rerun_from(self, exec_id: str, start_state_id: str, graph_patch: Optional[Dict[str, Any]] = None) -> None:
+        """Rerun execution from a specific state, optionally patching the graph first.
+        Continues to publish to the same exec_id streams so the existing WebSocket receives updates.
+        """
+        await self.hub.connect()
+
+        # Optionally update graph first
+        if graph_patch:
+            try:
+                await self.update_graph(exec_id, graph_patch)
+            except Exception as e:
+                logger.warning(f"Graph patch failed for {exec_id}: {e}")
+
+        machine = self.graph_by_exec.get(exec_id)
+        if not machine:
+            raise RuntimeError(f"No state machine for execution {exec_id}")
+
+        # Prepare context, preserving previous results
+        base_ctx = self.context_by_exec.get(exec_id) or {
+            'exec_id': exec_id,
+            'task': (machine.get('metadata') or {}).get('task', ''),
+            'results': {},
+            'visits': {},
+            'ui_overrides': {}
+        }
+        # Ensure graph references are up to date
+        states_map = {s['id']: s for s in machine.get('states', [])}
+        ctx = base_ctx
+        ctx['graph'] = {
+            'states': states_map,
+            'edges': machine.get('edges', [])
+        }
+        # Also ensure previous_results alias
+        ctx['previous_results'] = ctx.get('results', {})
+        # Save back
+        self.context_by_exec[exec_id] = ctx
+
+        # Notify UI
+        await self.hub.publish_control(ControlFrame(
+            exec_id=exec_id,
+            type="rerun_started",
+            agent_id=start_state_id,
+            payload={"start_state": start_state_id}
+        ))
+
+        # Execution loop starting from the requested state
+        current_state_id = start_state_id
+        steps = 0
+        max_steps = int(self.config.get('max_steps', 200))
+
+        while current_state_id:
+            if steps >= max_steps:
+                await self.hub.publish_control(ControlFrame(
+                    exec_id=exec_id,
+                    type="workflow_stopped",
+                    payload={"reason": "max_steps_reached", "max_steps": max_steps}
+                ))
+                break
+
+            if current_state_id not in states_map:
+                await self.hub.publish_control(ControlFrame(
+                    exec_id=exec_id,
+                    type="error",
+                    payload={"error": f"State '{current_state_id}' not found"}
+                ))
+                break
+
+            state = states_map[current_state_id]
+            event, _ = await self.execute_state(state, ctx)
+
+            # If final, stop
+            if state.get('type') == 'final':
+                break
+
+            transitions = state.get('transitions', {})
+            next_state_id = transitions.get(event)
+            if not next_state_id:
+                if len(transitions) == 1:
+                    next_state_id = list(transitions.values())[0]
+                else:
+                    await self.hub.publish_control(ControlFrame(
+                        exec_id=exec_id,
+                        type="error",
+                        payload={"error": f"No transition for event '{event}' from state '{current_state_id}'"}
+                    ))
+                    break
+
+            # Maintain loop protections similar to main execute
+            visits = ctx.get('visits', {})
+            visits[current_state_id] = visits.get(current_state_id, 0) + 1
+            ctx['visits'] = visits
+            max_visits_per_state = int(self.config.get('max_visits_per_state', 3))
+            if visits.get(next_state_id, 0) >= max_visits_per_state:
+                alt = None
+                for ev, tgt in transitions.items():
+                    if ev == event:
+                        continue
+                    if visits.get(tgt, 0) < max_visits_per_state:
+                        alt = tgt
+                        break
+                if alt:
+                    next_state_id = alt
+
+            # Advance
+            ctx['last_state'] = current_state_id
+            ctx['last_event'] = event
+            current_state_id = next_state_id
+            steps += 1
+
+        # Done
+        await self.hub.publish_control(ControlFrame(
+            exec_id=exec_id,
+            type="rerun_completed",
+            payload={"start_state": start_state_id, "steps": steps}
+        ))

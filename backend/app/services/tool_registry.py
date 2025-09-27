@@ -30,7 +30,10 @@ class ToolRegistry:
         
         # Register file tools
         self._register_file_tools()
-        
+
+        # Register Python REPL tool with correct schema
+        self._register_python_repl_tool()
+
         self._initialized = True
         logger.info(f"✅ Tool Registry initialized with {len(self.tools)} tools")
         
@@ -64,7 +67,29 @@ class ToolRegistry:
             
         except Exception as e:
             logger.error(f"Failed to register Tavily tool: {e}")
-            
+
+    def _register_python_repl_tool(self):
+        """Register Python REPL tool with correct schema"""
+        try:
+            from app.tools.python_repl_tool import python_repl, PYTHON_REPL_SPEC
+
+            self.tools["python_repl"] = {
+                "spec": PYTHON_REPL_SPEC,
+                "handler": python_repl,
+                "async": True,
+                "requires_approval": False,
+                "description": "Execute Python code in a REPL environment",
+                "capabilities": ["code_execution", "data_analysis", "computation"]
+            }
+
+            # Register capabilities
+            self._register_tool_capabilities("python_repl", ["code_execution", "data_analysis", "computation"])
+
+            logger.info("✅ Python REPL tool registered with correct schema")
+
+        except Exception as e:
+            logger.error(f"Failed to register Python REPL tool: {e}")
+
     def _register_file_tools(self):
         """Register file operation tools"""
         

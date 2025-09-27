@@ -10,6 +10,7 @@ import ReactFlow, {
   useReactFlow,
   ReactFlowProvider,
   ConnectionMode,
+  Connection,
   ConnectionLineType,
   Panel,
   BackgroundVariant,
@@ -33,6 +34,10 @@ import ProfessionalAgentNode from './components/ProfessionalAgentNode';
 import OptimizedSmoothEdge from './components/OptimizedSmoothEdge';
 import ChatbotOutput from './components/ChatbotOutput';
 import { useTheme } from '../../contexts/ThemeContext';
+import { EnhancedAgentNode } from './components/EnhancedAgentNode';
+import { ProfessionalWorkflowBlock } from './components/ProfessionalWorkflowBlock';
+import { WorkflowToolbar } from './components/WorkflowToolbar';
+import { v4 as uuidv4 } from 'uuid';
 
 // Clean Professional Node Component (v3)
 const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
@@ -326,7 +331,7 @@ type Frame = TokenFrame | ControlFrame;
 // Main Component
 const FlowSwarmInterface: React.FC = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { fitView, setCenter, getViewport } = useReactFlow();
+  const { fitView, setCenter, getViewport, project, zoomIn, zoomOut } = useReactFlow();
   
   // State
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -340,6 +345,21 @@ const FlowSwarmInterface: React.FC = () => {
   const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic' | 'neural'>('dynamic');
   const [outputPanelWidth, setOutputPanelWidth] = useState(400);
   const [activelyStreamingAgents, setActivelyStreamingAgents] = useState<Set<string>>(new Set());
+  const [currentExecutingNode, setCurrentExecutingNode] = useState<string | null>(null);
+  const [nextExecutingNode, setNextExecutingNode] = useState<string | null>(null);
+  const [executionActions, setExecutionActions] = useState<Map<string, string[]>>(new Map());
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [executionHistory, setExecutionHistory] = useState<Map<string, {
+    order: number;
+    startTime: number;
+    endTime?: number;
+    status: 'running' | 'completed' | 'failed';
+    actions: string[];
+    tools: string[];
+    blockName?: string;
+    blockType?: string;
+  }>>(new Map());
+  const [executionOrderCounter, setExecutionOrderCounter] = useState(0);
   // Interaction flags to keep dragging/snapping smooth
   const [isInteracting, setIsInteracting] = useState(false);
   const pendingLayoutRef = useRef<boolean>(false);
@@ -376,7 +396,17 @@ const FlowSwarmInterface: React.FC = () => {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [parallelTooltip, setParallelTooltip] = useState<null | { id: string; x: number; y: number; lines: Array<{ child: string; event: string; durationMs: number }> }>(null);
   // Search overlay state
-  
+  // Edit mode state
+  const [editMode, setEditMode] = useState<boolean>(true); // Always allow editing
+  const [showAddNode, setShowAddNode] = useState<boolean>(false);
+  const [nodeDraft, setNodeDraft] = useState<{ id: string; name: string; type: 'analysis' | 'tool_call' | 'decision' | 'parallel' | 'final'; description?: string; agent_role?: string; tools: string[] }>({ id: '', name: '', type: 'analysis', description: '', agent_role: '', tools: [] });
+  const [edgeEdit, setEdgeEdit] = useState<null | { id?: string; source: string; target: string; event?: string }>(null);
+  const [paletteOpen, setPaletteOpen] = useState<boolean>(true);
+  const [paletteTab, setPaletteTab] = useState<'blocks'|'tools'>('blocks');
+  const [planned, setPlanned] = useState<boolean>(false);
+  const [showImportDialog, setShowImportDialog] = useState<boolean>(false);
+  const [importJsonText, setImportJsonText] = useState<string>('');
+
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
   const agentSequences = useRef<Map<string, number>>(new Map());
@@ -472,7 +502,9 @@ const FlowSwarmInterface: React.FC = () => {
 
   // Node and Edge types - use professional components
   const nodeTypes = useMemo<NodeTypes>(() => ({
-    agent: AgentNode
+    agent: AgentNode,
+    enhanced: EnhancedAgentNode,
+    professional: ProfessionalWorkflowBlock
   }), []);
   const edgeTypes = useMemo<EdgeTypes>(() => ({
     animated: AnimatedEdge,
@@ -855,6 +887,193 @@ const FlowSwarmInterface: React.FC = () => {
     const { type, agent_id, payload } = frame;
     
     switch (type) {
+      case 'graph_updated': {
+        // ⚠️  PRESERVE EXISTING BLOCKS: Update only data, don't replace entire graph
+        const machine: any = payload?.machine;
+        if (machine && Array.isArray(machine.states)) {
+          const states = machine.states as any[];
+          const edges = (machine.edges || []) as any[];
+
+          // Update existing nodes instead of replacing them
+          setNodes(currentNodes => {
+            const updatedNodes = currentNodes.map(existingNode => {
+              const machineState = states.find(s => s.id === existingNode.id);
+              if (machineState) {
+                // Update the data of existing node while preserving position and type
+                return {
+                  ...existingNode,
+                  data: {
+                    ...existingNode.data,
+                    // Update only essential data from machine state
+                    status: existingNode.data.status, // Keep current status
+                    tools: machineState.tools || existingNode.data.tools,
+                    toolsPlanned: Array.isArray(machineState.tools) ? machineState.tools : existingNode.data.toolsPlanned,
+                    description: machineState.description || existingNode.data.description,
+                    agentRole: machineState.agent_role || existingNode.data.agentRole,
+                  }
+                };
+              }
+              return existingNode; // Keep unchanged if not in machine
+            });
+
+            // Add only new nodes that don't exist yet
+            const existingIds = new Set(currentNodes.map(n => n.id));
+            const newNodes = states
+              .filter(state => !existingIds.has(state.id))
+              .map((state: any) => ({
+                id: state.id,
+                type: 'agent',
+                position: { x: Math.random() * 400, y: Math.random() * 400 },
+                data: {
+                  label: state.name,
+                  name: state.name,
+                  status: 'pending',
+                  nodeType: state.type,
+                  task: state.task,
+                  tools: state.tools,
+                  toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
+                  description: state.description,
+                  agentRole: state.agent_role,
+                  direction: layoutDirection,
+                  isDarkMode,
+                },
+                targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
+                sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
+              }));
+
+            return [...updatedNodes, ...newNodes];
+          });
+
+          // Update edges similarly - preserve existing, add new ones
+          setEdges(currentEdges => {
+            const machineEdgeIds = new Set(edges.map((e: any) => `${e.source}-${e.target}-${e.event}`));
+            const existingEdgeIds = new Set(currentEdges.map(e => e.id));
+
+            // Keep existing edges that are still in the machine
+            const preservedEdges = currentEdges.filter(edge => machineEdgeIds.has(edge.id));
+
+            // Add new edges
+            const newEdges = edges
+              .filter((edge: any) => !existingEdgeIds.has(`${edge.source}-${edge.target}-${edge.event}`))
+              .map((edge: any) => ({
+                id: `${edge.source}-${edge.target}-${edge.event}`,
+                source: edge.source,
+                target: edge.target,
+                type: 'smoothstep',
+                animated: false,
+                label: edge.event !== 'success' ? edge.event : '',
+                labelStyle: { fill: '#94a3b8', fontSize: 11 },
+                labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+                style: { stroke: '#52525b', strokeWidth: 1.5 },
+                markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: '#52525b' },
+              }));
+
+            return [...preservedEdges, ...newEdges];
+          });
+
+          setHasStateMachineStructure(true);
+          console.log('📊 Graph updated preserving existing blocks');
+        }
+        break;
+      }
+      case 'rerun_started': {
+        setIsRunning(true);
+        // soft reset visuals to show fresh run but preserve layout
+        softReset();
+        const id = payload?.start_state || agent_id;
+        if (id) {
+          pendingFocusIdRef.current = id;
+          focusAttemptsRef.current = 0;
+        }
+        break;
+      }
+      case 'rerun_completed': {
+        setIsRunning(false);
+        break;
+      }
+      case 'state_machine_created': {
+        // ⚠️ PRESERVE EXISTING BLOCKS: Don't replace user's blocks during execution
+        const machine: any = payload?.machine;
+        if (machine && Array.isArray(machine.states)) {
+          const states = machine.states as any[];
+          const edges = (machine.edges || []) as any[];
+
+          // Update existing nodes, don't replace them
+          setNodes(currentNodes => {
+            // If we already have nodes (user created them), just update their data
+            if (currentNodes.length > 0) {
+              return currentNodes.map(existingNode => {
+                const machineState = states.find(s => s.id === existingNode.id);
+                if (machineState) {
+                  return {
+                    ...existingNode,
+                    // Keep the existing node structure and position
+                    data: {
+                      ...existingNode.data,
+                      // Only update execution-relevant data
+                      tools: machineState.tools || existingNode.data.tools,
+                      toolsPlanned: Array.isArray(machineState.tools) ? machineState.tools : existingNode.data.toolsPlanned,
+                    }
+                  };
+                }
+                return existingNode;
+              });
+            } else {
+              // Only create new nodes if canvas is empty
+              const newNodes: Node[] = states.map((state: any) => ({
+                id: state.id,
+                type: 'agent',
+                position: { x: Math.random() * 400, y: Math.random() * 400 },
+                data: {
+                  label: state.name,
+                  name: state.name,
+                  status: 'pending',
+                  nodeType: state.type,
+                  task: state.task,
+                  tools: state.tools,
+                  toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
+                  description: state.description,
+                  agentRole: state.agent_role,
+                  direction: layoutDirection,
+                  isDarkMode,
+                },
+                targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
+                sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
+              }));
+              const layouted = getLayoutedElements(newNodes, [], layoutDirection);
+              return layouted.nodes;
+            }
+          });
+
+          // Similarly for edges - preserve existing ones
+          setEdges(currentEdges => {
+            if (currentEdges.length > 0) {
+              // Keep existing edges, just update if needed
+              return currentEdges;
+            } else {
+              // Only create new edges if none exist
+              const mappedEdges: Edge[] = edges.map((edge: any) => ({
+                id: `${edge.source}-${edge.target}-${edge.event}`,
+                source: edge.source,
+                target: edge.target,
+                type: 'smoothstep',
+                animated: false,
+                label: edge.event !== 'success' ? edge.event : '',
+                labelStyle: { fill: '#94a3b8', fontSize: 11 },
+                labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+                style: { stroke: '#52525b', strokeWidth: 1.5 },
+                markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: '#52525b' },
+              }));
+              return mappedEdges;
+            }
+          });
+
+          setHasStateMachineStructure(true);
+          setPlanned(true);
+          console.log('📊 State machine created - preserving existing blocks');
+        }
+        break;
+      }
       case 'parallel_start': {
         setNodes(nodes => nodes.map(n => n.id === agent_id ? {
           ...n,
@@ -1081,6 +1300,7 @@ const FlowSwarmInterface: React.FC = () => {
               description: state.description,
               agentRole: state.agent_role,
               direction: layoutDirection,
+              isDarkMode,
             },
             targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
             sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
@@ -1128,6 +1348,28 @@ const FlowSwarmInterface: React.FC = () => {
         }
         break;
         
+      case 'next_state_preview':
+        // Preview the next state that will be executed
+        if (payload?.next_state_id) {
+          setNextExecutingNode(payload.next_state_id);
+
+          // Highlight the next node
+          setNodes(nodes => nodes.map(node => {
+            if (node.id === payload.next_state_id) {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  isNextToExecute: true,
+                  nextStepPreview: payload.preview_text || 'Next step'
+                }
+              };
+            }
+            return node;
+          }));
+        }
+        break;
+
       case 'human_decision_required':
         if (payload?.state && payload?.allowed_events) {
           const st = payload.state;
@@ -1247,6 +1489,37 @@ const FlowSwarmInterface: React.FC = () => {
       case 'tool_use': {
         const toolName = payload?.tool || payload?.name;
         if (!agent_id || !toolName) break;
+
+        // Update execution history with tool
+        setExecutionHistory(prev => {
+          const updated = new Map(prev);
+          const history = updated.get(agent_id);
+          if (history) {
+            updated.set(agent_id, {
+              ...history,
+              tools: [...history.tools, toolName]
+            });
+          }
+          return updated;
+        });
+
+        // Update node to show current tool being executed with block context
+        setNodes(nodes => nodes.map(node => {
+          if (node.id === agent_id) {
+            const blockName = node.data.name || agent_id;
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                currentAction: `${blockName} → ${toolName}`,
+                currentActionDetail: `Tool: ${toolName}`,
+                activeTools: [...(node.data.activeTools || []), toolName]
+              }
+            };
+          }
+          return node;
+        }));
+
         // Update agents map with tool usage
         setAgents(prev => {
           const updated = new Map(prev);
@@ -1272,6 +1545,21 @@ const FlowSwarmInterface: React.FC = () => {
       case 'agent_started':
         if (agent_id) {
           setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
+          setCurrentExecutingNode(agent_id);
+          setIsExecuting(true);
+
+          // Increment execution order and track history
+          const newOrder = executionOrderCounter + 1;
+          setExecutionOrderCounter(newOrder);
+
+          // Auto-scroll to the executing node
+          setTimeout(() => {
+            const nodeElement = document.querySelector(`[data-id="${agent_id}"]`);
+            if (nodeElement) {
+              nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            }
+          }, 100);
+
           setAgents(prev => {
             const updated = new Map(prev);
             updated.set(agent_id, {
@@ -1285,16 +1573,52 @@ const FlowSwarmInterface: React.FC = () => {
             });
             return updated;
           });
-          
-          // Update node status in graph
-          setNodes(nodes => 
-            nodes.map(node => ({
-              ...node,
-              data: {
-                ...node.data,
-                status: node.id === agent_id ? 'running' : node.data.status,
-              },
-            }))
+
+          // Update node status in graph with detailed execution info
+          setNodes(nodes =>
+            nodes.map(node => {
+              if (node.id === agent_id) {
+                const blockName = node.data.name || payload?.name || agent_id;
+                const blockType = node.data.type || 'process';
+
+                // Update execution history
+                setExecutionHistory(prev => {
+                  const updated = new Map(prev);
+                  updated.set(agent_id, {
+                    order: newOrder,
+                    startTime: Date.now(),
+                    status: 'running',
+                    actions: [],
+                    tools: [],
+                    blockName,
+                    blockType
+                  });
+                  return updated;
+                });
+
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    status: 'running',
+                    isExecuting: true,
+                    executionOrder: newOrder,
+                    currentActionDetail: `Executing ${blockName} (${blockType})`,
+                    executionStartTime: Date.now()
+                  },
+                };
+              }
+              // Dim nodes that haven't been executed yet
+              const wasExecuted = executionHistory.has(node.id);
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  status: node.data.status,
+                  isDimmed: !wasExecuted && node.id !== agent_id
+                },
+              };
+            })
           );
           
           // Animate edges leading to this node
@@ -1341,6 +1665,26 @@ const FlowSwarmInterface: React.FC = () => {
             updated.delete(agent_id);
             return updated;
           });
+
+          // Update execution history with completion
+          setExecutionHistory(prev => {
+            const updated = new Map(prev);
+            const history = updated.get(agent_id);
+            if (history) {
+              updated.set(agent_id, {
+                ...history,
+                endTime: Date.now(),
+                status: 'completed'
+              });
+            }
+            return updated;
+          });
+
+          // Clear current executing node
+          if (currentExecutingNode === agent_id) {
+            setCurrentExecutingNode(null);
+          }
+
           setAgents(prev => {
             const updated = new Map(prev);
             const agent = updated.get(agent_id);
@@ -1353,28 +1697,62 @@ const FlowSwarmInterface: React.FC = () => {
             }
             return updated;
           });
-          
-          // Update node status in graph
-          setNodes(nodes => 
-            nodes.map(node => ({
-              ...node,
-              data: {
-                ...node.data,
-                status: node.id === agent_id ? 'completed' : node.data.status,
-              },
-            }))
+
+          // Update node status in graph - keep execution history visible
+          setNodes(nodes =>
+            nodes.map(node => {
+              if (node.id === agent_id) {
+                const history = executionHistory.get(agent_id);
+                const duration = history && history.startTime ? Date.now() - history.startTime : undefined;
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    status: 'completed',
+                    isExecuting: false,
+                    wasExecuted: true,
+                    executionOrder: history?.order,
+                    executionDuration: duration,
+                    executionDurationText: duration ? `${(duration / 1000).toFixed(1)}s` : undefined,
+                    executedTools: history?.tools || [],
+                    currentAction: undefined,
+                    currentActionDetail: undefined,
+                    activeTools: []
+                  },
+                };
+              }
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  // Remove dimming from other executed nodes
+                  isDimmed: !executionHistory.has(node.id) ? node.data.isDimmed : false
+                }
+              };
+            })
           );
           
-          // Update edges to show completion
+          // Update edges to show completion and execution path
           setEdges(edges =>
-            edges.map(edge => ({
-              ...edge,
-              animated: false,
-              style: {
-                ...edge.style,
-                stroke: edge.source === agent_id ? '#22c55e' : edge.style?.stroke || '#52525b',
-              },
-            }))
+            edges.map(edge => {
+              // Check if both source and target have been executed
+              const sourceExecuted = executionHistory.has(edge.source);
+              const targetExecuted = executionHistory.has(edge.target);
+              const isExecutionPath = sourceExecuted && targetExecuted;
+
+              return {
+                ...edge,
+                animated: false,
+                className: isExecutionPath ? 'execution-path-edge' : '',
+                style: {
+                  ...edge.style,
+                  stroke: isExecutionPath ? '#10b981' :
+                         edge.source === agent_id ? '#22c55e' :
+                         edge.style?.stroke || '#52525b',
+                  strokeWidth: isExecutionPath ? 3 : 2,
+                },
+              };
+            })
           );
         }
         break;
@@ -1409,14 +1787,66 @@ const FlowSwarmInterface: React.FC = () => {
     }
   }, []);
 
+  const rerunFromSelected = useCallback(async () => {
+    if (!executionId || !selectedAgent) return;
+    try {
+      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/rerun_from`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_state_id: selectedAgent })
+      });
+    } catch (e) {
+      console.error('Failed to rerun from node', e);
+    }
+  }, [executionId, selectedAgent]);
+
+  const addAgentAndRerun = useCallback(async () => {
+    if (!executionId || !selectedAgent) return;
+    try {
+      const newId = window.prompt('New agent id (slug_case):');
+      if (!newId) return;
+      const newName = window.prompt('Display name:', newId.replace(/_/g, ' '));
+      if (!newName) return;
+      const type = window.prompt('Type (analysis|tool_call|decision|parallel|final):', 'analysis') || 'analysis';
+      const desc = window.prompt('Short description of this agent/task:', '') || '';
+      const event = window.prompt(`Event from ${selectedAgent} to ${newId} (e.g., success|failure|custom):`, 'success') || 'success';
+
+      const patch = {
+        states: [
+          {
+            id: newId,
+            name: newName,
+            type,
+            task: desc || newName,
+            description: desc,
+            agent_role: 'Custom Agent'
+          }
+        ],
+        edges: [
+          { source: selectedAgent, target: newId, event }
+        ]
+      };
+
+      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/rerun_from`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_state_id: selectedAgent, graph_patch: patch })
+      });
+    } catch (e) {
+      console.error('Failed to add agent and rerun', e);
+    }
+  }, [executionId, selectedAgent]);
+
   const startExecution = async () => {
     if (!task.trim()) return;
     
-    // If we have an existing state machine structure, preserve it (soft reset)
-    // Otherwise do a full reset
-    if (hasStateMachineStructure && nodes.length > 0) {
+    // ⚠️ PRESERVE USER BLOCKS: Only clear if there are absolutely no nodes
+    // This prevents accidental clearing of manually created blocks
+    if (nodes.length > 0) {
+      // Always prefer soft reset to preserve user's work
       softReset();
     } else {
+      // Only do full reset if canvas is completely empty
       resetView();
     }
     setIsRunning(true);
@@ -1458,6 +1888,870 @@ const FlowSwarmInterface: React.FC = () => {
     }
   };
 
+  // Build machine from current graph (nodes/edges)
+  const buildMachineFromGraph = useCallback(() => {
+    const states = nodes.map((n:any)=>{
+      // Handle professional and enhanced nodes
+      if (n.type === 'professional' || n.type === 'enhanced') {
+        return {
+          id: n.id,
+          name: n.data.name || n.id,
+          type: n.data.type || 'analysis',
+          description: n.data.description || '',
+          agent_role: n.data.agent_role || 'Agent',
+          tools: n.data.tools || [],
+          transitions: n.data.transitions || {},
+          enabled: n.data.enabled !== false
+        };
+      }
+      // Handle regular nodes
+      return {
+        id: n.id,
+        name: n.data?.name || n.data?.label || n.id,
+        type: n.data?.nodeType || 'analysis',
+        description: n.data?.description || '',
+        agent_role: n.data?.agentRole || '',
+        tools: Array.isArray(n.data?.toolsPlanned)? n.data.toolsPlanned : []
+      };
+    });
+    const edgesJson = edges.map((e:any)=>({ source: e.source, target: e.target, event: (e.label && typeof e.label==='string' && e.label.length>0)? e.label : 'success' }));
+    // Find the initial state - look for nodes with no incoming edges, or named 'start'/'initial'
+    const nodesWithNoIncoming = nodes.filter(n =>
+      !edges.some(e => e.target === n.id)
+    );
+    let initial = nodesWithNoIncoming[0]?.id || nodes[0]?.id || 'start';
+
+    // Prefer nodes explicitly named 'start' or 'initial'
+    const startNode = nodes.find(n =>
+      n.data.name?.toLowerCase() === 'start' ||
+      n.data.name?.toLowerCase() === 'initial' ||
+      n.id === 'start' ||
+      n.id === 'initial'
+    );
+    if (startNode) {
+      initial = startNode.id;
+    }
+
+    return { name: `User Planned Workflow`, initial_state: initial, states, edges: edgesJson };
+  }, [nodes, edges]);
+
+  // Add professional block function
+  const addProfessionalBlock = useCallback((type: string = 'analysis', position?: { x: number; y: number }) => {
+    const nodePosition = position || {
+      x: Math.random() * 400 + 200,
+      y: Math.random() * 300 + 100
+    };
+
+    const newNode: Node = {
+      id: uuidv4(),
+      type: 'professional',
+      position: nodePosition,
+      data: {
+        type: type,
+        name: `${type.charAt(0).toUpperCase() + type.slice(1)} ${nodes.length + 1}`,
+        description: '',
+        agent_role: type === 'analysis' ? 'Analyst' : type === 'tool_call' ? 'Executor' : 'Agent',
+        tools: type === 'tool_call' ? Array.from(selectedTools).slice(0, 3) : [],
+        transitions: {
+          success: null,
+          failure: null
+        },
+        enabled: true,
+        advancedMode: false,
+        isWide: false,
+        availableTools: availableTools,
+        onToggleEnabled: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
+                : node
+            )
+          );
+        },
+        onToggleAdvanced: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
+                : node
+            )
+          );
+        },
+        onToggleWide: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
+                : node
+            )
+          );
+        },
+        onUpdate: (id: string, updates: any) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, ...updates } }
+                : node
+            )
+          );
+        },
+        onDelete: (id: string) => {
+          setNodes((nds) => nds.filter((node) => node.id !== id));
+          setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+        },
+        onDuplicate: (id: string) => {
+          const nodeToDuplicate = nodes.find((n) => n.id === id);
+          if (nodeToDuplicate) {
+            const newId = uuidv4();
+            const duplicatedNode = {
+              ...nodeToDuplicate,
+              id: newId,
+              position: {
+                x: nodeToDuplicate.position.x + 50,
+                y: nodeToDuplicate.position.y + 50
+              },
+              data: {
+                ...nodeToDuplicate.data,
+                name: `${nodeToDuplicate.data.name} (Copy)`
+              }
+            };
+            setNodes((nds) => [...nds, duplicatedNode]);
+          }
+        }
+      }
+    };
+
+    setNodes((nds) => [...nds, newNode]);
+
+    // Auto-connect to last node if exists
+    if (nodes.length > 0) {
+      const lastNode = nodes[nodes.length - 1];
+      const newEdge: Edge = {
+        id: uuidv4(),
+        source: lastNode.id,
+        target: newNode.id,
+        type: 'animated',
+        animated: true
+      };
+      setEdges((eds) => [...eds, newEdge]);
+    }
+
+    return newNode.id;
+  }, [nodes, setNodes, setEdges, selectedTools, availableTools]);
+
+  // Expand a single block into a sub-workflow
+  const expandBlockIntoSubWorkflow = useCallback((blockId: string, subMachine: any) => {
+    const blockToExpand = nodes.find(n => n.id === blockId);
+    if (!blockToExpand) return;
+
+    // Get incoming and outgoing edges for the block
+    const incomingEdges = edges.filter(e => e.target === blockId);
+    const outgoingEdges = edges.filter(e => e.source === blockId);
+
+    // Position for the sub-workflow (offset from original block)
+    const basePosition = blockToExpand.position;
+    const offsetX = 50;
+    const offsetY = 100;
+
+    // Create nodes for the sub-workflow states
+    const subNodes: Node[] = [];
+    const subEdges: Edge[] = [];
+    const stateIdMap = new Map<string, string>();
+
+    // Generate sub-nodes
+    Object.entries(subMachine.states || {}).forEach(([stateName, stateData]: [string, any], idx) => {
+      const nodeId = `${blockId}_sub_${stateName}`;
+      stateIdMap.set(stateName, nodeId);
+
+      // Calculate position in a grid layout
+      const col = idx % 3;
+      const row = Math.floor(idx / 3);
+
+      const newNode: Node = {
+        id: nodeId,
+        type: 'professionalBlock',
+        position: {
+          x: basePosition.x + offsetX + col * 250,
+          y: basePosition.y + offsetY + row * 200
+        },
+        data: {
+          type: stateData.type || 'analysis',
+          name: `${blockToExpand.data.name} - ${stateName}`,
+          description: stateData.description || stateData.prompt || '',
+          agent_role: stateData.agent_role || blockToExpand.data.agent_role,
+          tools: stateData.tools || blockToExpand.data.tools || [],
+          transitions: {},
+          enabled: true,
+          advancedMode: false,
+          availableTools: availableTools,
+          onUpdate: (id: string, updates: any) => {
+            setNodes((nds) =>
+              nds.map((node) =>
+                node.id === id ? { ...node, data: { ...node.data, ...updates } } : node
+              )
+            );
+          },
+          onDelete: (id: string) => {
+            setNodes((nds) => nds.filter((node) => node.id !== id));
+            setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+          },
+          onDuplicate: (id: string) => {
+            const nodeToDuplicate = nodes.find(n => n.id === id);
+            if (nodeToDuplicate) {
+              const newId = `${id}_copy_${Date.now()}`;
+              const duplicatedNode: Node = {
+                ...nodeToDuplicate,
+                id: newId,
+                position: {
+                  x: nodeToDuplicate.position.x + 100,
+                  y: nodeToDuplicate.position.y + 100
+                },
+                data: {
+                  ...nodeToDuplicate.data,
+                  name: `${nodeToDuplicate.data.name} (Copy)`
+                }
+              };
+              setNodes((nds) => [...nds, duplicatedNode]);
+            }
+          },
+          onToggleEnabled: (id: string) => {
+            setNodes((nds) =>
+              nds.map((node) =>
+                node.id === id
+                  ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
+                  : node
+              )
+            );
+          },
+          onToggleAdvanced: (id: string) => {
+            setNodes((nds) =>
+              nds.map((node) =>
+                node.id === id
+                  ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
+                  : node
+              )
+            );
+          },
+          onToggleWide: (id: string) => {
+            setNodes((nds) =>
+              nds.map((node) =>
+                node.id === id
+                  ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
+                  : node
+              )
+            );
+          },
+          isDarkMode
+        }
+      };
+
+      subNodes.push(newNode);
+    });
+
+    // Generate sub-edges from transitions
+    Object.entries(subMachine.states || {}).forEach(([stateName, stateData]: [string, any]) => {
+      const sourceId = stateIdMap.get(stateName);
+      if (!sourceId) return;
+
+      Object.entries(stateData.transitions || {}).forEach(([event, targetState]) => {
+        const targetId = stateIdMap.get(targetState as string);
+        if (targetId) {
+          const edgeId = `${sourceId}_${event}_${targetId}`;
+          subEdges.push({
+            id: edgeId,
+            source: sourceId,
+            target: targetId,
+            sourceHandle: event === 'failure' || event === 'false' ? 'failure' : 'source',
+            targetHandle: 'target',
+            type: 'smoothstep',
+            animated: true,
+            style: { stroke: '#94A3B8', strokeWidth: 2 },
+            data: { event, isDarkMode }
+          });
+        }
+      });
+    });
+
+    // Connect incoming edges to first sub-node
+    const firstSubNodeId = subNodes[0]?.id;
+    if (firstSubNodeId) {
+      incomingEdges.forEach(edge => {
+        const newEdge: Edge = {
+          ...edge,
+          id: `${edge.id}_to_sub`,
+          target: firstSubNodeId
+        };
+        subEdges.push(newEdge);
+      });
+    }
+
+    // Connect last sub-node to outgoing edges
+    const lastSubNodeId = subNodes[subNodes.length - 1]?.id;
+    if (lastSubNodeId) {
+      outgoingEdges.forEach(edge => {
+        const newEdge: Edge = {
+          ...edge,
+          id: `${edge.id}_from_sub`,
+          source: lastSubNodeId
+        };
+        subEdges.push(newEdge);
+      });
+    }
+
+    // Remove the original block and its edges
+    setNodes((nds) => [...nds.filter(n => n.id !== blockId), ...subNodes]);
+    setEdges((eds) => [
+      ...eds.filter(e => e.source !== blockId && e.target !== blockId),
+      ...subEdges
+    ]);
+
+    // Apply layout after a short delay
+    setTimeout(() => {
+      updateGraph(true);
+    }, 100);
+  }, [nodes, edges, availableTools, isDarkMode, setNodes, setEdges, updateGraph]);
+
+  // Create a local sub-workflow when backend is unavailable
+  const createLocalSubWorkflow = useCallback((blockId: string, prompt: string) => {
+    const blockToExpand = nodes.find(n => n.id === blockId);
+    if (!blockToExpand) return;
+
+    // Create a simple sub-workflow based on the block type and prompt
+    const blockType = blockToExpand.data.type;
+    const subWorkflow: any = { states: {} };
+
+    // Check for complex workflows mentioned in prompt
+    const promptLower = prompt.toLowerCase();
+    if (promptLower.includes('satellite') || promptLower.includes('mission') || promptLower.includes('complex')) {
+      // Create a complex nested workflow for satellite mission or similar complex scenarios
+      subWorkflow.states = {
+        'mission_init': {
+          type: 'analysis',
+          description: `Initialize mission parameters for ${blockToExpand.data.name}`,
+          transitions: { success: 'pre_flight_check' }
+        },
+        'pre_flight_check': {
+          type: 'validation',
+          description: `Validate all systems operational`,
+          transitions: { validated: 'telemetry_setup', invalid: 'abort_sequence' }
+        },
+        'telemetry_setup': {
+          type: 'tool_call',
+          description: `Configure telemetry and communication systems`,
+          tools: ['telemetry_config', 'comm_setup'],
+          transitions: { success: 'launch_sequence' }
+        },
+        'launch_sequence': {
+          type: 'parallel',
+          description: `Execute parallel launch operations`,
+          transitions: { success: 'orbit_insertion' }
+        },
+        'orbit_insertion': {
+          type: 'decision',
+          description: `Monitor and adjust orbital parameters`,
+          transitions: { success: 'mission_operations', failure: 'contingency_maneuver' }
+        },
+        'mission_operations': {
+          type: 'loop',
+          description: `Execute primary mission objectives`,
+          transitions: { success: 'data_collection', failure: 'error_recovery' }
+        },
+        'data_collection': {
+          type: 'aggregation',
+          description: `Collect and aggregate mission data`,
+          tools: ['data_collector', 'data_analyzer'],
+          transitions: { success: 'transmission' }
+        },
+        'transmission': {
+          type: 'tool_call',
+          description: `Transmit collected data to ground station`,
+          tools: ['data_transmitter'],
+          transitions: { success: 'mission_complete', failure: 'retry_transmission' }
+        },
+        'retry_transmission': {
+          type: 'loop',
+          description: `Retry data transmission with error correction`,
+          transitions: { success: 'mission_complete', failure: 'store_for_later' }
+        },
+        'contingency_maneuver': {
+          type: 'analysis',
+          description: `Calculate corrective maneuvers`,
+          transitions: { success: 'orbit_insertion' }
+        },
+        'error_recovery': {
+          type: 'analysis',
+          description: `Diagnose and recover from errors`,
+          transitions: { success: 'mission_operations' }
+        },
+        'store_for_later': {
+          type: 'transformation',
+          description: `Store data for later transmission`,
+          transitions: { success: 'mission_complete' }
+        },
+        'abort_sequence': {
+          type: 'final',
+          description: `Safely abort mission`
+        },
+        'mission_complete': {
+          type: 'final',
+          description: `Mission successfully completed`
+        }
+      };
+    } else if (blockType === 'analysis') {
+      subWorkflow.states = {
+        'gather_data': {
+          type: 'tool_call',
+          description: `Gather data for ${blockToExpand.data.name}`,
+          tools: blockToExpand.data.tools || [],
+          transitions: { success: 'analyze_data' }
+        },
+        'analyze_data': {
+          type: 'analysis',
+          description: `Analyze gathered data`,
+          transitions: { success: 'validate_results' }
+        },
+        'validate_results': {
+          type: 'validation',
+          description: `Validate analysis results`,
+          transitions: { success: 'complete', failure: 'gather_data' }
+        },
+        'complete': {
+          type: 'final',
+          description: `Complete ${blockToExpand.data.name}`
+        }
+      };
+    } else if (blockType === 'tool_call') {
+      subWorkflow.states = {
+        'prepare_input': {
+          type: 'transformation',
+          description: `Prepare input for tool execution`,
+          transitions: { success: 'execute_tool' }
+        },
+        'execute_tool': {
+          type: 'tool_call',
+          description: blockToExpand.data.description || `Execute tools`,
+          tools: blockToExpand.data.tools || [],
+          transitions: { success: 'process_output', failure: 'handle_error' }
+        },
+        'process_output': {
+          type: 'transformation',
+          description: `Process tool output`,
+          transitions: { success: 'complete' }
+        },
+        'handle_error': {
+          type: 'analysis',
+          description: `Handle execution error`,
+          transitions: { success: 'execute_tool' }
+        },
+        'complete': {
+          type: 'final',
+          description: `Complete tool execution`
+        }
+      };
+    } else if (blockType === 'decision') {
+      subWorkflow.states = {
+        'evaluate_conditions': {
+          type: 'analysis',
+          description: `Evaluate decision conditions`,
+          transitions: { success: 'check_criteria' }
+        },
+        'check_criteria': {
+          type: 'validation',
+          description: `Check decision criteria`,
+          transitions: { validated: 'positive_path', invalid: 'negative_path' }
+        },
+        'positive_path': {
+          type: 'transformation',
+          description: `Process positive decision path`,
+          transitions: { success: 'complete' }
+        },
+        'negative_path': {
+          type: 'transformation',
+          description: `Process negative decision path`,
+          transitions: { success: 'complete' }
+        },
+        'complete': {
+          type: 'final',
+          description: `Decision complete`
+        }
+      };
+    } else {
+      // Default sub-workflow structure
+      subWorkflow.states = {
+        'initialize': {
+          type: 'analysis',
+          description: `Initialize ${blockToExpand.data.name}`,
+          transitions: { success: 'process' }
+        },
+        'process': {
+          type: blockType,
+          description: blockToExpand.data.description || `Process ${blockToExpand.data.name}`,
+          tools: blockToExpand.data.tools || [],
+          transitions: { success: 'finalize' }
+        },
+        'finalize': {
+          type: 'final',
+          description: `Complete ${blockToExpand.data.name}`
+        }
+      };
+    }
+
+    // Apply the expansion
+    expandBlockIntoSubWorkflow(blockId, subWorkflow);
+  }, [nodes, expandBlockIntoSubWorkflow]);
+
+  // Import state machine from backend and convert to professional blocks
+  const importStateMachine = useCallback((machine: any, useProfessionalBlocks: boolean = true, preserveExisting: boolean = false) => {
+    if (!machine || !machine.states || !machine.edges) {
+      console.error('Invalid state machine format');
+      return;
+    }
+
+    let existingNodes: Node[] = [];
+    let existingEdges: Edge[] = [];
+
+    if (preserveExisting) {
+      // Preserve existing blocks and connections
+      existingNodes = [...nodes];
+      existingEdges = [...edges];
+    } else {
+      // Clear existing graph (only when explicitly importing new workflow)
+      setNodes([]);
+      setEdges([]);
+    }
+
+    // Create professional blocks from states
+    const newNodes: Node[] = machine.states.map((state: any, index: number) => {
+      // Use professional block type for better editing experience
+      const nodeType = useProfessionalBlocks ? 'professional' : 'agent';
+
+      // Map transitions from edges
+      const stateTransitions: Record<string, string> = {};
+      machine.edges.forEach((edge: any) => {
+        if (edge.source === state.id) {
+          stateTransitions[edge.event] = edge.target;
+        }
+      });
+
+      // Determine block type - preserve special initial/start blocks
+      let blockType = state.type || 'analysis';
+      if (state.id === 'start' || state.id === 'initial' ||
+          state.name?.toLowerCase() === 'start' ||
+          state.name?.toLowerCase() === 'initial' ||
+          state.id === machine.initial_state) {
+        // Keep as analysis type for starting blocks
+        blockType = 'analysis';
+      }
+
+      const nodeData: any = {
+        type: blockType,
+        name: state.name || state.id,
+        description: state.description || '',
+        agent_role: state.agent_role || 'Agent',
+        tools: state.tools || [],
+        transitions: stateTransitions,
+        retry_count: state.retry_count || 0,
+        timeout: state.timeout || 60,
+        enabled: true,
+        advancedMode: false,
+        isWide: false,
+        isDarkMode,
+        availableTools,
+        // Professional block callbacks
+        onUpdate: (id: string, updates: any) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, ...updates } }
+                : node
+            )
+          );
+        },
+        onDelete: (id: string) => {
+          setNodes((nds) => nds.filter((node) => node.id !== id));
+          setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+        },
+        onDuplicate: (id: string) => {
+          const nodeToDuplicate = nodes.find((n) => n.id === id);
+          if (nodeToDuplicate) {
+            const newId = uuidv4();
+            const duplicatedNode = {
+              ...nodeToDuplicate,
+              id: newId,
+              position: {
+                x: nodeToDuplicate.position.x + 50,
+                y: nodeToDuplicate.position.y + 50
+              },
+              data: {
+                ...nodeToDuplicate.data,
+                name: `${nodeToDuplicate.data.name} (Copy)`
+              }
+            };
+            setNodes((nds) => [...nds, duplicatedNode]);
+          }
+        },
+        onToggleEnabled: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
+                : node
+            )
+          );
+        },
+        onToggleAdvanced: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
+                : node
+            )
+          );
+        },
+        onToggleWide: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
+                : node
+            )
+          );
+        }
+      };
+
+      // For non-professional nodes, use simpler data
+      if (!useProfessionalBlocks) {
+        return {
+          id: state.id,
+          type: nodeType,
+          position: { x: 0, y: 0 }, // Will be laid out
+          data: {
+            label: state.name,
+            name: state.name,
+            status: 'pending',
+            nodeType: state.type,
+            task: state.task,
+            tools: state.tools,
+            toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
+            description: state.description,
+            agentRole: state.agent_role,
+            direction: layoutDirection,
+            isDarkMode
+          },
+          targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
+          sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
+        };
+      }
+
+      return {
+        id: state.id,
+        type: nodeType,
+        position: { x: 0, y: 0 }, // Will be laid out
+        data: nodeData,
+        targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
+        sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
+      };
+    });
+
+    // Create edges from transitions
+    const newEdges: Edge[] = machine.edges.map((edge: any) => ({
+      id: `${edge.source}-${edge.target}-${edge.event}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: edge.event === 'success',
+      label: edge.event !== 'success' ? edge.event : '',
+      labelStyle: { fill: '#94a3b8', fontSize: 11 },
+      labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+      style: {
+        stroke: edge.event === 'failure' ? '#ef4444' :
+               edge.event === 'retry' ? '#f59e0b' :
+               edge.event === 'success' ? '#10b981' : '#52525b',
+        strokeWidth: 2
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 20,
+        height: 20,
+        color: edge.event === 'failure' ? '#ef4444' :
+               edge.event === 'retry' ? '#f59e0b' :
+               edge.event === 'success' ? '#10b981' : '#52525b'
+      },
+    }));
+
+    // Merge with existing nodes if preserving
+    const finalNodes = preserveExisting ? [...existingNodes, ...newNodes] : newNodes;
+    const finalEdges = preserveExisting ? [...existingEdges, ...newEdges] : newEdges;
+
+    // Apply layout
+    const layouted = getLayoutedElements(finalNodes, finalEdges, layoutDirection);
+    layoutCache.current = layouted;
+    setNodes(layouted.nodes);
+    setEdges(layouted.edges);
+    setHasStateMachineStructure(true);
+    setPlanned(true);
+
+    // Fit view to show all nodes
+    setTimeout(() => fitView({ padding: 0.2, duration: 400, maxZoom: 1 }), 100);
+
+    // Show success message (you can add a toast notification here)
+    console.log(`Imported state machine with ${newNodes.length} states and ${newEdges.length} transitions`);
+  }, [layoutDirection, isDarkMode, availableTools, getLayoutedElements, fitView, setNodes, setEdges]);
+
+  // Enhance flow with AI - expand selected blocks or entire workflow
+  const enhanceFlow = useCallback(async (prompt: string, selectedNodeIds: string[]) => {
+    try {
+      // Build current state machine from graph
+      const currentMachine = buildMachineFromGraph();
+
+      // If specific blocks are selected, we'll expand them into sub-workflows
+      if (selectedNodeIds.length > 0) {
+        // For each selected block, create an expansion request
+        const selectedNodes = nodes.filter(n => selectedNodeIds.includes(n.id));
+
+        // Prepare detailed context for expansion
+        const expansionContext = selectedNodes.map(node => ({
+          id: node.id,
+          type: node.data.type,
+          name: node.data.name,
+          description: node.data.description,
+          tools: node.data.tools,
+          agent_role: node.data.agent_role
+        }));
+
+        // Create enhanced request that focuses on expanding these specific blocks
+        const enhancementRequest = {
+          task: task || "Enhance workflow",
+          prompt: `Expand the following blocks into detailed sub-workflows: ${expansionContext.map(c => c.name).join(', ')}. ${prompt}`,
+          current_machine: currentMachine,
+          selected_states: selectedNodeIds,
+          expansion_context: expansionContext,
+          tool_preferences: {
+            selected_tools: Array.from(selectedTools),
+            restrict_to_selected: selectedTools.size > 0
+          }
+        };
+
+        // Call backend to enhance the workflow
+        const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/enhance`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(enhancementRequest)
+        });
+
+        if (!res.ok) {
+          // If enhance endpoint doesn't exist, use plan endpoint with expanded context
+          const planRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              task: `Expand ${selectedNodes[0]?.data.name || 'block'} into sub-workflow: ${prompt}`,
+              tool_preferences: enhancementRequest.tool_preferences
+            })
+          });
+
+          if (planRes.ok) {
+            const data = await planRes.json();
+            if (data.machine) {
+              // Create sub-workflow from the enhanced machine
+              expandBlockIntoSubWorkflow(selectedNodeIds[0], data.machine);
+            }
+          }
+          return;
+        }
+
+        const data = await res.json();
+        const enhancedMachine = data.machine;
+
+        if (enhancedMachine) {
+          // Expand selected blocks into sub-workflows
+          if (selectedNodeIds.length === 1) {
+            expandBlockIntoSubWorkflow(selectedNodeIds[0], enhancedMachine);
+          } else {
+            // Replace entire workflow if multiple blocks selected
+            importStateMachine(enhancedMachine, true, true); // Preserve existing blocks during enhancement
+          }
+        }
+      } else {
+        // Enhance entire workflow
+        const enhancementRequest = {
+          task: task || "Enhance workflow",
+          prompt: prompt,
+          current_machine: currentMachine,
+          tool_preferences: {
+            selected_tools: Array.from(selectedTools),
+            restrict_to_selected: selectedTools.size > 0
+          }
+        };
+
+        const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/enhance`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(enhancementRequest)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.machine) {
+            importStateMachine(data.machine, true, true); // Preserve existing blocks during enhancement
+          }
+        } else {
+          // Fallback to plan
+          const planRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              task: `${task || 'Workflow'}: ${prompt}`,
+              tool_preferences: enhancementRequest.tool_preferences
+            })
+          });
+          if (planRes.ok) {
+            const data = await planRes.json();
+            if (data.machine) {
+              importStateMachine(data.machine, true, true); // Preserve existing blocks during enhancement
+            }
+          }
+        }
+      }
+
+      console.log(`Successfully enhanced workflow`);
+    } catch (e) {
+      console.error('Enhancement failed', e);
+      // Create a local expansion if backend fails
+      if (selectedNodeIds.length === 1) {
+        createLocalSubWorkflow(selectedNodeIds[0], prompt);
+      }
+    }
+  }, [task, selectedTools, buildMachineFromGraph, importStateMachine, nodes, expandBlockIntoSubWorkflow, createLocalSubWorkflow]);
+
+  const planWorkflow = useCallback(async ()=>{
+    if (!task.trim()) return;
+    try{
+      setPlanned(false);
+      const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0 } }) });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const machine = data.machine;
+      if(machine){
+        // Use the new import function to create professional blocks while preserving existing ones
+        importStateMachine(machine, true, true); // true = use professional blocks, true = preserve existing
+      }
+    }catch(e){ console.error('Plan failed', e); }
+  }, [task, selectedTools, importStateMachine]);
+
+  const runPlannedWorkflow = useCallback(async ()=>{
+    try{
+      const machine = buildMachineFromGraph();
+      const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, machine, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0 } }) });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setExecutionId(data.exec_id);
+      setIsRunning(true);
+      setTimeout(()=>connectWebSocket(data.exec_id, false), 100);
+    }catch(e){ console.error('Run failed', e); }
+  }, [buildMachineFromGraph, selectedTools, task, connectWebSocket]);
+
   // Memoized callbacks for ChatbotOutput to prevent re-renders
   const handleAgentSelect = useCallback((agentId: string | null) => {
     setSelectedAgent(agentId);
@@ -1498,16 +2792,79 @@ const FlowSwarmInterface: React.FC = () => {
   const stopExecution = () => {
     setIsRunning(false);
     setActivelyStreamingAgents(new Set());
-    setHasStateMachineStructure(false);
+    setCurrentExecutingNode(null);
+    setNextExecutingNode(null);
+    setExecutionActions(new Map());
+    setIsExecuting(false);
+    // ⚠️ DON'T clear hasStateMachineStructure - preserve user's blocks!
+    // setHasStateMachineStructure(false);  // ❌ This was causing blocks to be cleared
+
+    // Clear active execution status but KEEP execution history
+    setNodes(nodes => nodes.map(node => ({
+      ...node,
+      data: {
+        ...node.data,
+        // Change running to failed (stopped), keep completed as is
+        status: node.data.status === 'running' ? 'failed' : node.data.status,
+        isExecuting: false,
+        isDimmed: false,
+        currentAction: undefined,
+        currentActionDetail: undefined,
+        activeTools: [],
+        // Keep execution history markers!
+        wasExecuted: node.data.wasExecuted,
+        executionOrder: node.data.executionOrder,
+        executionDuration: node.data.executionDuration,
+        executionDurationText: node.data.executionDurationText,
+        executedTools: node.data.executedTools
+      }
+    })));
 
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-    
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
     }
+  };
+
+  const clearExecutionHistory = () => {
+    // Clear execution history but keep the blocks
+    setExecutionHistory(new Map());
+    setExecutionOrderCounter(0);
+    setExecutionActions(new Map());
+
+    // Reset node execution states but keep the blocks
+    setNodes(nodes => nodes.map(node => ({
+      ...node,
+      data: {
+        ...node.data,
+        status: 'pending',
+        wasExecuted: false,
+        executionOrder: undefined,
+        executionDuration: undefined,
+        executionDurationText: undefined,
+        executedTools: undefined,
+        currentAction: undefined,
+        currentActionDetail: undefined,
+        activeTools: [],
+        isDimmed: false
+      }
+    })));
+
+    // Reset edge styles
+    setEdges(edges => edges.map(edge => ({
+      ...edge,
+      animated: false,
+      className: '',
+      style: {
+        ...edge.style,
+        stroke: '#52525b',
+        strokeWidth: 2,
+      }
+    })));
   };
 
   const resetView = () => {
@@ -1520,6 +2877,7 @@ const FlowSwarmInterface: React.FC = () => {
     lastLayoutedAgentIds.current.clear();
     setActivelyStreamingAgents(new Set());
     setHasStateMachineStructure(false);
+    setPlanned(false);
   };
   
   const softReset = () => {
@@ -1678,7 +3036,7 @@ const FlowSwarmInterface: React.FC = () => {
   const selectedAgentData = selectedAgent ? agents.get(selectedAgent) : null;
 
   return (
-    <div className={`flow-swarm-container ${isDarkMode ? 'dark-mode' : 'light-mode'}`}>
+    <div className={`flow-swarm-container ${isDarkMode ? 'dark-mode' : 'light-mode'} ${isExecuting ? 'execution-mode' : ''}`}>
       {/* Tools Hub Modal */}
       {showToolsHub && (
         <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={() => setShowToolsHub(false)}>
@@ -1932,13 +3290,127 @@ const FlowSwarmInterface: React.FC = () => {
             <span>Unknown tools: <strong>{toolPrefs.unknown.join(', ')}</strong></span>
           </div>
         )}
+
         {/* React Flow Graph */}
-        <div className="flow-graph-panel" ref={reactFlowWrapper}>
+        <div className="flow-graph-panel" ref={reactFlowWrapper} onDrop={(event)=>{
+          event.preventDefault();
+          if (!editMode) return;
+
+          // Get block type and optional metadata
+          const blockType = event.dataTransfer.getData('application/reactflow');
+          const jsonData = event.dataTransfer.getData('application/json');
+
+          if (!blockType) return;
+
+          const bounds = reactFlowWrapper.current?.getBoundingClientRect();
+          const pos = project({ x: event.clientX - (bounds?.left || 0), y: event.clientY - (bounds?.top || 0) });
+
+          // Check if this is from the professional toolbar
+          let parsedData: any = {};
+          try {
+            if (jsonData) {
+              parsedData = JSON.parse(jsonData);
+            }
+          } catch (e) {
+            // Fallback to simple type
+          }
+
+          // Use professional block if from new toolbar
+          if (parsedData.useEnhanced || jsonData) {
+            addProfessionalBlock(blockType, pos);
+          } else {
+            // Legacy block creation
+            const id = `node_${Math.random().toString(36).slice(2,8)}`;
+            const newNode: Node = {
+              id,
+              type: 'agent',
+              position: pos,
+              data: { label: blockType, name: blockType, status:'pending', nodeType: blockType as any, direction: layoutDirection, toolsPlanned: [], isDarkMode },
+              targetPosition: layoutDirection==='LR'? Position.Left: Position.Top,
+              sourcePosition: layoutDirection==='LR'? Position.Right: Position.Bottom,
+            };
+            setNodes(nds=>nds.concat(newNode));
+          }
+        }} onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}>
           <ReactFlow
+            style={{ background: isDarkMode ? '#0a0f1a' : '#ffffff' }}
             nodes={nodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onConnect={async (connection: Connection) => {
+              if (!connection.source || !connection.target) return;
+
+              // Determine event type based on source handle
+              let ev = 'success';
+              if (connection.sourceHandle === 'failure' || connection.sourceHandle === 'false') {
+                ev = 'failure';
+              } else if (connection.sourceHandle === 'retry') {
+                ev = 'retry';
+              } else if (connection.sourceHandle && connection.sourceHandle !== 'source' && connection.sourceHandle !== 'true') {
+                ev = connection.sourceHandle;
+              }
+
+              // Check for duplicate edges
+              const existingEdge = edges.find(
+                e => e.source === connection.source &&
+                     e.target === connection.target &&
+                     (e as any).label === ev
+              );
+              if (existingEdge) {
+                console.warn('Edge already exists');
+                return;
+              }
+
+              // Create new edge
+              const newEdge: Edge = {
+                id: `${connection.source}-${connection.target}-${ev}`,
+                source: connection.source,
+                target: connection.target,
+                sourceHandle: connection.sourceHandle,
+                targetHandle: connection.targetHandle,
+                type: 'smoothstep',
+                animated: ev === 'success',
+                label: ev !== 'success' ? ev : '',
+                labelStyle: { fill: '#94a3b8', fontSize: 11 },
+                labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+                style: {
+                  stroke: ev === 'failure' ? '#ef4444' :
+                         ev === 'retry' ? '#f59e0b' :
+                         '#10b981',
+                  strokeWidth: 2
+                },
+                markerEnd: {
+                  type: MarkerType.ArrowClosed,
+                  width: 20,
+                  height: 20,
+                  color: ev === 'failure' ? '#ef4444' :
+                         ev === 'retry' ? '#f59e0b' :
+                         '#10b981'
+                },
+              };
+
+              // Update edges locally first
+              setEdges(eds => [...eds, newEdge]);
+
+              // Update backend if execution is running
+              if (executionId) {
+                try {
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ edges: [{ source: connection.source, target: connection.target, event: ev }] })
+                  });
+                } catch (e) {
+                  console.error('Failed to update backend graph', e);
+                }
+              }
+            }}
+            onEdgeClick={(e, edge) => {
+              if (!editMode) return;
+              e.stopPropagation();
+              setEdgeEdit({ id: edge.id, source: edge.source, target: edge.target, event: (edge as any).label || 'success' });
+            }}
             onNodeClick={onNodeClick}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
@@ -1948,7 +3420,7 @@ const FlowSwarmInterface: React.FC = () => {
             minZoom={0.2}
             maxZoom={1.5}
             nodesDraggable={true}
-            nodesConnectable={false}
+            nodesConnectable={editMode}
             elementsSelectable={true}
             panOnScroll={true}
             panOnDrag={true}
@@ -1956,8 +3428,17 @@ const FlowSwarmInterface: React.FC = () => {
             snapToGrid={true}
             snapGrid={[15, 15]}
             proOptions={{ hideAttribution: true }}
-            deleteKeyCode={null}
-            selectionKeyCode={null}
+            deleteKeyCode={['Delete','Backspace']}
+            onEdgeUpdate={async (oldEdge, newCon)=>{
+              if (!editMode) return;
+              const ev = (oldEdge as any).label || 'success';
+              setEdges(prev=>prev.filter(e=>e.id!==oldEdge.id).concat([{ ...oldEdge, id: `${newCon.source}-${newCon.target}-${ev}`, source: newCon.source!, target: newCon.target!, label: ev }] as any));
+              if (executionId){
+                try{
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges:[{ source: oldEdge.source, target: oldEdge.target, event: ev }], edges:[{ source: newCon.source, target: newCon.target, event: ev }] }) });
+                }catch(e){ console.error('Edge update failed', e); }
+              }
+            }}
             onNodeDragStart={() => {
               preventRerender.current = true;
               setIsInteracting(true);
@@ -1977,6 +3458,25 @@ const FlowSwarmInterface: React.FC = () => {
             defaultViewport={{ x: 0, y: 0, zoom: 0.75 }}
             onlyRenderVisibleElements
             edgeUpdaterRadius={10}
+            onNodesDelete={async (nds) => {
+              if (executionId && nds?.length) {
+                try {
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_states: nds.map(n=>n.id) })
+                  });
+                } catch (e) { console.error('Remove states failed', e); }
+              }
+            }}
+            onEdgesDelete={async (eds) => {
+              if (executionId && eds?.length) {
+                try {
+                  const payload = { remove_edges: eds.map((e:any)=>({ source:e.source, target:e.target, event: (e.label && typeof e.label==='string' && e.label.length>0)? e.label : 'success' })) };
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+                  });
+                } catch (e) { console.error('Remove edges failed', e); }
+              }
+            }}
             noDragClassName="nodrag"
             noPanClassName="nopan"
             defaultEdgeOptions={{
@@ -2041,8 +3541,10 @@ const FlowSwarmInterface: React.FC = () => {
               variant={showGrid ? BackgroundVariant.Lines : BackgroundVariant.Dots}
               gap={showGrid ? 16 : 24}
               size={showGrid ? 1.25 : 1.5}
-              color={isDarkMode ? '#334155' : '#cbd5e1'}
+              color={isDarkMode ? '#334155' : '#e5e7eb'}
             />
+            <Controls showInteractive={true} position="bottom-left" />
+            {showMinimap && <MiniMap position="bottom-right" pannable zoomable style={{ background: isDarkMode? '#0b1220':'#f8fafc' }} />}
             {/* Parallel Group Overlay with ribbons, summary, and tooltip */}
             <div style={{ position:'absolute', inset:0, pointerEvents:'auto', zIndex:0 }}>
               {(() => {
@@ -2213,7 +3715,30 @@ const FlowSwarmInterface: React.FC = () => {
               </div>
             </div>
           )}
-            <Panel position="top-left">
+            {/* Professional Toolbar */}
+            <WorkflowToolbar
+              onAddBlock={addProfessionalBlock}
+              onArrangeBlocks={() => updateGraph(true)}
+              onRunWorkflow={runPlannedWorkflow}
+              onStopWorkflow={() => setIsRunning(false)}
+              onClearHistory={clearExecutionHistory}
+              onZoomIn={() => zoomIn()}
+              onZoomOut={() => zoomOut()}
+              onFitView={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })}
+              isRunning={isRunning}
+              hasExecutionHistory={executionHistory.size > 0}
+              availableTools={availableTools}
+              selectedTools={selectedTools}
+              onToolsChange={setSelectedTools}
+              onEnhanceFlow={enhanceFlow}
+              selectedNodes={nodes.filter(n => n.selected)}
+              onImportTemplate={(template) => {
+                // Import the template's state machine
+                importStateMachine(template.machine, true);
+              }}
+            />
+
+            <Panel position="top-left" style={{ top: '80px' }}>
               <div className="panel-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <button onClick={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })} className="panel-button">
                   Fit View
@@ -2301,17 +3826,37 @@ const FlowSwarmInterface: React.FC = () => {
                   title="Next (→)"
                 >Next</button>
 
-                <button
-                  className={`panel-button ${highlightPath ? 'active' : ''}`}
-                  onClick={() => {
-                    preventRerender.current = true;
-                    setHighlightPath(!highlightPath);
-                    setTimeout(() => { preventRerender.current = false; }, 100);
-                  }}
-                  title="Highlight Active Path"
-                >
-                  Path: {highlightPath ? 'On' : 'Off'}
-                </button>
+              <button
+                className={`panel-button ${highlightPath ? 'active' : ''}`}
+                onClick={() => {
+                  preventRerender.current = true;
+                  setHighlightPath(!highlightPath);
+                  setTimeout(() => { preventRerender.current = false; }, 100);
+                }}
+                title="Highlight Active Path"
+              >
+                Path: {highlightPath ? 'On' : 'Off'}
+              </button>
+
+              {/* Rerun from selected node */}
+              <button
+                className="panel-button"
+                disabled={!selectedAgent || !executionId}
+                onClick={rerunFromSelected}
+                title="Rerun from the selected node"
+              >
+                Rerun From Here
+              </button>
+
+              {/* Add agent and connect, then rerun */}
+              <button
+                className="panel-button"
+                disabled={!selectedAgent || !executionId}
+                onClick={addAgentAndRerun}
+                title="Add an agent and connect from selected, then rerun"
+              >
+                Add Agent + Rerun
+              </button>
 
                 {/* Collapse / Expand for selected parallel */}
                 {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || (n.data as any)?.nodeType === 'parallel')) && (
@@ -2345,11 +3890,271 @@ const FlowSwarmInterface: React.FC = () => {
               </div>
             </Panel>
 
+            {/* Import State Machine Dialog */}
+            {showImportDialog && (
+              <div style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0,0,0,0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 9999
+              }}>
+                <div style={{
+                  background: isDarkMode ? '#1e293b' : 'white',
+                  borderRadius: 12,
+                  padding: 24,
+                  width: '90%',
+                  maxWidth: 800,
+                  maxHeight: '80vh',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+                }}>
+                  <h3 style={{
+                    margin: '0 0 16px 0',
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: isDarkMode ? '#e5e7eb' : '#111827'
+                  }}>
+                    Import State Machine
+                  </h3>
+
+                  <p style={{
+                    margin: '0 0 16px 0',
+                    fontSize: 14,
+                    color: isDarkMode ? '#9ca3af' : '#6b7280'
+                  }}>
+                    Paste your state machine JSON from the backend. The structure should include states and edges arrays.
+                  </p>
+
+                  <textarea
+                    value={importJsonText}
+                    onChange={(e) => setImportJsonText(e.target.value)}
+                    placeholder={`{
+  "name": "Dynamic Workflow",
+  "initial_state": "initialization",
+  "states": [
+    {
+      "id": "state1",
+      "name": "State Name",
+      "type": "analysis",
+      "description": "Description",
+      "agent_role": "Role",
+      "tools": ["tool1", "tool2"],
+      "transitions": {...}
+    }
+  ],
+  "edges": [
+    {
+      "source": "state1",
+      "target": "state2",
+      "event": "success"
+    }
+  ]
+}`}
+                    style={{
+                      flex: 1,
+                      width: '100%',
+                      minHeight: 300,
+                      padding: 12,
+                      borderRadius: 8,
+                      border: `1px solid ${isDarkMode ? '#475569' : '#e5e7eb'}`,
+                      background: isDarkMode ? '#0f172a' : '#f9fafb',
+                      color: isDarkMode ? '#e5e7eb' : '#111827',
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      resize: 'vertical'
+                    }}
+                  />
+
+                  <div style={{
+                    display: 'flex',
+                    gap: 8,
+                    marginTop: 16,
+                    justifyContent: 'flex-end'
+                  }}>
+                    <button
+                      onClick={() => {
+                        setShowImportDialog(false);
+                        setImportJsonText('');
+                      }}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 6,
+                        border: `1px solid ${isDarkMode ? '#475569' : '#e5e7eb'}`,
+                        background: 'transparent',
+                        color: isDarkMode ? '#e5e7eb' : '#374151',
+                        cursor: 'pointer',
+                        fontSize: 14
+                      }}
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        try {
+                          const machine = JSON.parse(importJsonText);
+                          importStateMachine(machine, true);
+                          setShowImportDialog(false);
+                          setImportJsonText('');
+                        } catch (e) {
+                          alert('Invalid JSON format. Please check your input.');
+                          console.error('JSON parse error:', e);
+                        }
+                      }}
+                      disabled={!importJsonText.trim()}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 6,
+                        background: '#3b82f6',
+                        color: 'white',
+                        border: 'none',
+                        cursor: importJsonText.trim() ? 'pointer' : 'not-allowed',
+                        opacity: importJsonText.trim() ? 1 : 0.5,
+                        fontSize: 14
+                      }}
+                    >
+                      Import as Professional Blocks
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        try {
+                          const machine = JSON.parse(importJsonText);
+                          importStateMachine(machine, false); // Import as regular blocks
+                          setShowImportDialog(false);
+                          setImportJsonText('');
+                        } catch (e) {
+                          alert('Invalid JSON format. Please check your input.');
+                          console.error('JSON parse error:', e);
+                        }
+                      }}
+                      disabled={!importJsonText.trim()}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 6,
+                        background: '#10b981',
+                        color: 'white',
+                        border: 'none',
+                        cursor: importJsonText.trim() ? 'pointer' : 'not-allowed',
+                        opacity: importJsonText.trim() ? 1 : 0.5,
+                        fontSize: 14
+                      }}
+                    >
+                      Import as Simple Blocks
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </ReactFlow>
         </div>
 
         {/* Chatbot Output Panel */}
         <div className="flow-output-panel" style={{ width: `${outputPanelWidth}px` }}>
+
+          {/* Node Editor (when in edit mode and a node is selected) */}
+          {editMode && selectedAgent && (()=>{
+            const n = nodes.find(nn=>nn.id===selectedAgent);
+            if (!n) return null;
+            const d: any = n.data || {};
+            return (
+              <div style={{ border: `1px solid ${isDarkMode? '#334155':'#e2e8f0'}`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Block Settings</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
+                  <label>
+                    <div className="label">ID</div>
+                    <input className="task-input" value={n.id} disabled />
+                  </label>
+                  <label>
+                    <div className="label">Name</div>
+                    <input className="task-input" defaultValue={d.name || ''} onBlur={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, name:e.target.value, label:e.target.value}}:x))} />
+                  </label>
+                  <label>
+                    <div className="label">Type</div>
+                    <select className="task-input" defaultValue={d.nodeType || 'analysis'} onChange={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, nodeType:e.target.value}}:x))}>
+                      <option value="analysis">analysis</option>
+                      <option value="tool_call">tool_call</option>
+                      <option value="decision">decision</option>
+                      <option value="parallel">parallel</option>
+                      <option value="final">final</option>
+                    </select>
+                  </label>
+                  <label>
+                    <div className="label">Agent Role</div>
+                    <input className="task-input" defaultValue={d.agentRole || ''} onBlur={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, agentRole:e.target.value}}:x))} />
+                  </label>
+                  <label>
+                    <div className="label">Description/Prompt</div>
+                    <textarea className="task-input" defaultValue={d.description || ''} rows={4} onBlur={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, description:e.target.value}}:x))} />
+                  </label>
+                  <div>
+                    <div className="label">Tools</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:6, maxHeight: 120, overflow:'auto', border: `1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding: 6, borderRadius: 6 }}>
+                      {availableTools.map(t => {
+                        const checked = Array.isArray(d.toolsPlanned) ? d.toolsPlanned.includes(t) : false;
+                        return (
+                          <label key={t} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                            <input type="checkbox" checked={checked} onChange={(e)=>{
+                              setNodes(prev=>prev.map(x=>{
+                                if (x.id!==n.id) return x;
+                                const curr = new Set<string>(Array.isArray((x.data as any)?.toolsPlanned)?(x.data as any).toolsPlanned:[]);
+                                if (e.target.checked) curr.add(t); else curr.delete(t);
+                                return { ...x, data:{...x.data, toolsPlanned: Array.from(curr)} };
+                              }));
+                            }} />
+                            <span>{t}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', gap:8, justifyContent:'space-between' }}>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button className="panel-button" onClick={async()=>{
+                        if (!executionId) return;
+                        // Set as initial state
+                        try {
+                          await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set_initial_state: n.id })
+                          });
+                        } catch (e) { console.error('Failed to set initial state', e); }
+                      }}>Set Initial</button>
+                      <button className="panel-button" onClick={async()=>{
+                        if (!executionId) return;
+                        try {
+                          await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_states: [n.id] }) });
+                          setNodes(prev=>prev.filter(x=>x.id!==n.id));
+                          setEdges(prev=>prev.filter(e=>e.source!==n.id && e.target!==n.id));
+                          setSelectedAgent(null);
+                        } catch (e) { console.error('Failed to delete node', e); }
+                      }}>Delete</button>
+                    </div>
+                    <div>
+                      <button className="panel-button" onClick={async()=>{
+                        if (!executionId) return;
+                        try {
+                          const node = nodes.find(nn=>nn.id===n.id);
+                          const data: any = node?.data || {};
+                          const patch = { states: [{ id: n.id, name: data.name || data.label || n.id, type: data.nodeType || 'analysis', description: data.description, agent_role: data.agentRole, tools: Array.isArray(data.toolsPlanned)?data.toolsPlanned:[] }] };
+                          await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
+                          });
+                        } catch (e) { console.error('Failed to save node', e); }
+                    }}>Save Block</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           <ChatbotOutput
             agents={stableAgents}
             nodes={nodes}
@@ -2357,6 +4162,105 @@ const FlowSwarmInterface: React.FC = () => {
             onAgentSelect={handleAgentSelect}
             onNodeFocus={handleNodeFocus}
           />
+
+          {/* Add Node Modal */}
+          {showAddNode && (
+            <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setShowAddNode(false)}>
+              <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:480, margin:'10vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
+                <div style={{ fontWeight:600, marginBottom:8 }}>Add Block</div>
+                <div style={{ display:'grid', gap:8 }}>
+                  <input className="task-input" placeholder="id (slug_case)" value={nodeDraft.id} onChange={e=>setNodeDraft({...nodeDraft, id:e.target.value})} />
+                  <input className="task-input" placeholder="name" value={nodeDraft.name} onChange={e=>setNodeDraft({...nodeDraft, name:e.target.value})} />
+                  <select className="task-input" value={nodeDraft.type} onChange={e=>setNodeDraft({...nodeDraft, type: e.target.value as any})}>
+                    <option value="analysis">analysis</option>
+                    <option value="tool_call">tool_call</option>
+                    <option value="decision">decision</option>
+                    <option value="parallel">parallel</option>
+                    <option value="final">final</option>
+                  </select>
+                  <input className="task-input" placeholder="agent role (optional)" value={nodeDraft.agent_role} onChange={e=>setNodeDraft({...nodeDraft, agent_role:e.target.value})} />
+                  <textarea className="task-input" rows={3} placeholder="description/prompt" value={nodeDraft.description} onChange={e=>setNodeDraft({...nodeDraft, description:e.target.value})} />
+                  <div style={{ border:`1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding:6, borderRadius:6, maxHeight:120, overflow:'auto' }}>
+                    <div style={{ fontSize:12, marginBottom:4 }}>Tools</div>
+                    {availableTools.map(t=>{
+                      const checked = nodeDraft.tools.includes(t);
+                      return (
+                        <label key={t} style={{ display:'inline-flex', alignItems:'center', gap:4, marginRight:8, marginBottom:6 }}>
+                          <input type="checkbox" checked={checked} onChange={(e)=>{
+                            const set = new Set(nodeDraft.tools);
+                            if (e.target.checked) set.add(t); else set.delete(t);
+                            setNodeDraft({...nodeDraft, tools: Array.from(set)});
+                          }} />
+                          <span>{t}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                    <button className="panel-button" onClick={()=>setShowAddNode(false)}>Cancel</button>
+                    <button className="panel-button" onClick={async()=>{
+                      if (!executionId) return;
+                      if (!nodeDraft.id || !nodeDraft.name) return;
+                      try {
+                        const patch: any = { states: [{ id: nodeDraft.id, name: nodeDraft.name, type: nodeDraft.type, description: nodeDraft.description, agent_role: nodeDraft.agent_role, tools: nodeDraft.tools }] };
+                        await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) });
+                        // Update UI
+                        const newNode: Node = {
+                          id: nodeDraft.id,
+                          type: 'agent',
+                          position: { x: 100, y: 100 },
+                          data: { label: nodeDraft.name, name: nodeDraft.name, status:'pending', nodeType: nodeDraft.type, task: nodeDraft.description, tools: nodeDraft.tools, toolsPlanned: nodeDraft.tools, description: nodeDraft.description, agentRole: nodeDraft.agent_role, direction: layoutDirection },
+                          targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
+                          sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
+                        };
+                        setNodes(prev=>[...prev, newNode]);
+                        setShowAddNode(false);
+                      } catch (e) { console.error('Failed to add block', e); }
+                    }}>Create</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Edge Editor */}
+          {editMode && edgeEdit && (
+            <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setEdgeEdit(null)}>
+              <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:420, margin:'15vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
+                <div style={{ fontWeight:600, marginBottom:8 }}>Edit Connection</div>
+                <div style={{ fontSize:12, marginBottom:8 }}>From <b>{edgeEdit.source}</b> to <b>{edgeEdit.target}</b></div>
+                <label>
+                  <div className="label">Event</div>
+                  <input className="task-input" defaultValue={edgeEdit.event || 'success'} onBlur={(e)=>setEdgeEdit({...edgeEdit, event: e.target.value})} />
+                </label>
+                <div style={{ display:'flex', gap:8, justifyContent:'space-between', marginTop:12 }}>
+                  <button className="panel-button" onClick={async()=>{
+                    if (!executionId) return;
+                    try {
+                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
+                      setEdges(prev=>prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target && ((e as any).label || 'success')===edgeEdit.event)));
+                      setEdgeEdit(null);
+                    } catch (e) { console.error('Failed to delete edge', e); }
+                  }}>Delete</button>
+                  <span />
+                  <button className="panel-button" onClick={()=>setEdgeEdit(null)}>Cancel</button>
+                  <button className="panel-button" onClick={async()=>{
+                    if (!executionId || !edgeEdit) return;
+                    try {
+                      // Change event: remove old then add new
+                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }], edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
+                      setEdges(prev=>{
+                        const rest = prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target));
+                        const newE: Edge = { id: `${edgeEdit.source}-${edgeEdit.target}-${edgeEdit.event}`, source: edgeEdit.source, target: edgeEdit.target, type:'smoothstep', animated:false, label: edgeEdit.event && edgeEdit.event!=='success'? edgeEdit.event : '', labelStyle:{ fill:'#94a3b8', fontSize:11 }, labelBgStyle:{ fill:'#1e293b', fillOpacity:0.8 }, style:{ stroke:'#52525b', strokeWidth:1.5 }, markerEnd:{ type: MarkerType.ArrowClosed, width:20, height:20, color:'#52525b' } };
+                        return [...rest, newE];
+                      });
+                      setEdgeEdit(null);
+                    } catch (e) { console.error('Failed to update edge', e); }
+                  }}>Save</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

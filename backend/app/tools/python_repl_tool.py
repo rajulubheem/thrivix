@@ -107,6 +107,11 @@ class PythonReplTool:
             
             # Allow safe imports
             '__import__': self._safe_import,
+
+            # Critical Python internals for class/function creation
+            '__build_class__': __builtins__['__build_class__'],
+            '__name__': '__main__',
+            '__doc__': None,
         }
 
     def _safe_import(self, name, *args, **kwargs):

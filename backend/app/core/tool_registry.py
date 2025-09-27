@@ -100,19 +100,27 @@ class ToolRegistry:
     
     def _initialize_tools(self):
         """Initialize all available tools"""
-        
+
         if not STRANDS_TOOLS_AVAILABLE:
             logger.warning("Strands tools not available. Install with: pip install strands-agents-tools")
             return
-        
+
+        # Import correct tool schemas
+        try:
+            from app.services.strands_tool_definitions import STRANDS_TOOL_SCHEMAS
+            logger.info("✅ Loaded correct tool schemas for parameter override")
+        except ImportError:
+            STRANDS_TOOL_SCHEMAS = {}
+            logger.warning("❌ Could not load correct tool schemas")
+
         # Core file operations
-        self.register_tool("file_read", file_read, 
+        self.register_tool("file_read", file_read,
             "Read files with syntax highlighting and search capabilities")
         self.register_tool("file_write", file_write,
             "Write content to files with safety checks")
         self.register_tool("editor", editor,
             "Advanced file editing with pattern replacement")
-        
+
         # Execution tools (check platform compatibility)
         if os.name != 'nt':  # Not Windows
             self.register_tool("shell", shell,
@@ -189,9 +197,43 @@ class ToolRegistry:
             "Create architecture and UML diagrams")
         self.register_tool("agent_graph", agent_graph,
             "Visualize agent relationships")
-        
+
+        # CRITICAL FIX: Override all tool schemas with correct parameters
+        self._fix_tool_schemas(STRANDS_TOOL_SCHEMAS)
+
         logger.info(f"Initialized {len(self.tools)} tools")
-    
+
+    def _fix_tool_schemas(self, schemas_dict: dict):
+        """Override strands tool schemas with correct parameter definitions"""
+        for tool_name, tool_func in self.tools.items():
+            if tool_name in schemas_dict:
+                correct_schema = schemas_dict[tool_name]
+                try:
+                    # The strands tools use different attribute names
+                    # Try common schema attribute names
+                    if hasattr(tool_func, 'input_schema'):
+                        tool_func.input_schema = correct_schema.get('parameters', {})
+                        logger.info(f"✅ Fixed input_schema for {tool_name}")
+                    elif hasattr(tool_func, 'schema'):
+                        tool_func.schema = correct_schema
+                        logger.info(f"✅ Fixed schema for {tool_name}")
+                    elif hasattr(tool_func, 'parameters'):
+                        tool_func.parameters = correct_schema.get('parameters', {})
+                        logger.info(f"✅ Fixed parameters for {tool_name}")
+
+                    # For strands tools, we also need to override the function call schema
+                    # that gets sent to OpenAI. This is typically in __doc__ or special attributes
+                    if hasattr(tool_func, '__tool_schema__'):
+                        tool_func.__tool_schema__ = correct_schema
+                        logger.info(f"✅ Fixed __tool_schema__ for {tool_name}")
+                    elif hasattr(tool_func, '__annotations__'):
+                        # Try to inject correct schema into annotations
+                        tool_func.__correct_schema__ = correct_schema
+                        logger.info(f"✅ Added __correct_schema__ for {tool_name}")
+
+                except Exception as e:
+                    logger.warning(f"❌ Failed to fix schema for {tool_name}: {e}")
+
     def register_tool(self, name: str, tool: Any, description: str):
         """Register a tool with the registry"""
         if tool is not None:

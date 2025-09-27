@@ -77,6 +77,23 @@ class StreamingResponseV2(BaseModel):
     message: str
 
 
+class PlanRequest(BaseModel):
+    task: str
+    tool_preferences: Optional[Dict[str, Any]] = None
+
+
+class PlanResponse(BaseModel):
+    machine: Dict[str, Any]
+
+
+class ExecuteWithMachineRequest(BaseModel):
+    task: str
+    machine: Dict[str, Any]
+    execution_mode: ExecutionMode = ExecutionMode.DYNAMIC
+    max_parallel: int = Field(default=5, ge=1, le=20)
+    tool_preferences: Optional[Dict[str, Any]] = None
+
+
 # Store active executions with background tasks
 active_executions: Dict[str, Dict[str, Any]] = {}
 background_tasks: Dict[str, asyncio.Task] = {}
@@ -531,3 +548,115 @@ async def submit_state_machine_decision(exec_id: str, payload: Dict[str, Any]):
 
     ok = coordinator.submit_decision(exec_id, state_id, event)
     return {"success": ok}
+
+
+@router.post("/stream/state-machine/{exec_id}/rerun_from")
+async def rerun_state_machine_from(exec_id: str, payload: Dict[str, Any]):
+    """Rerun an existing state machine execution from a specific state.
+    Optionally accepts a graph_patch with states/edges to merge before rerun.
+    """
+    start_state_id = payload.get("start_state_id")
+    graph_patch = payload.get("graph_patch") or None
+    if not start_state_id:
+        return {"success": False, "message": "start_state_id is required"}
+
+    exec_info = active_executions.get(exec_id)
+    if not exec_info:
+        return {"success": False, "message": "Execution not found"}
+
+    coordinator = exec_info.get("coordinator")
+    if not coordinator:
+        return {"success": False, "message": "Coordinator not found for execution"}
+
+    async def do_rerun():
+        try:
+            await coordinator.rerun_from(exec_id, start_state_id, graph_patch)
+        except Exception as e:
+            logger.error(f"Rerun error ({exec_id}): {e}")
+            hub = get_event_hub()
+            await hub.connect()
+            await hub.publish_control(ControlFrame(
+                exec_id=exec_id,
+                type="error",
+                payload={"error": f"rerun_failed: {str(e)}"}
+            ))
+
+    # Fire and forget in background so HTTP returns immediately
+    task = asyncio.create_task(do_rerun())
+    background_tasks[exec_id] = task
+    return {"success": True}
+
+
+@router.post("/stream/state-machine/{exec_id}/update_graph")
+async def update_state_machine_graph(exec_id: str, payload: Dict[str, Any]):
+    """Patch/extend the current graph for an existing execution and broadcast update."""
+    graph_patch = payload or {}
+    exec_info = active_executions.get(exec_id)
+    if not exec_info:
+        return {"success": False, "message": "Execution not found"}
+    coordinator = exec_info.get("coordinator")
+    if not coordinator:
+        return {"success": False, "message": "Coordinator not found for execution"}
+    try:
+        updated = await coordinator.update_graph(exec_id, graph_patch)
+        return {"success": True, "machine": updated}
+    except Exception as e:
+        logger.error(f"Update graph error ({exec_id}): {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/stream/state-machine/plan", response_model=PlanResponse)
+async def plan_state_machine(request: PlanRequest):
+    """Generate a state machine (plan-only) and return it without executing."""
+    from app.services.ai_state_machine_coordinator import AIStateMachineCoordinator
+    coordinator = AIStateMachineCoordinator(config={
+        "tool_preferences": request.tool_preferences or {}
+    })
+    machine = await coordinator.analyze_and_create_state_machine(request.task)
+    return PlanResponse(machine=machine)
+
+
+@router.post("/stream/state-machine/execute")
+async def execute_with_machine(request: ExecuteWithMachineRequest):
+    """Execute a provided, user-edited state machine graph."""
+    from app.services.ai_state_machine_coordinator import AIStateMachineCoordinator
+    exec_id = str(uuid.uuid4())
+
+    # Store execution info
+    active_executions[exec_id] = {
+        "exec_id": exec_id,
+        "task": request.task,
+        "type": "state_machine",
+        "status": "running",
+        "created_at": None
+    }
+
+    coordinator = AIStateMachineCoordinator(config={
+        "max_parallel": request.max_parallel,
+        "tool_preferences": request.tool_preferences or {}
+    })
+    active_executions[exec_id]["coordinator"] = coordinator
+
+    async def run_exec():
+        try:
+            hub = get_event_hub()
+            await hub.connect()
+            await coordinator.execute(task=request.task, exec_id=exec_id, machine_override=request.machine)
+        except Exception as e:
+            logger.error(f"Execute-with-machine error: {e}")
+            await hub.publish_control(ControlFrame(exec_id=exec_id, type="error", payload={"error": str(e)}))
+        finally:
+            if exec_id in background_tasks:
+                del background_tasks[exec_id]
+            if exec_id in active_executions:
+                active_executions[exec_id]["status"] = "completed"
+
+    task = asyncio.create_task(run_exec())
+    background_tasks[exec_id] = task
+
+    return {
+        "exec_id": exec_id,
+        "websocket_url": f"/api/v1/ws/{exec_id}",
+        "status": "running",
+        "message": "Execution started with provided machine"
+    }
