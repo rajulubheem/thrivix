@@ -1,0 +1,693 @@
+/* Clean Swarm Dashboard - Simple, Functional, Beautiful */
+
+/* Force light theme for this component */
+.clean-swarm-dashboard[data-theme="light"],
+.clean-swarm-dashboard {
+  width: 100vw;
+  height: 100vh;
+  background: #f9fafb !important;
+  color: #1a1a1a !important;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --text-primary: #1a1a1a !important;
+  --text-secondary: #4b5563 !important;
+  --bg-primary: white !important;
+  --bg-secondary: #f9fafb !important;
+  --border-color: #e5e7eb !important;
+}
+
+/* Header - Removed to save space */
+
+/* Main Content */
+.dashboard-content {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 24px;
+  padding: 24px;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.dashboard-content.no-header {
+  padding-top: 16px;
+}
+
+/* Agents Section */
+.agents-section {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e5e7eb;
+}
+
+.agents-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 16px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.agents-section h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0;
+}
+
+.inline-stats {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mini-stat {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  background: #f9fafb;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mini-stat svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mini-stat.active {
+  background: #eff6ff;
+  border-color: #dbeafe;
+  color: #3b82f6;
+}
+
+.mini-stat.active svg {
+  color: #3b82f6;
+}
+
+.mini-stat.completed {
+  background: #f0fdf4;
+  border-color: #d1fae5;
+  color: #10b981;
+}
+
+.mini-stat.completed svg {
+  color: #10b981;
+}
+
+.agent-cards {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-right: 6px;
+}
+
+.agent-cards::-webkit-scrollbar {
+  width: 6px;
+}
+
+.agent-cards::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 3px;
+}
+
+.agent-cards::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+/* Agent Card */
+.agent-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 12px;
+  transition: all 0.2s;
+  position: relative;
+  cursor: pointer;
+  margin-bottom: 6px;
+  min-height: 60px;
+}
+
+.agent-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transform: translateX(2px);
+}
+
+.agent-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #d1d5db;
+  transition: all 0.2s;
+}
+
+.agent-card.running {
+  border-color: #3b82f6;
+  background: #fafbff;
+}
+
+.agent-card.running::before {
+  background: #3b82f6;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.agent-card.completed {
+  border-color: #d1fae5;
+  background: #fafffe;
+}
+
+.agent-card.completed::before {
+  background: #10b981;
+}
+
+.agent-card.failed {
+  border-color: #fee2e2;
+  background: #fffbfb;
+}
+
+.agent-card.failed::before {
+  background: #ef4444;
+}
+
+.agent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin: -12px -12px 6px -12px;
+  padding: 10px 12px;
+  gap: 8px;
+  background: linear-gradient(to right, #f9fafb, transparent);
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.agent-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-info svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  width: 18px;
+  height: 18px;
+}
+
+.agent-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-name {
+  font-weight: 700;
+  color: #111827 !important;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  display: block;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  margin-bottom: 3px;
+}
+
+.agent-role {
+  font-size: 10px;
+  color: #6366f1;
+  font-weight: 500;
+  padding: 2px 6px;
+  background: #eef2ff;
+  border-radius: 3px;
+  display: inline-block;
+  width: fit-content;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.agent-output {
+  font-size: 11px;
+  color: #4b5563;
+  line-height: 1.4;
+  padding: 6px;
+  background: #f9fafb;
+  border-radius: 3px;
+  margin-top: 6px;
+  border-left: 2px solid #e5e7eb;
+  max-height: 80px;
+  overflow-y: auto;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+}
+
+.agent-output::-webkit-scrollbar {
+  width: 4px;
+}
+
+.agent-output::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 2px;
+}
+
+.agent-output::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+
+/* Ensure markdown content in agent output displays properly */
+.agent-output p {
+  margin: 0.25em 0;
+}
+
+.agent-output pre {
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 11px;
+}
+
+.agent-output code {
+  font-size: 11px;
+}
+
+.agent-duration {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 8px;
+}
+
+.agent-duration svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Status Icons */
+.status-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.status-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.status-icon.completed {
+  color: #10b981;
+}
+
+.status-icon.failed {
+  color: #ef4444;
+}
+
+.status-icon.waiting {
+  color: #6b7280;
+}
+
+/* Empty State */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: #9ca3af;
+  background: #fafafa;
+  border-radius: 6px;
+  border: 2px dashed #e5e7eb;
+}
+
+.empty-state svg {
+  color: #e5e7eb;
+  margin-bottom: 16px;
+}
+
+.empty-state p {
+  font-size: 16px;
+  font-weight: 500;
+  color: #4b5563;
+  margin: 0 0 8px 0;
+}
+
+.empty-state span {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+/* Messages Section */
+.messages-section {
+  background: white;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e5e7eb;
+}
+
+.messages-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.messages-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0;
+}
+
+.message-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.toggle-btn.active {
+  background: #6366f1;
+  color: white;
+  border-color: #6366f1;
+}
+
+.export-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.export-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.export-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Messages Feed */
+.messages-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.messages-feed::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages-feed::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 3px;
+}
+
+.messages-feed::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+/* Message */
+.message {
+  background: white;
+  border-radius: 6px;
+  padding: 12px 14px;
+  animation: slideIn 0.3s ease;
+  border-left: 3px solid transparent;
+  margin-left: 0;
+  transition: all 0.2s;
+}
+
+.message:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message.highlight {
+  animation: highlightPulse 2s ease;
+  background: rgba(99, 102, 241, 0.1) !important;
+}
+
+@keyframes highlightPulse {
+  0% {
+    background: rgba(99, 102, 241, 0.1);
+    transform: scale(1);
+  }
+  50% {
+    background: rgba(99, 102, 241, 0.2);
+    transform: scale(1.01);
+  }
+  100% {
+    background: rgba(99, 102, 241, 0.1);
+    transform: scale(1);
+  }
+}
+
+.message.user {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+}
+
+.message.user .message-header,
+.message.user .message-content {
+  color: white !important;
+}
+
+.message.system {
+  background: #f0f9ff;
+  border-left-color: #0ea5e9;
+  font-size: 13px;
+}
+
+.message.agent {
+  background: #f9fafb;
+  border-left-color: #6b7280;
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.message-author {
+  font-weight: 600;
+  color: #374151;
+  font-size: 13px;
+}
+
+.message-time {
+  font-size: 11px;
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.message-content {
+  color: #4b5563;
+  font-size: 14px;
+  line-height: 1.7;
+  word-wrap: break-word;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.message-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.message-content::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 2px;
+}
+
+.message-content::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+
+/* Markdown specific styles */
+.message-content pre {
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+
+.message-content code {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+}
+
+.message.user .message-content {
+  white-space: pre-wrap;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Input Section */
+.input-section {
+  padding: 20px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  gap: 12px;
+  background: white;
+}
+
+.input-section input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #111827;
+  background: white;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.input-section input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.input-section input:disabled {
+  background: #f9fafb;
+  color: #9ca3af;
+}
+
+.send-btn {
+  padding: 10px 16px;
+  background: #6366f1;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 48px;
+}
+
+.send-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #4f46e5;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+}
+
+.send-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+  .dashboard-content {
+    grid-template-columns: 1fr;
+  }
+
+  .agents-section {
+    max-height: 40vh;
+  }
+}
+
+/* Override any global dark theme */
+.clean-swarm-dashboard * {
+  color: inherit !important;
+}
+
+.clean-swarm-dashboard input,
+.clean-swarm-dashboard button,
+.clean-swarm-dashboard .message-content,
+.clean-swarm-dashboard .agent-output {
+  color: inherit !important;
+}
