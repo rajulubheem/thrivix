@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
+import { BlockStatus } from '../../../types/workflow';
 import { Handle, Position, type NodeProps, useUpdateNodeInternals } from 'reactflow';
 import {
   Settings, ChevronDown, ChevronUp, X, Check, Edit3, Trash2, Copy,
@@ -27,7 +28,7 @@ interface WorkflowBlockData {
   currentAction?: string;
   currentActionDetail?: string;
   activeTools?: string[];
-  status?: 'pending' | 'running' | 'completed' | 'failed';
+  status?: BlockStatus;
   isNextToExecute?: boolean;
   nextStepPreview?: string;
   wasExecuted?: boolean;

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import swarm, swarm_dag, sse, agents, orchestrator, tools, streaming, virtual_files, tool_config, mcp, chat, settings, true_swarm, orchestrator_api, unified_orchestrator_api, admin
+from app.api.v1.endpoints import swarm, swarm_dag, sse, agents, orchestrator, tools, streaming, virtual_files, tool_config, mcp, chat, settings, true_swarm, orchestrator_api, unified_orchestrator_api, admin, tool_execution, file_upload, unified_tools
 from app.api.v1 import dynamic_tool_registry
 from app.api.v1 import tool_approval, dynamic_tools, simple_approval, dynamic_tool_registry, tool_help, tool_debug, file_viewer
 from app.api import graph_endpoints, graph_demo
@@ -49,8 +49,12 @@ api_router.include_router(streaming.router, tags=["streaming"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(orchestrator.router, prefix="/orchestrator", tags=["orchestrator"])
 api_router.include_router(orchestrator_api.router, prefix="/orchestrator-enhanced", tags=["orchestrator-enhanced"])
-api_router.include_router(unified_orchestrator_api.router, prefix="/unified", tags=["unified-orchestrator"])
+# Include unified endpoints - orchestrator will use sub-paths under /unified
+api_router.include_router(unified_tools.router, prefix="/unified", tags=["unified-tools"])
+api_router.include_router(unified_orchestrator_api.router, prefix="/unified-orchestrator", tags=["unified-orchestrator"])
 api_router.include_router(tools.router, prefix="/tools", tags=["tools"])
+api_router.include_router(tool_execution.router, prefix="/tools", tags=["tool-execution"])
+api_router.include_router(file_upload.router, prefix="/tools/files", tags=["file-upload"])
 api_router.include_router(tool_config.router, prefix="/tool-config", tags=["tool-config"])
 api_router.include_router(dynamic_tools.router, prefix="/dynamic-tools", tags=["dynamic-tools"])
 api_router.include_router(tool_approval.router, prefix="/approval", tags=["approval"])

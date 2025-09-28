@@ -30,14 +30,22 @@ import dagre from 'dagre';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { NodeData, EdgeData } from './types/FlowTypes';
+import { BlockStatus } from '../../types/workflow';
 import ProfessionalAgentNode from './components/ProfessionalAgentNode';
 import OptimizedSmoothEdge from './components/OptimizedSmoothEdge';
 import ChatbotOutput from './components/ChatbotOutput';
 import { useTheme } from '../../contexts/ThemeContext';
 import { EnhancedAgentNode } from './components/EnhancedAgentNode';
 import { ProfessionalWorkflowBlock } from './components/ProfessionalWorkflowBlock';
+import { EnhancedToolBlock } from './components/EnhancedToolBlock';
+import { ImprovedEnhancedToolBlock } from './components/ImprovedEnhancedToolBlock';
+import ToolPalette from './components/ToolPalette';
 import { WorkflowToolbar } from './components/WorkflowToolbar';
 import { v4 as uuidv4 } from 'uuid';
+import { toolSchemaService, ToolSchema } from '../../services/toolSchemaService';
+import { unifiedToolService } from '../../services/unifiedToolService';
+import { stateMachineAdapter } from '../../services/stateMachineAdapter';
+import { resolveUserInputsInParams } from '../../utils/parameterResolver';
 
 // Clean Professional Node Component (v3)
 const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
@@ -296,7 +304,7 @@ const AnimatedEdge: React.FC<EdgeProps> = ({
 interface Agent {
   id: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: BlockStatus;
   output: string;
   startTime?: number;
   endTime?: number;
@@ -406,6 +414,7 @@ const FlowSwarmInterface: React.FC = () => {
   const [planned, setPlanned] = useState<boolean>(false);
   const [showImportDialog, setShowImportDialog] = useState<boolean>(false);
   const [importJsonText, setImportJsonText] = useState<string>('');
+  const [showToolPalette, setShowToolPalette] = useState<boolean>(true);
 
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -504,7 +513,9 @@ const FlowSwarmInterface: React.FC = () => {
   const nodeTypes = useMemo<NodeTypes>(() => ({
     agent: AgentNode,
     enhanced: EnhancedAgentNode,
-    professional: ProfessionalWorkflowBlock
+    professional: ProfessionalWorkflowBlock,
+    tool: ImprovedEnhancedToolBlock,
+    toolBlock: ImprovedEnhancedToolBlock  // Alias for compatibility
   }), []);
   const edgeTypes = useMemo<EdgeTypes>(() => ({
     animated: AnimatedEdge,
@@ -1936,6 +1947,255 @@ const FlowSwarmInterface: React.FC = () => {
   }, [nodes, edges]);
 
   // Add professional block function
+  // Add tool block to canvas - now unified with backend Strands tools
+  const addToolBlock = useCallback(async (toolName: string, schema?: ToolSchema, position?: { x: number; y: number }) => {
+    // Get schema from unified service if not provided
+    const toolSchema = schema || await unifiedToolService.getToolSchema(toolName);
+
+    if (!toolSchema) {
+      console.warn(`Tool schema not found for ${toolName}`);
+      return;
+    }
+
+    // Check if tool is available in UI
+    if (toolSchema.available_in_ui === false) {
+      console.warn(`Tool ${toolName} is not available for UI usage`);
+      return;
+    }
+
+    const nodePosition = position || {
+      x: Math.random() * 400 + 200,
+      y: Math.random() * 300 + 100
+    };
+
+    const newNode: Node = {
+      id: uuidv4(),
+      type: 'tool',
+      position: nodePosition,
+      data: {
+        type: 'tool',
+        name: toolSchema.display_name || toolName.replace(/_/g, ' '),
+        toolName: toolName,
+        toolSchema: toolSchema,
+        parameters: {},
+        category: toolSchema.category,
+        icon: toolSchema.icon,
+        color: toolSchema.color,
+        available_in_agents: toolSchema.available_in_agents,
+        enabled: true,
+        advancedMode: false,
+        isWide: false,
+        onToggleEnabled: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
+                : node
+            )
+          );
+        },
+        onToggleAdvanced: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
+                : node
+            )
+          );
+        },
+        onToggleWide: (id: string) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
+                : node
+            )
+          );
+        },
+        onUpdate: (id: string, updates: any) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, ...updates } }
+                : node
+            )
+          );
+        },
+        onDelete: (id: string) => {
+          setNodes((nds) => nds.filter((node) => node.id !== id));
+          setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+        },
+        onDuplicate: (id: string) => {
+          const nodeToDuplicate = nodes.find((node) => node.id === id);
+          if (nodeToDuplicate) {
+            const duplicatedNode = {
+              ...nodeToDuplicate,
+              id: uuidv4(),
+              position: {
+                x: nodeToDuplicate.position.x + 50,
+                y: nodeToDuplicate.position.y + 50
+              }
+            };
+            setNodes((nds) => [...nds, duplicatedNode]);
+          }
+        },
+        onExecuteTool: async (id: string, toolName: string, parameters: any) => {
+          // Execute tool through unified backend endpoint for Strands compatibility
+          try {
+            // Resolve placeholders (DRY utility)
+            const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
+            if (!ok || !resolvedParams) {
+              setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, status: 'needs_input', executionError: resolveError || 'Input required' } } : n));
+              throw new Error(resolveError || 'Input required');
+            }
+
+            // Persist resolved params back to node
+            setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, parameters: resolvedParams } } : n));
+
+            // Validate parameters before execution
+            const precheck = await stateMachineAdapter.validateParameters(toolName, resolvedParams);
+            if (!precheck.valid) {
+              setNodes((nds) =>
+                nds.map((node) =>
+                  node.id === id
+                    ? { ...node, data: { ...node.data, status: 'needs_input', executionError: precheck.message } }
+                    : node
+                )
+              );
+              throw new Error(precheck.message || 'Missing required parameters');
+            }
+            // Update status to running
+            setNodes((nds) =>
+              nds.map((node) =>
+                node.id === id
+                  ? { ...node, data: { ...node.data, status: 'running', isExecuting: true } }
+                  : node
+              )
+            );
+
+            // Create workflow request for unified execution
+            const workflowRequest = {
+              workflow_id: `tool-exec-${id}`,
+              blocks: [{
+                id: id,
+                type: 'tool',
+                tool_name: toolName,
+                parameters: resolvedParams,
+                position: { x: 0, y: 0 },
+                connections: []
+              }],
+              edges: [],
+              context: {},
+              use_agents: false // Direct tool execution
+            };
+
+            const response = await fetch(`http://localhost:8000/api/v1/unified/execute-workflow`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+              },
+              body: JSON.stringify(workflowRequest)
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+              console.log('Tool execution result:', data);
+
+              // Update node with success status and result
+              setNodes((nds) =>
+                nds.map((node) =>
+                  node.id === id
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          status: 'completed',
+                          isCompleted: true,
+                          isExecuting: false,
+                          executionResult: data.result,
+                          executionError: undefined
+                        }
+                      }
+                    : node
+                )
+              );
+
+              // Prefill dependent nodes if any
+              try {
+                const outgoingTargets = edges.filter(e => e.source === id).map(e => e.target);
+                setNodes(nds => nds.map(node => {
+                  if (outgoingTargets.includes(node.id) && (node.type === 'toolBlock' || node.data?.type === 'tool')) {
+                    const tname = node.data?.toolName;
+                    if (tname === 'python_repl') {
+                      const params = { ...(node.data?.parameters || {}) };
+                      if (!params.code) {
+                        params.code = (stateMachineAdapter as any).generateCodeFromResults ? (stateMachineAdapter as any).generateCodeFromResults(data.result) : '';
+                        return { ...node, data: { ...node.data, parameters: params } };
+                      }
+                    }
+                  }
+                  return node;
+                }));
+              } catch {}
+
+              // Return the result for the component to display
+              return data.result;
+            } else {
+              // Handle error
+              const errorMessage = data.error || data.detail || 'Execution failed';
+
+              setNodes((nds) =>
+                nds.map((node) =>
+                  node.id === id
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          status: 'failed',
+                          isError: true,
+                          isExecuting: false,
+                          executionError: errorMessage,
+                          executionResult: undefined
+                        }
+                      }
+                    : node
+                )
+              );
+
+              throw new Error(errorMessage);
+            }
+          } catch (error: any) {
+            console.error('Failed to execute tool:', error);
+
+            setNodes((nds) =>
+              nds.map((node) =>
+                node.id === id
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        status: node.data?.status === 'needs_input' ? 'needs_input' : 'failed',
+                        isError: true,
+                        isExecuting: false,
+                        executionError: error.message || 'Failed to execute tool',
+                        executionResult: undefined
+                      }
+                    }
+                  : node
+              )
+            );
+
+            throw error;
+          }
+        }
+      }
+    };
+
+    setNodes((nds) => [...nds, newNode]);
+  }, [nodes, setNodes, setEdges]);
+
   const addProfessionalBlock = useCallback((type: string = 'analysis', position?: { x: number; y: number }) => {
     const nodePosition = position || {
       x: Math.random() * 400 + 200,
@@ -2401,9 +2661,9 @@ const FlowSwarmInterface: React.FC = () => {
     expandBlockIntoSubWorkflow(blockId, subWorkflow);
   }, [nodes, expandBlockIntoSubWorkflow]);
 
-  // Import state machine from backend and convert to professional blocks
-  const importStateMachine = useCallback((machine: any, useProfessionalBlocks: boolean = true, preserveExisting: boolean = false) => {
-    if (!machine || !machine.states || !machine.edges) {
+  // Import state machine from backend and convert to enhanced blocks
+  const importStateMachine = useCallback(async (machine: any, useProfessionalBlocks: boolean = true, preserveExisting: boolean = false) => {
+    if (!machine || (!machine.states && !machine.enhanced_blocks)) {
       console.error('Invalid state machine format');
       return;
     }
@@ -2421,7 +2681,258 @@ const FlowSwarmInterface: React.FC = () => {
       setEdges([]);
     }
 
-    // Create professional blocks from states
+    // Check if machine has enhanced blocks from backend
+    if (machine.enhanced && machine.enhanced_blocks) {
+      // Use enhanced blocks directly from backend
+      const enhancedNodes = machine.enhanced_blocks.map((block: any) => {
+        // Ensure tool blocks have execution handler
+        if (block.type === 'toolBlock' || block.data?.type === 'tool') {
+          return {
+            ...block,
+            data: {
+              ...block.data,
+              onExecuteTool: async (id: string, toolName: string, parameters: any) => {
+                // Resolve placeholders using shared utility
+                const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
+                if (!ok || !resolvedParams) {
+                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: resolveError || 'Input required' } } : node));
+                  throw new Error(resolveError || 'Input required');
+                }
+
+                // Validate before execution
+                const precheck = await stateMachineAdapter.validateParameters(toolName, resolvedParams);
+                if (!precheck.valid) {
+                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: precheck.message } } : node));
+                  throw new Error(precheck.message || 'Missing required parameters');
+                }
+                // Use existing tool execution logic
+                const workflowRequest = {
+                  workflow_id: `tool-exec-${id}`,
+                  blocks: [{
+                    id: id,
+                    type: 'tool',
+                    tool_name: toolName,
+                    parameters: resolvedParams,
+                    position: { x: 0, y: 0 },
+                    connections: []
+                  }],
+                  edges: [],
+                  context: {},
+                  use_agents: false
+                };
+
+                const response = await fetch(`${window.location.origin}/api/v1/unified/execute-workflow`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                  },
+                  body: JSON.stringify(workflowRequest)
+                });
+
+                const data = await response.json();
+                const blockResult = data.results?.[id] || data.result;
+
+                // Update node with result
+                setNodes(nds =>
+                  nds.map(node => {
+                    if (node.id === id) {
+                      return {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          status: data.success ? 'completed' : 'failed',
+                          executionResult: blockResult,
+                          executionError: data.error
+                        }
+                      };
+                    }
+                    return node;
+                  })
+                );
+
+                // Prefill dependent nodes if any
+                try {
+                  const outgoingTargets = enhancedEdges.filter((e:any) => e.source === id).map((e:any) => e.target);
+                  setNodes(nds => nds.map(node => {
+                    if (outgoingTargets.includes(node.id) && (node.type === 'toolBlock' || node.data?.type === 'tool')) {
+                      const tname = node.data?.toolName;
+                      if (tname === 'python_repl') {
+                        const params = { ...(node.data?.parameters || {}) };
+                        if (!params.code) {
+                          params.code = (stateMachineAdapter as any).generateCodeFromResults ? (stateMachineAdapter as any).generateCodeFromResults(blockResult) : '';
+                          return { ...node, data: { ...node.data, parameters: params } };
+                        }
+                      }
+                    }
+                    return node;
+                  }));
+                } catch {}
+
+                return blockResult;
+              },
+              isDarkMode: isDarkMode
+            }
+          };
+        }
+        return {
+          ...block,
+          data: {
+            ...block.data,
+            isDarkMode: isDarkMode
+          }
+        };
+      });
+
+      const enhancedEdges = machine.enhanced_edges || [];
+
+      // Propagate any known context into blocks (scaffold for runtime passing)
+      stateMachineAdapter.propagateContext(
+        enhancedNodes,
+        enhancedEdges,
+        { previousOutputs: new Map(), globalContext: {}, userInputs: {} }
+      );
+
+      // Calculate positions if needed
+      const positionedNodes = stateMachineAdapter.calculateNodePositions(enhancedNodes, enhancedEdges);
+
+      setNodes([...existingNodes, ...positionedNodes]);
+      setEdges([...existingEdges, ...enhancedEdges]);
+
+      // Validate workflow
+      const validation = await stateMachineAdapter.validateWorkflow(positionedNodes);
+      if (!validation.valid) {
+        console.warn('Workflow validation issues:', validation.issues);
+      }
+
+      return;
+    }
+
+    // Otherwise, convert states to enhanced blocks using adapter
+    if (machine.states) {
+      const { nodes: enhancedNodes, edges: enhancedEdges } = await stateMachineAdapter.convertToEnhancedWorkflow(machine);
+
+      // Add execution handlers and dark mode
+      const processedNodes = enhancedNodes.map(node => {
+        if (node.type === 'toolBlock' || node.data?.type === 'tool') {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              onExecuteTool: async (id: string, toolName: string, parameters: any) => {
+                // Resolve placeholders using shared utility
+                const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
+                if (!ok || !resolvedParams) {
+                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: resolveError || 'Input required' } } : node));
+                  throw new Error(resolveError || 'Input required');
+                }
+                const precheck = await stateMachineAdapter.validateParameters(toolName, resolvedParams);
+                if (!precheck.valid) {
+                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: precheck.message } } : node));
+                  throw new Error(precheck.message || 'Missing required parameters');
+                }
+                // Use existing tool execution logic
+                const workflowRequest = {
+                  workflow_id: `tool-exec-${id}`,
+                  blocks: [{
+                    id: id,
+                    type: 'tool',
+                    tool_name: toolName,
+                    parameters: resolvedParams,
+                    position: { x: 0, y: 0 },
+                    connections: []
+                  }],
+                  edges: [],
+                  context: {},
+                  use_agents: false
+                };
+
+                const response = await fetch(`${window.location.origin}/api/v1/unified/execute-workflow`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                  },
+                  body: JSON.stringify(workflowRequest)
+                });
+
+                const data = await response.json();
+                const blockResult = data.results?.[id] || data.result;
+
+                // Update node with result
+                setNodes(nds =>
+                  nds.map(node => {
+                    if (node.id === id) {
+                      return {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          status: data.success ? 'completed' : 'failed',
+                          executionResult: blockResult,
+                          executionError: data.error
+                        }
+                      };
+                    }
+                    return node;
+                  })
+                );
+
+                // Prefill dependent nodes if any
+                try {
+                  const outgoingTargets = enhancedEdges.filter((e:any) => e.source === id).map((e:any) => e.target);
+                  setNodes(nds => nds.map(node => {
+                    if (outgoingTargets.includes(node.id) && (node.type === 'toolBlock' || node.data?.type === 'tool')) {
+                      const tname = node.data?.toolName;
+                      if (tname === 'python_repl') {
+                        const params = { ...(node.data?.parameters || {}) };
+                        if (!params.code) {
+                          params.code = (stateMachineAdapter as any).generateCodeFromResults ? (stateMachineAdapter as any).generateCodeFromResults(blockResult) : '';
+                          return { ...node, data: { ...node.data, parameters: params } };
+                        }
+                      }
+                    }
+                    return node;
+                  }));
+                } catch {}
+
+                return blockResult;
+              },
+              isDarkMode: isDarkMode
+            }
+          };
+        }
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            isDarkMode: isDarkMode
+          }
+        };
+      });
+
+      // Propagate any known context into blocks (scaffold for runtime passing)
+      stateMachineAdapter.propagateContext(
+        processedNodes,
+        enhancedEdges,
+        { previousOutputs: new Map(), globalContext: {}, userInputs: {} }
+      );
+
+      // Calculate positions
+      const positionedNodes = stateMachineAdapter.calculateNodePositions(processedNodes, enhancedEdges);
+
+      setNodes([...existingNodes, ...positionedNodes]);
+      setEdges([...existingEdges, ...enhancedEdges]);
+
+      // Validate workflow
+      const validation = await stateMachineAdapter.validateWorkflow(positionedNodes);
+      if (!validation.valid) {
+        console.warn('Workflow validation issues:', validation.issues);
+      }
+
+      return;
+    }
+
+    // Fallback to original implementation if no enhanced support
     const newNodes: Node[] = machine.states.map((state: any, index: number) => {
       // Use professional block type for better editing experience
       const nodeType = useProfessionalBlocks ? 'professional' : 'agent';
@@ -2647,7 +3158,7 @@ const FlowSwarmInterface: React.FC = () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               task: `Expand ${selectedNodes[0]?.data.name || 'block'} into sub-workflow: ${prompt}`,
-              tool_preferences: enhancementRequest.tool_preferences
+              tool_preferences: { ...enhancementRequest.tool_preferences, use_enhanced_blocks: true }
             })
           });
 
@@ -2703,7 +3214,7 @@ const FlowSwarmInterface: React.FC = () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               task: `${task || 'Workflow'}: ${prompt}`,
-              tool_preferences: enhancementRequest.tool_preferences
+              tool_preferences: { ...enhancementRequest.tool_preferences, use_enhanced_blocks: true }
             })
           });
           if (planRes.ok) {
@@ -2729,7 +3240,7 @@ const FlowSwarmInterface: React.FC = () => {
     if (!task.trim()) return;
     try{
       setPlanned(false);
-      const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0 } }) });
+      const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0, use_enhanced_blocks: true } }) });
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const machine = data.machine;
@@ -3297,29 +3808,44 @@ const FlowSwarmInterface: React.FC = () => {
           if (!editMode) return;
 
           // Get block type and optional metadata
-          const blockType = event.dataTransfer.getData('application/reactflow');
+          const blockData = event.dataTransfer.getData('application/reactflow');
           const jsonData = event.dataTransfer.getData('application/json');
 
-          if (!blockType) return;
+          if (!blockData) return;
 
           const bounds = reactFlowWrapper.current?.getBoundingClientRect();
           const pos = project({ x: event.clientX - (bounds?.left || 0), y: event.clientY - (bounds?.top || 0) });
 
-          // Check if this is from the professional toolbar
+          // Parse the drag data
           let parsedData: any = {};
           try {
-            if (jsonData) {
-              parsedData = JSON.parse(jsonData);
-            }
+            parsedData = JSON.parse(blockData);
           } catch (e) {
-            // Fallback to simple type
+            // If not JSON, treat as simple block type string
+            parsedData = { type: blockData };
           }
 
+          // Check if additional JSON data exists
+          if (jsonData) {
+            try {
+              const additionalData = JSON.parse(jsonData);
+              parsedData = { ...parsedData, ...additionalData };
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+
+          // Handle tool drops from ToolPalette
+          if (parsedData.type === 'tool' && parsedData.toolName) {
+            // Schema can be passed or fetched from unified service
+            addToolBlock(parsedData.toolName, parsedData.schema, pos);
+          }
           // Use professional block if from new toolbar
-          if (parsedData.useEnhanced || jsonData) {
-            addProfessionalBlock(blockType, pos);
+          else if (parsedData.useEnhanced || jsonData) {
+            addProfessionalBlock(parsedData.type || blockData, pos);
           } else {
             // Legacy block creation
+            const blockType = parsedData.type || blockData;
             const id = `node_${Math.random().toString(36).slice(2,8)}`;
             const newNode: Node = {
               id,
@@ -3738,6 +4264,15 @@ const FlowSwarmInterface: React.FC = () => {
               }}
             />
 
+            {/* Tool Palette */}
+            {showToolPalette && (
+              <ToolPalette
+                onAddTool={addToolBlock}
+                isCollapsed={!showToolPalette}
+                onToggleCollapse={() => setShowToolPalette(!showToolPalette)}
+              />
+            )}
+
             <Panel position="top-left" style={{ top: '80px' }}>
               <div className="panel-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <button onClick={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })} className="panel-button">
@@ -3746,6 +4281,10 @@ const FlowSwarmInterface: React.FC = () => {
 
                 <button onClick={() => updateGraph(true)} className="panel-button">
                   Re-layout
+                </button>
+
+                <button onClick={() => setShowToolPalette(!showToolPalette)} className="panel-button">
+                  {showToolPalette ? 'Hide Tools' : 'Show Tools'}
                 </button>
 
                 <button

@@ -80,6 +80,7 @@ class StreamingResponseV2(BaseModel):
 class PlanRequest(BaseModel):
     task: str
     tool_preferences: Optional[Dict[str, Any]] = None
+    context: Optional[Dict[str, Any]] = None
 
 
 class PlanResponse(BaseModel):
@@ -91,6 +92,13 @@ class ExecuteWithMachineRequest(BaseModel):
     machine: Dict[str, Any]
     execution_mode: ExecutionMode = ExecutionMode.DYNAMIC
     max_parallel: int = Field(default=5, ge=1, le=20)
+    tool_preferences: Optional[Dict[str, Any]] = None
+
+
+class EnhanceRequest(BaseModel):
+    task: str
+    prompt: str
+    current_machine: Dict[str, Any]
     tool_preferences: Optional[Dict[str, Any]] = None
 
 
@@ -609,10 +617,97 @@ async def update_state_machine_graph(exec_id: str, payload: Dict[str, Any]):
 async def plan_state_machine(request: PlanRequest):
     """Generate a state machine (plan-only) and return it without executing."""
     from app.services.ai_state_machine_coordinator import AIStateMachineCoordinator
-    coordinator = AIStateMachineCoordinator(config={
+    from app.services.state_machine_to_unified_adapter import state_machine_adapter
+
+    # Simple and direct - no timeouts, no restrictions
+    config = {
         "tool_preferences": request.tool_preferences or {}
-    })
+    }
+
+    coordinator = AIStateMachineCoordinator(config=config)
+
+    # Just call it directly - let it take as long as it needs
     machine = await coordinator.analyze_and_create_state_machine(request.task)
+
+    # Convert to enhanced format for unified tool system
+    if request.tool_preferences and request.tool_preferences.get("use_enhanced_blocks", True):
+        adapter_context = {
+            **(request.context or {}),
+            "task": request.task,
+            "tool_preferences": request.tool_preferences or {}
+        }
+        logger.info("Converting to enhanced workflow...")
+        enhanced_workflow = state_machine_adapter.convert_state_machine_to_workflow(machine, context=adapter_context)
+        logger.info(f"Enhanced workflow created with {len(enhanced_workflow.get('blocks', []))} blocks")
+
+        enhanced_workflow = state_machine_adapter.validate_and_fix_workflow(enhanced_workflow)
+        logger.info("Workflow validated and fixed")
+
+        machine["enhanced_blocks"] = enhanced_workflow.get("blocks", [])
+        machine["enhanced_edges"] = enhanced_workflow.get("edges", [])
+        machine["enhanced"] = True
+        logger.info("Returning enhanced machine")
+
+    # Add completion status
+    machine["status"] = "completed"
+    machine["execution_complete"] = True
+
+    return PlanResponse(machine=machine)
+
+
+@router.post("/stream/state-machine/enhance", response_model=PlanResponse)
+async def enhance_state_machine(request: EnhanceRequest):
+    """Enhance an existing state machine with AI-generated improvements."""
+    from app.services.ai_state_machine_coordinator import AIStateMachineCoordinator
+    from app.services.state_machine_to_unified_adapter import state_machine_adapter
+
+    # Combine task and prompt for better context
+    enhanced_task = f"{request.task}: {request.prompt}"
+
+    # Configure with tool preferences
+    config = {
+        "tool_preferences": request.tool_preferences or {},
+        "min_states": 16,  # Ensure sufficient complexity for enhancements
+        "max_states": 40
+    }
+
+    coordinator = AIStateMachineCoordinator(config=config)
+
+    # Generate enhanced state machine based on prompt and existing machine
+    logger.info(f"Enhancing workflow with prompt: {request.prompt}")
+    machine = await coordinator.analyze_and_create_state_machine(enhanced_task)
+
+    # Merge with current machine if it has states
+    if request.current_machine and request.current_machine.get("states"):
+        # Keep user's existing states and add AI enhancements
+        existing_states = {s["id"]: s for s in request.current_machine.get("states", [])}
+        for state in machine.get("states", []):
+            if state["id"] not in existing_states:
+                existing_states[state["id"]] = state
+        machine["states"] = list(existing_states.values())
+
+    # Convert to enhanced format
+    if request.tool_preferences and request.tool_preferences.get("use_enhanced_blocks", True):
+        adapter_context = {
+            "task": enhanced_task,
+            "tool_preferences": request.tool_preferences or {}
+        }
+        logger.info("Converting enhanced machine to workflow...")
+        enhanced_workflow = state_machine_adapter.convert_state_machine_to_workflow(machine, context=adapter_context)
+        logger.info(f"Enhanced workflow created with {len(enhanced_workflow.get('blocks', []))} blocks")
+
+        enhanced_workflow = state_machine_adapter.validate_and_fix_workflow(enhanced_workflow)
+        logger.info("Enhanced workflow validated")
+
+        machine["enhanced_blocks"] = enhanced_workflow.get("blocks", [])
+        machine["enhanced_edges"] = enhanced_workflow.get("edges", [])
+        machine["enhanced"] = True
+
+    # Add completion status
+    machine["status"] = "completed"
+    machine["execution_complete"] = True
+    logger.info("Returning enhanced machine with completion status")
+
     return PlanResponse(machine=machine)
 
 

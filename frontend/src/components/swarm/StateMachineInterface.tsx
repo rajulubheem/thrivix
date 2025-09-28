@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { BlockStatus } from '../../types/workflow';
 import ReactFlow, {
   Node,
   Edge,
@@ -194,7 +195,7 @@ interface StateNodeData {
   id: string;
   name: string;
   nodeType: NodeType;
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'active';
+  status?: BlockStatus;
   description?: string;
   task?: string;
   output?: string;

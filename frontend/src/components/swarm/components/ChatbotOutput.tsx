@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { BlockStatus } from '../../../types/workflow';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -11,7 +12,7 @@ interface Message {
   agentRole?: string;
   content: string;
   timestamp: number;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: BlockStatus;
   type: 'agent' | 'system' | 'error';
   metadata?: {
     task?: string;

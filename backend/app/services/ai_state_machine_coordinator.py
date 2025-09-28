@@ -38,6 +38,8 @@ except ImportError:
     DynamicToolWrapper = None
 from app.services.strands_agent_runtime import StrandsAgentRuntime, StrandsAgentConfig
 from app.services.agent_runtime import AgentContext
+from app.services.tool_parameter_resolver import tool_parameter_resolver
+from app.services.enhanced_context_manager import enhanced_context_manager, MissionContext
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +142,19 @@ class AIStateMachineCoordinator:
         - Add placeholder states referenced by edges but missing in states
         - Build transitions on each state from edges if missing
         - Ensure initial_state exists
+        - Map enhanced_blocks parameters to states for user input preservation
         """
         states = machine.get('states', []) or []
         edges = machine.get('edges', []) or []
+        enhanced_blocks = machine.get('enhanced_blocks', []) or []
+
+        # Create a map of enhanced blocks by ID for quick lookup
+        enhanced_map = {}
+        for block in enhanced_blocks:
+            block_id = block.get('id')
+            if block_id:
+                enhanced_map[block_id] = block
+                logger.debug(f"Found enhanced block {block_id} with data: {block.get('data', {})}")
 
         # Deduplicate edges
         seen = set()
@@ -164,6 +176,24 @@ class AIStateMachineCoordinator:
             # Ensure transitions dict
             if 'transitions' not in s or not isinstance(s['transitions'], dict):
                 s['transitions'] = {}
+
+            # Map parameters from enhanced_blocks to states
+            if sid in enhanced_map:
+                enhanced_block = enhanced_map[sid]
+                block_data = enhanced_block.get('data', {})
+
+                # Extract tool parameters from enhanced block
+                if block_data.get('parameters'):
+                    s['tool_parameters'] = block_data['parameters']
+                    logger.info(f"Mapped user parameters for state {sid}: {block_data['parameters']}")
+
+                # Also preserve the tool name from enhanced block
+                if block_data.get('toolName'):
+                    if 'tools' not in s:
+                        s['tools'] = []
+                    if block_data['toolName'] not in s['tools']:
+                        s['tools'].append(block_data['toolName'])
+
             state_map[sid] = s
 
         # Add placeholder states for any referenced ids missing
@@ -404,8 +434,8 @@ Return a JSON object with this EXACT structure (no extra text before/after):
     "states": [
         {{
             "id": "unique_state_id",
-            "name": "State Display Name", 
-            "type": "analysis|tool_call|decision|parallel|final",
+            "name": "State Display Name",
+            "type": "analysis|tool_call|decision|input|parallel|final",
             "description": "What this state does",
             "agent_role": "Role of the agent",
             "tools": ["tool1", "tool2"],  // if type is tool_call
@@ -417,14 +447,14 @@ Return a JSON object with this EXACT structure (no extra text before/after):
     "edges": [
         {{
             "source": "source_state_id",
-            "target": "target_state_id", 
+            "target": "target_state_id",
             "event": "success|failure|retry|timeout|validated|etc"
         }}
     ]
 }}
 
 CHECKLIST (must satisfy before returning JSON)
-- Tool names are strictly from AVAILABLE_TOOLS; omit any that aren’t present.
+- Tool names are strictly from AVAILABLE_TOOLS; omit any that aren't present.
 - Research/gathering states include "tavily_search" when available.
 - Parallel stages for independent work; explicit joins via decision/validation states.
 - Retries with capped attempts (e.g., 2–3) and backoff via retry/timeout transitions.
@@ -438,22 +468,26 @@ HINTS
 
     async def analyze_and_create_state_machine(self, task: str) -> Dict[str, Any]:
         """Use AI to dynamically generate a complete state machine based on the task"""
-        
-        # Let AI create the ENTIRE state machine dynamically
-        # Provide allowed tools context so the model doesn't invent tool names
+
+        # PHASE 1: Lightweight Planning - Send only tool names (not full schemas)
+        # This is much more efficient than sending 3000+ lines of tool schemas
+
+        # Get list of available tool names only
+        tool_names = tool_parameter_resolver.get_tool_names_only()
+
+        # Apply preferences if any
         prefs = self.config.get('tool_preferences') or {}
         selected = list(prefs.get('selected_tools') or [])
         restrict = bool(prefs.get('restrict_to_selected', False))
-        registry_names = list((self.tool_registry.tools or {}).keys()) if hasattr(self.tool_registry, 'tools') else []
-        # Compute allowed tool names for planning
-        if restrict and selected:
-            allowed_tools = [n for n in selected if n in registry_names]
-        else:
-            allowed_tools = registry_names
 
-        # Format tools as a proper list for clarity
+        if restrict and selected:
+            allowed_tools = [n for n in selected if n in tool_names]
+        else:
+            allowed_tools = tool_names
+
+        # Format tools as a proper list for clarity (names only, no schemas)
         if allowed_tools:
-            allowed_text = "[" + ", ".join(f'"{tool}"' for tool in allowed_tools) + "]"
+            allowed_text = "[" + ", ".join(f'"{tool}"' for tool in allowed_tools[:50]) + "]"  # Limit to 50 most common
         else:
             allowed_text = "[]"
 
@@ -474,9 +508,11 @@ HARD RULES
 DESIGN GUIDELINES
 - Think in phases: initialization → research/planning → generation/execution → validation → rollout/reporting → final.
 - Use tool_call states only when tool use is actually needed; analysis states elsewhere.
+- Use 'input' type for collecting user data (research topic, parameters, etc)
+- Use 'decision' type ONLY for approve/reject/escalate choices
 - Add proactive quality checks: data validation, consistency checks, guardrails, shadow tests, and synthetic monitoring.
 - Build retry loops with capped attempts and exponential backoff; add timeout branches.
-- Where helpful, add decision (human‑in‑the‑loop) states with allowed events like approve/reject/escalate.
+- Where helpful, add decision states for approval with events like approve/reject/escalate.
 - Prefer smaller focused states over mega‑states; keep descriptions actionable.
 
 Return a JSON object with this EXACT structure (no extra text before/after):
@@ -486,8 +522,8 @@ Return a JSON object with this EXACT structure (no extra text before/after):
     "states": [
         {{
             "id": "unique_state_id",
-            "name": "State Display Name", 
-            "type": "analysis|tool_call|decision|parallel|final",
+            "name": "State Display Name",
+            "type": "analysis|tool_call|decision|input|parallel|final",
             "description": "What this state does",
             "agent_role": "Role of the agent",
             "tools": ["tool1", "tool2"],  // if type is tool_call
@@ -499,14 +535,14 @@ Return a JSON object with this EXACT structure (no extra text before/after):
     "edges": [
         {{
             "source": "source_state_id",
-            "target": "target_state_id", 
+            "target": "target_state_id",
             "event": "success|failure|retry|timeout|validated|etc"
         }}
     ]
 }}
 
 CHECKLIST (must satisfy before returning JSON)
-- Tool names are strictly from AVAILABLE_TOOLS; omit any that aren’t present.
+- Tool names are strictly from AVAILABLE_TOOLS; omit any that aren't present.
 - Research/gathering states include "tavily_search" when available.
 - Parallel stages for independent work; explicit joins via decision/validation states.
 - Retries with capped attempts (e.g., 2–3) and backoff via retry/timeout transitions.
@@ -556,7 +592,9 @@ Output only the JSON object. No commentary.
                     "- Provide clear final_success and final_failure states.\n\n"
                     "TOOL DISCIPLINE\n"
                     "- Mark a state as type=tool_call only if a tool is actually needed.\n"
-                    "- Include only permitted tool names. If research/browsing is needed and available, include 'tavily_search'.\n\n"
+                    "- Include only permitted tool names from the list provided.\n"
+                    "- If research/browsing is needed and 'tavily_search' is available, include it.\n"
+                    "- DO NOT include tool parameters - they will be resolved separately.\n\n"
                     "VALIDATION BEFORE OUTPUT\n"
                     "- Validate edges reference existing states.\n"
                     "- Validate every tool name is permitted.\n"
@@ -593,23 +631,54 @@ Output only the JSON object. No commentary.
                 
                 count = len(state_machine.get('states', []) or [])
                 logger.info(f"AI generated state machine with {count} states")
-                if count < min_states:
-                    logger.info(f"Regenerating with higher granularity: target >= {min_states} states (had {count})")
-                    regen_prompt = prompt + f"\n\nNOTE: Your previous attempt produced only {count} states. Regenerate with AT LEAST {min_states} states, more granular steps, and explicit parallel branches. Maintain the same JSON schema."
-                    response2 = planner(regen_prompt)
-                    response_text2 = str(response2)
-                    js_start2 = response_text2.find('{')
-                    js_end2 = response_text2.rfind('}') + 1
-                    if js_start2 >= 0 and js_end2 > js_start2:
-                        state_machine2 = json.loads(response_text2[js_start2:js_end2])
-                        return self._normalize_state_machine(state_machine2)
-                return self._normalize_state_machine(state_machine)
+
+                # Only regenerate if explicitly requested and count is very low
+                auto_regenerate = self.config.get('auto_regenerate', False)  # Default to False
+                if auto_regenerate and count < min_states and count < 5:  # Only if very low
+                    logger.info(f"State count {count} is very low, attempting ONE regeneration")
+                    try:
+                        regen_prompt = prompt + f"\n\nNOTE: Please generate a more detailed workflow with AT LEAST {min_states} states."
+                        response2 = planner(regen_prompt)
+                        response_text2 = str(response2)
+                        js_start2 = response_text2.find('{')
+                        js_end2 = response_text2.rfind('}') + 1
+                        if js_start2 >= 0 and js_end2 > js_start2:
+                            state_machine2 = json.loads(response_text2[js_start2:js_end2])
+                            normalized2 = self._normalize_state_machine(state_machine2)
+                            # Phase 2 for regenerated workflow
+                            try:
+                                normalized2 = await tool_parameter_resolver.resolve_parameters(normalized2, task)
+                            except Exception as param_error2:
+                                logger.warning(f"Failed to resolve params for regen: {param_error2}")
+                            return normalized2
+                    except Exception as regen_error:
+                        logger.error(f"Regeneration failed, using original: {regen_error}")
+                        # Fall through to use original
+
+                # Normalize the state machine
+                normalized = self._normalize_state_machine(state_machine)
+
+                # PHASE 2: Parameter Resolution
+                # Now that we have the workflow with tool names, resolve parameters
+                logger.info("Phase 2: Resolving tool parameters for selected tools")
+                try:
+                    normalized = await tool_parameter_resolver.resolve_parameters(normalized, task)
+                except Exception as param_error:
+                    logger.warning(f"Failed to resolve parameters, using defaults: {param_error}")
+
+                return normalized
             
         except Exception as e:
             logger.error(f"Failed to generate AI state machine: {e}")
         
         # Fallback: Create a dynamic example (but this should rarely be used)
-        return self._normalize_state_machine(self.create_fallback_dynamic_state_machine(task))
+        fallback = self._normalize_state_machine(self.create_fallback_dynamic_state_machine(task))
+        # Try to resolve parameters even for fallback
+        try:
+            fallback = await tool_parameter_resolver.resolve_parameters(fallback, task)
+        except Exception:
+            pass  # Use fallback as-is
+        return fallback
     
     def create_fallback_dynamic_state_machine(self, task: str) -> Dict[str, Any]:
         """Fallback to create a basic dynamic state machine when AI fails"""
@@ -1172,10 +1241,30 @@ Output only the JSON object. No commentary.
 
     async def execute_state(self, state: Dict[str, Any], context: Dict[str, Any]) -> Tuple[str, Any]:
         """Execute a single state with AI agent and tools"""
-        
+
         state_id = state['id']
         state_type = state['type']
-        
+
+        # Update mission phase based on current state
+        mission = context.get('mission')
+        if mission:
+            new_phase = enhanced_context_manager.determine_phase_from_state(
+                state, mission.current_phase
+            )
+            mission.current_phase = new_phase
+            logger.debug(f"State {state_id} - Mission phase: {new_phase}")
+
+        # Get intelligent context relevant to this state
+        state_dependencies = context.get('state_dependencies', {})
+        relevant_context = {}
+        if state_dependencies and context.get('results'):
+            relevant_context = enhanced_context_manager.get_relevant_context(
+                state,
+                context['results'],
+                state_dependencies,
+                max_context_size=2000  # Increased from 1200
+            )
+
         # Notify UI about state activation
         await self.hub.publish_control(ControlFrame(
             exec_id=context['exec_id'],
@@ -1226,22 +1315,46 @@ Output only the JSON object. No commentary.
                             except ImportError:
                                 logger.warning(f"Could not import tavily_search")
                 tool_inventory = self._tool_inventory_text(planned_names)
+
+                # Build tool parameters instruction if available
+                params_instruction = ""
+                if state.get('tool_parameters'):
+                    params_instruction = "\n\nIMPORTANT TOOL PARAMETERS:\nYou have been provided with specific parameters for your tools. Use these exact parameters when calling tools:\n"
+                    for tool_name, params in state['tool_parameters'].items():
+                        params_instruction += f"\n{tool_name}: {params}"
+
+                # Build enhanced mission-aware context
+                enhanced_context_str = ""
+                if mission and relevant_context:
+                    enhanced_context_str = enhanced_context_manager.build_enhanced_context(
+                        state, mission, relevant_context
+                    )
+                else:
+                    # Fallback to simple context formatting if no mission
+                    if relevant_context:
+                        enhanced_context_str = "\n=== RELEVANT CONTEXT FROM PREVIOUS WORK ===\n"
+                        for sid, res in relevant_context.items():
+                            enhanced_context_str += f"\n{sid}: {str(res)[:300]}...\n"
+
                 agent_config = StrandsAgentConfig(
                     name=state['name'],
                     system_prompt=f"""You are {state.get('agent_role', 'an AI agent')} in a multi-agent workflow.
+
+{enhanced_context_str}
 
 Your specific responsibility: {state.get('description', state.get('task', 'Execute your role'))}
 
 You must:
 1. Complete your specific task thoroughly using the tools provided
-2. Build upon any previous agent outputs provided
-3. Produce clear, actionable output for the next agent
+2. Build upon the relevant context provided above
+3. Produce clear, actionable output that advances toward the overall goal
 4. Focus on your role without repeating work already done
 
 IMPORTANT: You have been given specific tools for this task. You MUST use the appropriate tools from the list below to complete your work:
 {tool_inventory}
 
 If tools are available, use them to research, analyze, or perform your task. Do not just describe what you would do - actually use the tools to do it.
+{params_instruction}
 
 At the very end of your response, output exactly one line:
 NEXT_EVENT: <one of {allowed_events}>
@@ -1267,16 +1380,25 @@ No extra commentary after that line.""",
                 
                 # Stream execution
                 output = ""
+
+                # Include tool parameters if available
+                metadata = {
+                    **(context.get('previous_results', {})),
+                    'allowed_events': allowed_events,
+                }
+
+                # Add tool parameters from state if present
+                if state.get('tool_parameters'):
+                    metadata['tool_parameters'] = state['tool_parameters']
+                    logger.info(f"Using tool parameters for state {state_id}: {state['tool_parameters']}")
+
                 agent_context = AgentContext(
                     exec_id=context['exec_id'],
                     agent_id=state_id,
                     task=state.get('description', state.get('task', context.get('task', 'Execute assigned task'))),
                     config=agent_config.__dict__,
                     parent_result=context.get('previous_results', {}).get(context.get('last_state'), ""),
-                    metadata={
-                        **(context.get('previous_results', {})),
-                        'allowed_events': allowed_events,
-                    }
+                    metadata=metadata
                 )
                 async for frame in agent_runtime.stream(agent_context):
                     # Publish based on frame type
@@ -1301,41 +1423,49 @@ No extra commentary after that line.""",
 
             elif state_type in ['analysis', 'decision']:
                 # Create analysis agent
-                task_with_context = state.get('description', state.get('task', 'Execute assigned task'))
-                # Build comprehensive context from all previous states
-                if context.get('previous_results'):
-                    prev_results = context['previous_results']
-                    # Format previous results concisely with a char budget to stay within token limits
-                    max_total = 1200
-                    per_item = 400
-                    used = 0
-                    context_parts = []
-                    for state_key, state_result in prev_results.items():
-                        if not state_result or not str(state_result).strip():
-                            continue
-                        snippet = str(state_result)
-                        if len(snippet) > per_item:
-                            snippet = snippet[:per_item] + "..."
-                        line = f"{state_key}: {snippet}"
-                        if used + len(line) > max_total:
-                            break
-                        context_parts.append(line)
-                        used += len(line)
-                    if context_parts:
-                        task_with_context += "\n\nPrevious agent outputs (truncated):\n" + "\n\n".join(context_parts)
-                
+                # Build enhanced mission-aware context
+                enhanced_context_str = ""
+                if mission and relevant_context:
+                    enhanced_context_str = enhanced_context_manager.build_enhanced_context(
+                        state, mission, relevant_context
+                    )
+                else:
+                    # Fallback to old truncated context if no mission
+                    if context.get('previous_results'):
+                        prev_results = context['previous_results']
+                        # Format previous results concisely with a char budget to stay within token limits
+                        max_total = 2000  # Increased from 1200
+                        per_item = 600  # Increased from 400
+                        used = 0
+                        context_parts = []
+                        for state_key, state_result in prev_results.items():
+                            if not state_result or not str(state_result).strip():
+                                continue
+                            snippet = str(state_result)
+                            if len(snippet) > per_item:
+                                snippet = snippet[:per_item] + "..."
+                            line = f"{state_key}: {snippet}"
+                            if used + len(line) > max_total:
+                                break
+                            context_parts.append(line)
+                            used += len(line)
+                        if context_parts:
+                            enhanced_context_str = "\n\nPrevious agent outputs:\n" + "\n\n".join(context_parts)
+
                 allowed_events = list(state.get('transitions', {}).keys())
                 tool_inventory = self._tool_inventory_text()
                 agent_config = StrandsAgentConfig(
                     name=state['name'],
                     system_prompt=f"""You are {state.get('agent_role', 'an AI agent')} in a multi-agent workflow.
 
+{enhanced_context_str}
+
 Your specific responsibility: {state.get('description', state.get('task', 'Execute your role'))}
 
 You must:
-1. Analyze and build upon the outputs from previous agents
+1. Analyze and build upon the relevant context provided above
 2. Add your unique contribution based on your role
-3. Produce structured, clear output that advances the workflow
+3. Produce structured, clear output that advances toward the overall goal
 4. Be concise but thorough in your specific domain
 
 Available tools (for reference; prefer reasoning first):
@@ -1365,7 +1495,7 @@ No extra commentary after that line.""",
                 agent_context = AgentContext(
                     exec_id=context['exec_id'],
                     agent_id=state_id,
-                    task=task_with_context,
+                    task=state.get('description', state.get('task', 'Execute assigned task')),  # Use original task, context is in system prompt
                     config=agent_config.__dict__,
                     parent_result=context.get('previous_results', {}).get(context.get('last_state'), ""),
                     metadata={
@@ -1501,6 +1631,19 @@ No extra commentary after that line.""",
         context['results'][state_id] = result
         context['previous_results'] = context['results']
         context['last_state'] = state_id  # Track last state for chaining
+
+        # Update mission context with key findings from this state
+        mission = context.get('mission')
+        if mission and result:
+            mission = enhanced_context_manager.update_mission_from_result(
+                mission, state_id, result
+            )
+            # Calculate progress toward goal
+            mission.progress = enhanced_context_manager.calculate_progress(
+                mission, context['results']
+            )
+            context['mission'] = mission
+            logger.debug(f"Mission progress after {state_id}: {mission.progress:.0%}")
         
         # Notify UI about state completion
         await self.hub.publish_control(ControlFrame(
@@ -1621,9 +1764,19 @@ No extra commentary after that line.""",
                 pass
             
             # Step 2: Execute the state machine
+            # Extract mission context from task
+            mission = enhanced_context_manager.extract_mission_from_task(task)
+
+            # Map state dependencies for intelligent context management
+            states_list = state_machine.get('states', [])
+            edges_list = state_machine.get('edges', [])
+            state_dependencies = enhanced_context_manager.map_state_dependencies(states_list, edges_list)
+
             context = {
                 'exec_id': exec_id,
                 'task': task,
+                'mission': mission,  # Add mission context
+                'state_dependencies': state_dependencies,  # Add dependency map
                 'results': {},
                 'visits': {},
                 # Optional UI overrides passed via request body

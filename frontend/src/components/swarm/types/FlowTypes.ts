@@ -1,12 +1,13 @@
 // Type definitions for Flow UI components
 import { Node, Edge } from 'reactflow';
+import { BlockStatus } from '../../../types/workflow';
 
 // Strongly typed node data
 export interface NodeData {
   // Basic info
   label: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: BlockStatus;
   nodeType?: string;
   
   // Agent-specific
