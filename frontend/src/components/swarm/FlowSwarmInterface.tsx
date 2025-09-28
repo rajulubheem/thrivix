@@ -39,7 +39,8 @@ import { EnhancedAgentNode } from './components/EnhancedAgentNode';
 import { ProfessionalWorkflowBlock } from './components/ProfessionalWorkflowBlock';
 import { EnhancedToolBlock } from './components/EnhancedToolBlock';
 import { ImprovedEnhancedToolBlock } from './components/ImprovedEnhancedToolBlock';
-import ToolPalette from './components/ToolPalette';
+import UnifiedBlockManager, { BlockConfig } from './components/UnifiedBlockManager';
+import BlockSettingsPanel from './components/BlockSettingsPanel';
 import { WorkflowToolbar } from './components/WorkflowToolbar';
 import { v4 as uuidv4 } from 'uuid';
 import { toolSchemaService, ToolSchema } from '../../services/toolSchemaService';
@@ -166,16 +167,37 @@ const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
         </div>
       )}
 
-      {(data.toolsPlanned?.length > 0 || data.toolsUsed?.length > 0) && (
+      {(data.tools?.length > 0 || data.toolsPlanned?.length > 0 || data.toolsUsed?.length > 0) && (
         <div style={{
           display: 'flex',
           flexWrap: 'wrap',
           gap: '4px',
           marginTop: '8px',
         }}>
-          {(data.toolsUsed || data.toolsPlanned || []).slice(0, 3).map((tool: string, i: number) => (
+          {(data.toolsUsed || data.tools || data.toolsPlanned || []).slice(0, 3).map((tool: string, i: number) => (
             <span
               key={i}
+              style={{
+                fontSize: '10px',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                background: data.toolsUsed?.includes(tool)
+                  ? (isDark ? 'rgba(34, 197, 94, 0.2)' : '#dcfce7')
+                  : (isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)'),
+                color: data.toolsUsed?.includes(tool)
+                  ? (isDark ? '#86efac' : '#166534')
+                  : (isDark ? '#d1d5db' : '#6b7280'),
+                border: data.toolsUsed?.includes(tool)
+                  ? (isDark ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid #86efac')
+                  : (isDark ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.1)'),
+                fontWeight: data.toolsUsed?.includes(tool) ? '600' : '400',
+              }}
+            >
+              {tool}
+            </span>
+          ))}
+          {((data.toolsUsed || data.tools || data.toolsPlanned || []).length > 3) && (
+            <span
               style={{
                 fontSize: '10px',
                 padding: '2px 6px',
@@ -185,9 +207,9 @@ const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
                 border: isDark ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.1)',
               }}
             >
-              {tool}
+              +{(data.toolsUsed || data.tools || data.toolsPlanned || []).length - 3}
             </span>
-          ))}
+          )}
         </div>
       )}
 
@@ -414,11 +436,25 @@ const FlowSwarmInterface: React.FC = () => {
   const [planned, setPlanned] = useState<boolean>(false);
   const [showImportDialog, setShowImportDialog] = useState<boolean>(false);
   const [importJsonText, setImportJsonText] = useState<string>('');
-  const [showToolPalette, setShowToolPalette] = useState<boolean>(true);
+  const [showUnifiedManager, setShowUnifiedManager] = useState<boolean>(false);
+  const [selectedNodeForSettings, setSelectedNodeForSettings] = useState<Node | null>(null);
 
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
   const agentSequences = useRef<Map<string, number>>(new Map());
+
+  // Keyboard shortcut for Block Manager
+  useEffect(() => {
+    const handleKeydown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + B to open Block Manager
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        setShowUnifiedManager(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, []);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Camera follow helpers
   const pendingFocusIdRef = useRef<string | null>(null);
@@ -1850,7 +1886,66 @@ const FlowSwarmInterface: React.FC = () => {
 
   const startExecution = async () => {
     if (!task.trim()) return;
-    
+
+    // If there are no nodes, first plan the workflow
+    if (nodes.length === 0 && executionMode === 'dynamic') {
+      try {
+        // Step 1: Plan the workflow
+        const planRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task,
+            tool_preferences: {
+              selected_tools: Array.from(selectedTools),
+              restrict_to_selected: selectedTools.size > 0,
+              use_enhanced_blocks: true
+            }
+          })
+        });
+
+        if (!planRes.ok) throw new Error(`Plan HTTP error! status: ${planRes.status}`);
+
+        const planData = await planRes.json();
+
+        if (planData.machine) {
+          // Import the generated workflow
+          await importStateMachine(planData.machine, true, false);
+
+          // Wait a bit for the UI to update
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Now execute the planned workflow
+          const machine = buildMachineFromGraph();
+          const execRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              task,
+              machine,
+              tool_preferences: {
+                selected_tools: Array.from(selectedTools),
+                restrict_to_selected: selectedTools.size > 0
+              }
+            })
+          });
+
+          if (!execRes.ok) throw new Error(`Execute HTTP error! status: ${execRes.status}`);
+
+          const execData = await execRes.json();
+          setExecutionId(execData.exec_id);
+          setIsRunning(true);
+          setTimeout(() => connectWebSocket(execData.exec_id, false), 100);
+        }
+      } catch (error) {
+        console.error('Plan and execute failed:', error);
+        setIsRunning(false);
+        setConnectionStatus('error');
+      }
+      return;
+    }
+
+    // If nodes exist or not dynamic mode, execute directly
     // ⚠️ PRESERVE USER BLOCKS: Only clear if there are absolutely no nodes
     // This prevents accidental clearing of manually created blocks
     if (nodes.length > 0) {
@@ -1862,36 +1957,54 @@ const FlowSwarmInterface: React.FC = () => {
     }
     setIsRunning(true);
     agentSequences.current.clear();
-    
+
     try {
-      const requestBody = {
-        task,
-        execution_mode: executionMode,
-        use_mock: false,
-        max_parallel: 5,
-        tool_preferences: {
-          selected_tools: Array.from(selectedTools),
-          restrict_to_selected: selectedTools.size > 0,  // If tools are selected, restrict to them
-        }
-      };
-      
-      // Use AI state machine endpoint for dynamic mode
-      const apiUrl = executionMode === 'dynamic' 
-        ? `${window.location.origin}/api/v1/streaming/stream/state-machine`
-        : `${window.location.origin}/api/v1/streaming/stream/v2`;
-        
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-      
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const data = await response.json();
-      setExecutionId(data.exec_id);
-      
-      setTimeout(() => connectWebSocket(data.exec_id, false), 100);
+      if (nodes.length > 0) {
+        // Execute with existing machine
+        const machine = buildMachineFromGraph();
+        const response = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task,
+            machine,
+            tool_preferences: {
+              selected_tools: Array.from(selectedTools),
+              restrict_to_selected: selectedTools.size > 0
+            }
+          })
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+        const data = await response.json();
+        setExecutionId(data.exec_id);
+        setTimeout(() => connectWebSocket(data.exec_id, false), 100);
+      } else {
+        // Non-dynamic mode without nodes
+        const requestBody = {
+          task,
+          execution_mode: executionMode,
+          use_mock: false,
+          max_parallel: 5,
+          tool_preferences: {
+            selected_tools: Array.from(selectedTools),
+            restrict_to_selected: selectedTools.size > 0,
+          }
+        };
+
+        const response = await fetch(`${window.location.origin}/api/v1/streaming/stream/v2`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+        const data = await response.json();
+        setExecutionId(data.exec_id);
+        setTimeout(() => connectWebSocket(data.exec_id, false), 100);
+      }
     } catch (error) {
       console.error('Failed:', error);
       setIsRunning(false);
@@ -2196,6 +2309,46 @@ const FlowSwarmInterface: React.FC = () => {
     setNodes((nds) => [...nds, newNode]);
   }, [nodes, setNodes, setEdges]);
 
+  // Unified block addition handler
+  const addUnifiedBlock = useCallback((blockConfig: BlockConfig, position?: { x: number; y: number }) => {
+    const nodePosition = position || {
+      x: Math.random() * 400 + 200,
+      y: Math.random() * 300 + 100
+    };
+
+    if (blockConfig.type === 'tool' && blockConfig.toolSchema) {
+      // Add tool block
+      addToolBlock(blockConfig.toolName!, blockConfig.toolSchema, nodePosition);
+    } else {
+      // Add professional/workflow block
+      const toolsList = blockConfig.tools || [];
+      const newNode: Node = {
+        id: uuidv4(),
+        type: 'professional',
+        position: nodePosition,
+        data: {
+          type: blockConfig.subType,
+          name: blockConfig.name || `${blockConfig.subType.charAt(0).toUpperCase() + blockConfig.subType.slice(1)} ${nodes.length + 1}`,
+          description: blockConfig.description || '',
+          agent_role: blockConfig.agent_role || 'Agent',
+          tools: toolsList,  // Modern field name
+          toolsPlanned: toolsList,  // Legacy compatibility
+          transitions: {},
+          enabled: true,
+          advancedMode: false,
+          isWide: false,
+          isDarkMode,
+          nodeType: blockConfig.subType as any,
+          icon: blockConfig.icon,
+          color: blockConfig.color,
+          category: blockConfig.category
+        }
+      };
+      setNodes((nds) => [...nds, newNode]);
+    }
+  }, [nodes.length, setNodes, isDarkMode, addToolBlock]);
+
+  // Legacy wrapper for compatibility
   const addProfessionalBlock = useCallback((type: string = 'analysis', position?: { x: number; y: number }) => {
     const nodePosition = position || {
       x: Math.random() * 400 + 200,
@@ -3245,11 +3398,12 @@ const FlowSwarmInterface: React.FC = () => {
       const data = await res.json();
       const machine = data.machine;
       if(machine){
-        // Use the new import function to create professional blocks while preserving existing ones
-        importStateMachine(machine, true, true); // true = use professional blocks, true = preserve existing
+        // Clear existing if empty, preserve if not
+        const shouldPreserve = nodes.length > 0;
+        importStateMachine(machine, true, shouldPreserve);
       }
     }catch(e){ console.error('Plan failed', e); }
-  }, [task, selectedTools, importStateMachine]);
+  }, [task, selectedTools, importStateMachine, nodes.length]);
 
   const runPlannedWorkflow = useCallback(async ()=>{
     try{
@@ -3424,6 +3578,8 @@ const FlowSwarmInterface: React.FC = () => {
     event.stopPropagation();
     preventRerender.current = true;
     setSelectedAgent(prev => prev === node.id ? null : node.id);
+    // Show settings panel for the clicked node
+    setSelectedNodeForSettings(node);
     // Reset highlight path if selecting a new node
     if (highlightPath && selectedAgent !== node.id) {
       setHighlightPath(false);
@@ -4243,7 +4399,7 @@ const FlowSwarmInterface: React.FC = () => {
           )}
             {/* Professional Toolbar */}
             <WorkflowToolbar
-              onAddBlock={addProfessionalBlock}
+              onAddBlock={() => setShowUnifiedManager(true)}
               onArrangeBlocks={() => updateGraph(true)}
               onRunWorkflow={runPlannedWorkflow}
               onStopWorkflow={() => setIsRunning(false)}
@@ -4264,14 +4420,15 @@ const FlowSwarmInterface: React.FC = () => {
               }}
             />
 
-            {/* Tool Palette */}
-            {showToolPalette && (
-              <ToolPalette
-                onAddTool={addToolBlock}
-                isCollapsed={!showToolPalette}
-                onToggleCollapse={() => setShowToolPalette(!showToolPalette)}
-              />
-            )}
+            {/* Unified Block Manager */}
+            <UnifiedBlockManager
+              isOpen={showUnifiedManager}
+              onClose={() => setShowUnifiedManager(false)}
+              onAddBlock={addUnifiedBlock}
+              isDarkMode={isDarkMode}
+              selectedTools={selectedTools}
+              onToolsChange={setSelectedTools}
+            />
 
             <Panel position="top-left" style={{ top: '80px' }}>
               <div className="panel-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -4283,8 +4440,8 @@ const FlowSwarmInterface: React.FC = () => {
                   Re-layout
                 </button>
 
-                <button onClick={() => setShowToolPalette(!showToolPalette)} className="panel-button">
-                  {showToolPalette ? 'Hide Tools' : 'Show Tools'}
+                <button onClick={() => setShowUnifiedManager(true)} className="panel-button">
+                  📦 Block Manager
                 </button>
 
                 <button
@@ -4598,101 +4755,6 @@ const FlowSwarmInterface: React.FC = () => {
         {/* Chatbot Output Panel */}
         <div className="flow-output-panel" style={{ width: `${outputPanelWidth}px` }}>
 
-          {/* Node Editor (when in edit mode and a node is selected) */}
-          {editMode && selectedAgent && (()=>{
-            const n = nodes.find(nn=>nn.id===selectedAgent);
-            if (!n) return null;
-            const d: any = n.data || {};
-            return (
-              <div style={{ border: `1px solid ${isDarkMode? '#334155':'#e2e8f0'}`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Block Settings</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
-                  <label>
-                    <div className="label">ID</div>
-                    <input className="task-input" value={n.id} disabled />
-                  </label>
-                  <label>
-                    <div className="label">Name</div>
-                    <input className="task-input" defaultValue={d.name || ''} onBlur={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, name:e.target.value, label:e.target.value}}:x))} />
-                  </label>
-                  <label>
-                    <div className="label">Type</div>
-                    <select className="task-input" defaultValue={d.nodeType || 'analysis'} onChange={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, nodeType:e.target.value}}:x))}>
-                      <option value="analysis">analysis</option>
-                      <option value="tool_call">tool_call</option>
-                      <option value="decision">decision</option>
-                      <option value="parallel">parallel</option>
-                      <option value="final">final</option>
-                    </select>
-                  </label>
-                  <label>
-                    <div className="label">Agent Role</div>
-                    <input className="task-input" defaultValue={d.agentRole || ''} onBlur={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, agentRole:e.target.value}}:x))} />
-                  </label>
-                  <label>
-                    <div className="label">Description/Prompt</div>
-                    <textarea className="task-input" defaultValue={d.description || ''} rows={4} onBlur={(e)=>setNodes(prev=>prev.map(x=>x.id===n.id?{...x, data:{...x.data, description:e.target.value}}:x))} />
-                  </label>
-                  <div>
-                    <div className="label">Tools</div>
-                    <div style={{ display:'flex', flexWrap:'wrap', gap:6, maxHeight: 120, overflow:'auto', border: `1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding: 6, borderRadius: 6 }}>
-                      {availableTools.map(t => {
-                        const checked = Array.isArray(d.toolsPlanned) ? d.toolsPlanned.includes(t) : false;
-                        return (
-                          <label key={t} style={{ display:'flex', alignItems:'center', gap:4 }}>
-                            <input type="checkbox" checked={checked} onChange={(e)=>{
-                              setNodes(prev=>prev.map(x=>{
-                                if (x.id!==n.id) return x;
-                                const curr = new Set<string>(Array.isArray((x.data as any)?.toolsPlanned)?(x.data as any).toolsPlanned:[]);
-                                if (e.target.checked) curr.add(t); else curr.delete(t);
-                                return { ...x, data:{...x.data, toolsPlanned: Array.from(curr)} };
-                              }));
-                            }} />
-                            <span>{t}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div style={{ display:'flex', gap:8, justifyContent:'space-between' }}>
-                    <div style={{ display:'flex', gap:8 }}>
-                      <button className="panel-button" onClick={async()=>{
-                        if (!executionId) return;
-                        // Set as initial state
-                        try {
-                          await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set_initial_state: n.id })
-                          });
-                        } catch (e) { console.error('Failed to set initial state', e); }
-                      }}>Set Initial</button>
-                      <button className="panel-button" onClick={async()=>{
-                        if (!executionId) return;
-                        try {
-                          await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_states: [n.id] }) });
-                          setNodes(prev=>prev.filter(x=>x.id!==n.id));
-                          setEdges(prev=>prev.filter(e=>e.source!==n.id && e.target!==n.id));
-                          setSelectedAgent(null);
-                        } catch (e) { console.error('Failed to delete node', e); }
-                      }}>Delete</button>
-                    </div>
-                    <div>
-                      <button className="panel-button" onClick={async()=>{
-                        if (!executionId) return;
-                        try {
-                          const node = nodes.find(nn=>nn.id===n.id);
-                          const data: any = node?.data || {};
-                          const patch = { states: [{ id: n.id, name: data.name || data.label || n.id, type: data.nodeType || 'analysis', description: data.description, agent_role: data.agentRole, tools: Array.isArray(data.toolsPlanned)?data.toolsPlanned:[] }] };
-                          await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
-                          });
-                        } catch (e) { console.error('Failed to save node', e); }
-                    }}>Save Block</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
 
           <ChatbotOutput
             agents={stableAgents}
@@ -4702,8 +4764,8 @@ const FlowSwarmInterface: React.FC = () => {
             onNodeFocus={handleNodeFocus}
           />
 
-          {/* Add Node Modal */}
-          {showAddNode && (
+          {/* Add Node Modal - Replaced by Unified Block Manager */}
+          {false && showAddNode && (
             <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setShowAddNode(false)}>
               <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:480, margin:'10vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
                 <div style={{ fontWeight:600, marginBottom:8 }}>Add Block</div>
@@ -5007,6 +5069,51 @@ const FlowSwarmInterface: React.FC = () => {
           </div>
         </>
       )} {/* End of false block - old implementation */}
+
+      {/* Block Settings Panel */}
+      {selectedNodeForSettings && (
+        <BlockSettingsPanel
+          node={nodes.find(n => n.id === selectedNodeForSettings.id) || selectedNodeForSettings}
+          onClose={() => setSelectedNodeForSettings(null)}
+          onUpdate={(nodeId: string, data: any) => {
+            setNodes((nds) =>
+              nds.map((n) =>
+                n.id === nodeId
+                  ? { ...n, data: { ...n.data, ...data } }
+                  : n
+              )
+            );
+            // Update the selectedNodeForSettings to reflect the changes
+            setSelectedNodeForSettings(prev =>
+              prev && prev.id === nodeId
+                ? { ...prev, data: { ...prev.data, ...data } }
+                : prev
+            );
+          }}
+          onDelete={(nodeId: string) => {
+            setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+            setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+            setSelectedNodeForSettings(null);
+            setSelectedAgent(null);
+          }}
+          onDuplicate={(nodeId: string) => {
+            const nodeToDuplicate = nodes.find((n) => n.id === nodeId);
+            if (nodeToDuplicate) {
+              const newNode = {
+                ...nodeToDuplicate,
+                id: uuidv4(),
+                position: {
+                  x: nodeToDuplicate.position.x + 50,
+                  y: nodeToDuplicate.position.y + 50
+                }
+              };
+              setNodes((nds) => [...nds, newNode]);
+            }
+          }}
+          isDarkMode={isDarkMode}
+          availableTools={availableTools}
+        />
+      )}
 
       {/* Command Bar */}
       <div className="command-bar">

@@ -569,7 +569,7 @@ Output only the JSON object. No commentary.
             model = OpenAIModel(
                 client_args={"api_key": api_key},
                 model_id="gpt-4o-mini",
-                params={"temperature": 0.3, "max_tokens": 4000}  # Increased for complex state machines
+                params={"temperature": 0.3, "max_tokens": 16000}  # Maximum for complex workflows
             )
             
             planner = Agent(
