@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search,
   X,
@@ -70,6 +70,7 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
   const [availableTools, setAvailableTools] = useState<ToolSchema[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterMode, setFilterMode] = useState<'add' | 'filter'>('add'); // Toggle between adding blocks and filtering tools
+  const [isDraggingItem, setIsDraggingItem] = useState(false);
 
   // Load available tools
   useEffect(() => {
@@ -282,12 +283,36 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
     setExpandedCategories(newExpanded);
   };
 
+  const serializeBlock = useCallback((block: BlockConfig): BlockConfig => {
+    const { icon, ...rest } = block;
+    return {
+      ...rest,
+      icon: undefined
+    };
+  }, []);
+
   const handleAddBlock = (block: BlockConfig) => {
     onAddBlock(block);
-    // Don't close if shift is held for multiple additions
-    if (!window.event || !(window.event as KeyboardEvent).shiftKey) {
-      onClose();
-    }
+  };
+
+  const handleBlockDragStart = (event: React.DragEvent<HTMLButtonElement>, block: BlockConfig) => {
+    setIsDraggingItem(true);
+    event.dataTransfer.effectAllowed = 'copyMove';
+
+    const payload = {
+      source: 'unified-block-manager',
+      block: serializeBlock(block)
+    };
+
+    event.dataTransfer.setData('application/reactflow', JSON.stringify(payload));
+    event.dataTransfer.setData('application/json', JSON.stringify(payload));
+
+    // Provide text fallback for external drops (unused but keeps compatibility)
+    event.dataTransfer.setData('text/plain', block.name);
+  };
+
+  const handleBlockDragEnd = () => {
+    setIsDraggingItem(false);
   };
 
   const handleToolToggle = (toolName: string) => {
@@ -306,7 +331,11 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
 
   return (
     <div className={`unified-block-manager ${isDarkMode ? 'dark' : ''}`}>
-      <div className="manager-overlay" onClick={onClose} />
+      <div
+        className="manager-overlay"
+        onClick={onClose}
+        style={{ pointerEvents: isDraggingItem ? 'none' : 'auto' }}
+      />
 
       <div className="manager-panel">
         {/* Header */}
@@ -424,7 +453,10 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
                             key={`${item.toolName || item.subType}-${index}`}
                             className="block-item"
                             onClick={() => handleAddBlock(item)}
-                            title={`${item.description}\n\nClick to add, Shift+Click to add multiple`}
+                            draggable
+                            onDragStart={(event) => handleBlockDragStart(event, item)}
+                            onDragEnd={handleBlockDragEnd}
+                            title={`${item.description}${item.description ? '\n\n' : ''}Click to add or drag onto the canvas`}
                           >
                             <div className="item-icon" style={{ color: item.color }}>
                               {React.createElement(item.icon || Wrench, { size: 20 })}
@@ -507,7 +539,7 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
         <div className="manager-footer">
           <div className="footer-info">
             {filterMode === 'add' ? (
-              <span>💡 Tip: Hold Shift while clicking to add multiple blocks</span>
+              <span>💡 Tip: Click to add or drag blocks onto the canvas. The manager stays open for rapid modeling.</span>
             ) : (
               <span>🔧 {selectedTools.size === 0 ? 'All tools enabled' : `${selectedTools.size} tools restricted`}</span>
             )}

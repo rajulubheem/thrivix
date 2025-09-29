@@ -10,7 +10,66 @@ interface BlockSettingsPanelProps {
   onDuplicate: (nodeId: string) => void;
   isDarkMode?: boolean;
   availableTools?: string[];
+  position?: { x: number; y: number };
 }
+
+const normalizeTools = (input: any): string[] => {
+  if (!input) return [];
+
+  if (Array.isArray(input)) {
+    return input
+      .map((tool) => (typeof tool === 'string' ? tool.trim() : String(tool)))
+      .filter((tool) => tool.length > 0);
+  }
+
+  if (input instanceof Set) {
+    return Array.from(input)
+      .map((tool) => (typeof tool === 'string' ? tool.trim() : String(tool)))
+      .filter((tool) => tool.length > 0);
+  }
+
+  if (typeof input === 'string') {
+    return input
+      .split(',')
+      .map((tool) => tool.trim())
+      .filter((tool) => tool.length > 0);
+  }
+
+  if (typeof input === 'object') {
+    return Object.keys(input as Record<string, unknown>)
+      .filter((key) => {
+        const value = (input as Record<string, unknown>)[key];
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value !== 0;
+        if (Array.isArray(value)) return value.length > 0;
+        return Boolean(value);
+      })
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0);
+  }
+
+  return [];
+};
+
+const collectNodeTools = (node: any): string[] => {
+  const sources = [
+    node?.data?.tools,
+    node?.data?.toolsPlanned,
+    node?.data?.selected_tools,
+    node?.data?.toolsUsed
+  ];
+
+  const result: string[] = [];
+  sources.forEach((source) => {
+    normalizeTools(source).forEach((tool) => {
+      if (!result.includes(tool)) {
+        result.push(tool);
+      }
+    });
+  });
+
+  return result;
+};
 
 const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
   node,
@@ -19,20 +78,15 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
   onDelete,
   onDuplicate,
   isDarkMode = false,
-  availableTools = []
+  availableTools = [],
+  position
 }) => {
-  // Initialize with proper tools array
-  const initialTools = (() => {
-    const nodeTools = node?.data?.tools || node?.data?.toolsPlanned || [];
-    return Array.isArray(nodeTools) ? nodeTools : [];
-  })();
-
   const [formData, setFormData] = useState({
     name: node?.data?.name || node?.data?.label || '',
     type: node?.data?.type || node?.data?.nodeType || 'analysis',
     agent_role: node?.data?.agent_role || node?.data?.agentRole || '',
     description: node?.data?.description || '',
-    tools: initialTools,
+    tools: collectNodeTools(node),
     parameters: node?.data?.parameters || {},
     enabled: node?.data?.enabled !== false
   });
@@ -56,10 +110,23 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
 
   const allTools = availableTools.length > 0 ? availableTools : defaultTools;
 
+  // Add keyboard shortcut to close panel with Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
   useEffect(() => {
     // Ensure tools is always an array
-    const nodeTools = node?.data?.tools || node?.data?.toolsPlanned || [];
-    const toolsArray = Array.isArray(nodeTools) ? nodeTools : [];
+    const toolsArray = collectNodeTools(node);
 
     // Debug logging
     console.log('BlockSettingsPanel - Node data updated:', {
@@ -79,7 +146,7 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
       parameters: node?.data?.parameters || {},
       enabled: node?.data?.enabled !== false
     });
-  }, [node?.id, node?.data]);
+  }, [node]);
 
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({
@@ -90,10 +157,12 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
 
   const handleToolToggle = (tool: string) => {
     setFormData(prev => {
+      const normalizedTool = tool.trim();
       const currentTools = Array.isArray(prev.tools) ? prev.tools : [];
-      const newTools = currentTools.includes(tool)
-        ? currentTools.filter((t: string) => t !== tool)
-        : [...currentTools, tool];
+      const exists = currentTools.includes(normalizedTool);
+      const newTools = exists
+        ? currentTools.filter((t: string) => t !== normalizedTool)
+        : [...currentTools, normalizedTool];
       return { ...prev, tools: newTools };
     });
   };
@@ -106,6 +175,14 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
     // Debug logging
     console.log('BlockSettingsPanel - Saving with tools:', formData.tools);
 
+    const toolsToSave = Array.from(
+      new Set(
+        (Array.isArray(formData.tools) ? formData.tools : [])
+          .map((tool) => tool.trim())
+          .filter((tool) => tool.length > 0)
+      )
+    );
+
     const updatedData = {
       ...node.data,
       name: formData.name,
@@ -115,8 +192,9 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
       agentRole: formData.agent_role,
       agent_role: formData.agent_role, // Keep both for compatibility
       description: formData.description,
-      tools: formData.tools,
-      toolsPlanned: formData.tools, // Keep both for compatibility
+      tools: toolsToSave,
+      toolsPlanned: toolsToSave, // Keep both for compatibility
+      selected_tools: toolsToSave,
       parameters: formData.parameters,
       enabled: formData.enabled
     };
@@ -153,18 +231,102 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
   ];
 
   return (
-    <div className={`block-settings-panel ${isDarkMode ? 'dark' : ''}`}>
-      <div className="panel-header">
-        <div className="header-title">
-          <Settings size={20} />
-          <h3>Block Settings</h3>
+    <>
+      {/* Backdrop overlay */}
+      <div
+        className="block-settings-backdrop"
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: isDarkMode ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.4)',
+          backdropFilter: 'blur(2px)',
+          zIndex: 999,
+          animation: 'fadeIn 0.2s ease-out',
+        }}
+      />
+
+      <div
+        className={`block-settings-panel ${isDarkMode ? 'dark' : ''}`}
+        style={{
+          position: 'fixed',
+          right: '20px',
+          top: '50%',
+          transform: 'translateY(-50%)',
+          width: '420px',
+          maxWidth: 'calc(100vw - 40px)',
+          maxHeight: 'calc(100vh - 120px)',
+          backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
+          borderRadius: '16px',
+          boxShadow: isDarkMode
+            ? '0 20px 50px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(148, 163, 184, 0.1)'
+            : '0 20px 50px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+          display: 'flex',
+          flexDirection: 'column',
+          zIndex: 1000,
+          animation: 'slideInRight 0.3s ease-out',
+          border: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
+        }}
+      >
+      <div className="panel-header" style={{
+        padding: '20px 24px',
+        borderBottom: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
+        background: isDarkMode
+          ? 'linear-gradient(to bottom, #0f172a, #0f172a)'
+          : 'linear-gradient(to bottom, #ffffff, #fafafa)',
+      }}>
+        <div className="header-title" style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          color: isDarkMode ? '#f1f5f9' : '#0f172a',
+        }}>
+          <Settings size={20} color={isDarkMode ? '#60a5fa' : '#3b82f6'} />
+          <h3 style={{
+            margin: 0,
+            fontSize: '18px',
+            fontWeight: 600,
+            color: 'inherit',
+          }}>Block Settings</h3>
         </div>
-        <button className="close-btn" onClick={onClose}>
+        <button
+          className="close-btn"
+          onClick={onClose}
+          style={{
+            width: '36px',
+            height: '36px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: isDarkMode ? '#1e293b' : '#f1f5f9',
+            border: 'none',
+            borderRadius: '8px',
+            color: isDarkMode ? '#94a3b8' : '#64748b',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = isDarkMode ? '#334155' : '#e2e8f0';
+            e.currentTarget.style.color = isDarkMode ? '#f1f5f9' : '#0f172a';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = isDarkMode ? '#1e293b' : '#f1f5f9';
+            e.currentTarget.style.color = isDarkMode ? '#94a3b8' : '#64748b';
+          }}
+        >
           <X size={20} />
         </button>
       </div>
 
-      <div className="panel-content">
+      <div className="panel-content" style={{
+        flex: 1,
+        overflowY: 'auto',
+        padding: '20px',
+        backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
+      }}>
         {/* Basic Information */}
         <div className="settings-section">
           <button
@@ -254,13 +416,24 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
               <div className="tools-actions">
                 <button
                   className="action-btn"
-                  onClick={() => setFormData({ ...formData, tools: allTools })}
+                  onClick={() =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      tools: Array.from(
+                        new Set(
+                          allTools
+                            .map((tool) => tool.trim())
+                            .filter((tool) => tool.length > 0)
+                        )
+                      )
+                    }))
+                  }
                 >
                   Select All
                 </button>
                 <button
                   className="action-btn"
-                  onClick={() => setFormData({ ...formData, tools: [] })}
+                  onClick={() => setFormData((prev) => ({ ...prev, tools: [] }))}
                 >
                   Clear All
                 </button>
@@ -268,7 +441,8 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
 
               <div className="tools-grid">
                 {allTools.map(tool => {
-                  const isChecked = Array.isArray(formData.tools) && formData.tools.includes(tool);
+                  const normalizedTool = tool.trim();
+                  const isChecked = Array.isArray(formData.tools) && formData.tools.includes(normalizedTool);
                   return (
                     <label
                       key={tool}
@@ -384,7 +558,16 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
         </div>
       </div>
 
-      <div className="panel-footer">
+      <div className="panel-footer" style={{
+        padding: '20px 24px',
+        borderTop: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
+        display: 'flex',
+        justifyContent: 'flex-end',
+        gap: '12px',
+        backgroundColor: isDarkMode ? '#0f172a' : '#fafafa',
+        borderBottomLeftRadius: '16px',
+        borderBottomRightRadius: '16px',
+      }}>
         <button className="btn-secondary" onClick={onClose}>
           Cancel
         </button>
@@ -403,6 +586,7 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
         </button>
       </div>
     </div>
+    </>
   );
 };
 

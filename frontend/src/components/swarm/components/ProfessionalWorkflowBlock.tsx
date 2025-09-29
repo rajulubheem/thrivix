@@ -2,9 +2,9 @@ import React, { useState, useRef, useEffect, memo } from 'react';
 import { BlockStatus } from '../../../types/workflow';
 import { Handle, Position, type NodeProps, useUpdateNodeInternals } from 'reactflow';
 import {
-  Settings, ChevronDown, ChevronUp, X, Check, Edit3, Trash2, Copy,
-  GitBranch, Users, AlertCircle, Zap, RefreshCw, Play, Wrench,
-  Code, BookOpen, Info, Maximize2, Minimize2, MoreVertical
+  Settings, X, Check, Trash2, Copy,
+  GitBranch, Users, AlertCircle, Zap, RefreshCw, Wrench,
+  Code, Maximize2, Minimize2, MoreVertical
 } from 'lucide-react';
 
 interface WorkflowBlockData {
@@ -45,6 +45,54 @@ interface WorkflowBlockData {
   availableTools?: string[];
 }
 
+const normalizeToolArray = (value: any): string[] => {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value
+      .map((tool) => (typeof tool === 'string' ? tool.trim() : String(tool)))
+      .filter((tool) => tool.length > 0);
+  }
+
+  if (value instanceof Set) {
+    return Array.from(value)
+      .map((tool) => (typeof tool === 'string' ? tool.trim() : String(tool)))
+      .filter((tool) => tool.length > 0);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((tool) => tool.trim())
+      .filter((tool) => tool.length > 0);
+  }
+
+  if (typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .filter((key) => {
+        const entry = (value as Record<string, unknown>)[key];
+        if (typeof entry === 'boolean') return entry;
+        if (typeof entry === 'number') return entry !== 0;
+        if (Array.isArray(entry)) return entry.length > 0;
+        return Boolean(entry);
+      })
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0);
+  }
+
+  return [];
+};
+
+const toolsEqual = (a: string[], b: string[]): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const BLOCK_CONFIG = {
   analysis: { color: '#3B82F6', icon: '🔍', label: 'Analysis', bgColor: 'rgba(59, 130, 246, 0.1)' },
   tool_call: { color: '#10B981', icon: Wrench, label: 'Tool Call', bgColor: 'rgba(16, 185, 129, 0.1)' },
@@ -66,7 +114,7 @@ export const ProfessionalWorkflowBlock = memo<NodeProps<WorkflowBlockData>>(({
   const [isHovered, setIsHovered] = useState(false);
   const [localName, setLocalName] = useState(data.name);
   const [localDescription, setLocalDescription] = useState(data.description || '');
-  const [localTools, setLocalTools] = useState<string[]>(data.tools || []);
+  const [localTools, setLocalTools] = useState<string[]>(normalizeToolArray(data.tools));
   const [showToolPicker, setShowToolPicker] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -75,23 +123,59 @@ export const ProfessionalWorkflowBlock = memo<NodeProps<WorkflowBlockData>>(({
 
   const config = BLOCK_CONFIG[data.type as keyof typeof BLOCK_CONFIG] || BLOCK_CONFIG.analysis;
   const NodeIcon = typeof config.icon === 'string' ? null : config.icon;
+  const {
+    onUpdate: updateBlock,
+    height: blockHeight,
+    isWide: blockIsWide,
+    advancedMode: blockAdvancedMode
+  } = data;
 
   // Calculate dynamic height based on content
   useEffect(() => {
-    if (blockRef.current && data.onUpdate) {
-      const height = blockRef.current.offsetHeight;
-      if (height !== data.height) {
-        data.onUpdate(id, { height });
+    if (blockRef.current && updateBlock) {
+      const measuredHeight = blockRef.current.offsetHeight;
+      if (measuredHeight !== blockHeight) {
+        updateBlock(id, { height: measuredHeight });
         updateNodeInternals(id);
       }
     }
-  }, [localDescription, localTools, data.isWide, data.advancedMode]);
+  }, [
+    blockHeight,
+    blockIsWide,
+    blockAdvancedMode,
+    id,
+    localDescription,
+    localTools,
+    updateBlock,
+    updateNodeInternals
+  ]);
+
+  useEffect(() => {
+    setLocalName(data.name);
+  }, [data.name]);
+
+  useEffect(() => {
+    setLocalDescription(data.description || '');
+  }, [data.description]);
+
+  useEffect(() => {
+    const normalized = normalizeToolArray(data.tools);
+    setLocalTools((prev) => (toolsEqual(prev, normalized) ? prev : normalized));
+  }, [data.tools]);
 
   // Auto-save on changes
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (data.onUpdate && (localName !== data.name || localDescription !== data.description || JSON.stringify(localTools) !== JSON.stringify(data.tools))) {
-        data.onUpdate(id, {
+      const normalizedDataTools = normalizeToolArray(data.tools);
+      if (
+        updateBlock &&
+        (
+          localName !== data.name ||
+          localDescription !== (data.description || '') ||
+          !toolsEqual(localTools, normalizedDataTools)
+        )
+      ) {
+        updateBlock(id, {
           name: localName,
           description: localDescription,
           tools: localTools
@@ -99,11 +183,15 @@ export const ProfessionalWorkflowBlock = memo<NodeProps<WorkflowBlockData>>(({
       }
     }, 500); // Debounce updates
     return () => clearTimeout(timer);
-  }, [localName, localDescription, localTools, id, data]);
+  }, [localName, localDescription, localTools, id, data.name, data.description, data.tools, updateBlock]);
 
   const handleAddTool = (tool: string) => {
-    if (!localTools.includes(tool)) {
-      setLocalTools([...localTools, tool]);
+    const normalizedTool = tool.trim();
+    if (normalizedTool.length === 0) {
+      return;
+    }
+    if (!localTools.includes(normalizedTool)) {
+      setLocalTools([...localTools, normalizedTool]);
     }
   };
 

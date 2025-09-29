@@ -1453,6 +1453,42 @@ No extra commentary after that line.""",
                             enhanced_context_str = "\n\nPrevious agent outputs:\n" + "\n\n".join(context_parts)
 
                 allowed_events = list(state.get('transitions', {}).keys())
+
+                # Check if this analysis/decision state has tools specified
+                resolved_tools = []
+                tools_instruction = ""
+                if state.get('tools') and len(state['tools']) > 0:
+                    # This analysis state needs tools - resolve them like tool_call states
+                    planned_names = self._resolve_tool_names_for_state(state)
+
+                    if TOOLS_AVAILABLE and DynamicToolWrapper:
+                        try:
+                            tool_wrapper = DynamicToolWrapper(callback_handler=None)
+                            for tool_name in planned_names:
+                                wrapped_tool = tool_wrapper.wrap_strands_tool(tool_name, state['name'])
+                                if wrapped_tool:
+                                    resolved_tools.append(wrapped_tool)
+                                    logger.info(f"✅ Added tool {tool_name} to analysis state {state_id}")
+                                else:
+                                    logger.warning(f"⚠️ Could not wrap tool {tool_name} for analysis state {state_id}")
+                        except Exception as e:
+                            logger.warning(f"Tool wrapping failed for analysis state {state_id}: {e}")
+                    else:
+                        # Fallback for tavily_search if no wrapper available
+                        for tool_name in planned_names:
+                            if tool_name == 'tavily_search':
+                                try:
+                                    from tools.tavily_search_tool import tavily_search
+                                    resolved_tools.append(tavily_search)
+                                    logger.info(f"✅ Directly loaded tavily_search for analysis state {state_id}")
+                                except ImportError:
+                                    logger.warning(f"Could not import tavily_search")
+
+                    if resolved_tools:
+                        tools_instruction = f"\n\nIMPORTANT: You have tools available for this task. Use them to complete your work:\n{self._tool_inventory_text(planned_names)}"
+                    else:
+                        logger.warning(f"Analysis state {state_id} requested tools {planned_names} but none could be loaded")
+
                 tool_inventory = self._tool_inventory_text()
                 agent_config = StrandsAgentConfig(
                     name=state['name'],
@@ -1470,17 +1506,21 @@ You must:
 
 Available tools (for reference; prefer reasoning first):
 {tool_inventory}
+{tools_instruction}
 
 At the very end of your response, output exactly one line:
 NEXT_EVENT: <one of {allowed_events}>
 No extra commentary after that line.""",
                     model=state.get('model', 'gpt-4o-mini'),
                     temperature=0.7,
-                    tools=[]  # Analysis agents typically don't need tools
+                    tools=resolved_tools  # Use resolved tools if any, otherwise empty list
                 )
-                
-                # Log that no tools for analysis agents
-                logger.info(f"Creating analysis agent {state_id} with no tools")
+
+                # Log whether tools were added
+                if resolved_tools:
+                    logger.info(f"Creating analysis agent {state_id} with {len(resolved_tools)} tools")
+                else:
+                    logger.info(f"Creating analysis agent {state_id} with no tools")
                 
                 agent_runtime = StrandsAgentRuntime(
                     agent_id=state_id,

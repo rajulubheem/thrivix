@@ -12,39 +12,56 @@ logger = structlog.get_logger()
 
 
 @tool
-def tavily_search(query: str) -> str:
+def tavily_search(
+    query: str,
+    search_depth: str = "basic",
+    topic: str = "general",
+    max_results: int = 5,
+    include_raw_content: bool = False
+) -> str:
     """Search the web for current information, news, and research.
-    
+
     Use this tool when you need to find recent information, current events,
     latest news, research data, or any real-time information from the web.
     This tool searches the internet and returns relevant, up-to-date results.
-    
+
     Args:
         query: The search query to find information about
-        
+        search_depth: "basic" or "advanced" - depth of search
+        topic: "general" or "news" - type of search
+        max_results: Number of results to return (1-10)
+        include_raw_content: Whether to include raw page content
+
     Returns:
         Search results as formatted text with sources
     """
     api_key = os.getenv("TAVILY_API_KEY")
-    
+
     if not api_key:
         return "Error: TAVILY_API_KEY environment variable is not set"
-    
+
     try:
-        logger.info(f"🔍 Tavily search for: {query}")
-        
+        logger.info(f"🔍 Tavily search for: {query} (depth: {search_depth}, topic: {topic})")
+
+        # Build API request with parameters
+        api_payload = {
+            "api_key": api_key,
+            "query": query,
+            "search_depth": search_depth,
+            "max_results": min(max_results, 10),  # Cap at 10
+            "include_answer": True,
+            "include_raw_content": include_raw_content,
+            "include_images": False
+        }
+
+        # Add topic if it's news
+        if topic == "news":
+            api_payload["topic"] = "news"
+
         # Make API request to Tavily
         response = requests.post(
             "https://api.tavily.com/search",
-            json={
-                "api_key": api_key,
-                "query": query,
-                "search_depth": "basic",
-                "max_results": 5,
-                "include_answer": True,
-                "include_raw_content": False,
-                "include_images": False
-            },
+            json=api_payload,
             headers={"Content-Type": "application/json"},
             timeout=30
         )

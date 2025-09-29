@@ -2,6 +2,47 @@
 import { Node, Edge } from 'reactflow';
 import { BlockStatus } from '../../../types/workflow';
 
+// Frame types for WebSocket communication
+export interface TokenFrame {
+  frame_type: 'token';
+  agent_id: string;
+  text: string;
+  seq?: number;
+  final: boolean;
+  ts?: number;
+}
+
+export interface ControlFrame {
+  frame_type: 'control';
+  type: string;
+  agent_id?: string;
+  state?: string;
+  action?: string;
+  status?: string;
+  error?: string;
+  result?: any;
+  machine?: any;
+  from?: string;
+  to?: string;
+  event?: string;
+  payload?: any;
+  ts?: number;
+}
+
+export type Frame = TokenFrame | ControlFrame;
+
+// Workflow template type
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  machine?: any;
+  nodes?: Node[];
+  edges?: Edge[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // Strongly typed node data
 export interface NodeData {
   // Basic info
