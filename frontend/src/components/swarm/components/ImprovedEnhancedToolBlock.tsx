@@ -147,7 +147,7 @@ const ImprovedParameterInput: React.FC<{
                      bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-700
                      text-gray-800 dark:text-gray-200 focus:ring-blue-500
                      select-text"
-            style={{ userSelect: 'text' }}
+            style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}
           />
           <input
             ref={fileInputRef}
@@ -199,7 +199,7 @@ const ImprovedParameterInput: React.FC<{
                      bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-700
                      text-gray-800 dark:text-gray-200 focus:ring-blue-500
                      select-text"
-            style={{ userSelect: 'text' }}
+            style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}
           />
           {value && (
             <a
@@ -240,7 +240,7 @@ const ImprovedParameterInput: React.FC<{
                    bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-700
                    text-gray-800 dark:text-gray-200 focus:ring-blue-500
                    select-text"
-          style={{ userSelect: 'text' }}
+          style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}
         />
       );
 
@@ -264,7 +264,7 @@ const ImprovedParameterInput: React.FC<{
                      focus:outline-none focus:ring-2 bg-white dark:bg-gray-800
                      border-gray-300 dark:border-gray-700 text-gray-800 dark:text-gray-200
                      focus:ring-blue-500 select-text"
-            style={{ userSelect: 'text' }}
+            style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}
           />
           <div className="text-xs text-gray-500">JSON format required</div>
         </div>
@@ -300,7 +300,7 @@ const ImprovedParameterInput: React.FC<{
                        focus:outline-none focus:ring-2 bg-white dark:bg-gray-800
                        border-gray-300 dark:border-gray-700 text-gray-800 dark:text-gray-200
                        focus:ring-blue-500 select-text"
-              style={{ userSelect: 'text', minHeight: '100px' }}
+              style={{ userSelect: 'text', minHeight: '100px', position: 'relative', zIndex: 10 }}
             />
             <div className="flex items-center justify-between text-xs text-gray-500">
               <span>{parameter.description}</span>
@@ -327,7 +327,7 @@ const ImprovedParameterInput: React.FC<{
                    bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-700
                    text-gray-800 dark:text-gray-200 focus:ring-blue-500
                    select-text"
-          style={{ userSelect: 'text' }}
+          style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}
         />
       );
   }
@@ -398,6 +398,63 @@ const ResultDisplay: React.FC<{
 
 // Enhanced result formatting with file type handling
 function formatResultContent(result: any, toolName?: string): React.ReactNode {
+  // Handle tavily_search results
+  if (toolName === 'tavily_search' && result) {
+    if (result.success && result.results) {
+      return (
+        <div className="space-y-3">
+          {result.answer && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+              <div className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-1">
+                Summary Answer:
+              </div>
+              <div className="text-sm text-gray-700 dark:text-gray-300">
+                {result.answer}
+              </div>
+            </div>
+          )}
+          {result.results && result.results.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                Search Results ({result.total_results || result.results.length}):
+              </div>
+              {result.results.map((item: any, idx: number) => (
+                <div key={idx} className="p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
+                  <div className="text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">
+                    {item.index || idx + 1}. {item.title}
+                  </div>
+                  <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">
+                    <a href={item.url} target="_blank" rel="noopener noreferrer"
+                       className="hover:underline flex items-center gap-1">
+                      {item.url}
+                      <ExternalLink size={10} />
+                    </a>
+                  </div>
+                  {item.content && (
+                    <div className="text-xs text-gray-700 dark:text-gray-300">
+                      {item.content}
+                    </div>
+                  )}
+                  {item.score !== undefined && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      Score: {item.score.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    } else if (result.error) {
+      return (
+        <div className="text-sm text-red-600 dark:text-red-400">
+          Error: {result.error}
+        </div>
+      );
+    }
+  }
+
   // Handle different file types from file_read
   if (result.type) {
     switch (result.type) {
@@ -514,7 +571,7 @@ function formatResultContent(result: any, toolName?: string): React.ReactNode {
               <div className="mt-2">
                 <pre className="text-xs bg-gray-900 text-gray-100 p-3 rounded border
                              border-gray-700 font-mono select-text overflow-auto max-h-64"
-                     style={{ userSelect: 'text' }}>
+                     style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}>
                   {result.content}
                 </pre>
               </div>
@@ -617,7 +674,7 @@ function formatResultContent(result: any, toolName?: string): React.ReactNode {
             <FileText size={12} />
             <span className="font-medium">File:</span>
             <code className="bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded select-text"
-                  style={{ userSelect: 'text' }}>
+                  style={{ userSelect: 'text', position: 'relative', zIndex: 10 }}>
               {result.path}
             </code>
           </div>
@@ -659,6 +716,18 @@ export const ImprovedEnhancedToolBlock = memo<NodeProps<ImprovedEnhancedToolBloc
 
   const blockRef = useRef<HTMLDivElement>(null);
   const updateNodeInternals = useUpdateNodeInternals();
+
+  // Update results when data changes from parent
+  useEffect(() => {
+    if (data.executionResult !== undefined) {
+      setExecutionResult(data.executionResult);
+      setShowResults(true); // Auto show results when they come from backend
+    }
+    if (data.executionError !== undefined) {
+      setExecutionError(data.executionError);
+      setShowResults(true); // Auto show errors when they come from backend
+    }
+  }, [data.executionResult, data.executionError]);
 
   const toolIcon = data.toolName ? TOOL_ICONS[data.toolName] : Wrench;
   const ToolIcon = toolIcon;
@@ -720,9 +789,9 @@ export const ImprovedEnhancedToolBlock = memo<NodeProps<ImprovedEnhancedToolBloc
       onMouseEnter={() => !isRunning && setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {needsInput && (
-        <div className="parameter-missing">
-          {data.executionError || 'This block needs additional input before it can run.'}
+      {needsInput && data.executionError && (
+        <div className="parameter-missing" style={{ pointerEvents: 'none' }}>
+          {data.executionError}
         </div>
       )}
       {/* Handles */}

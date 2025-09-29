@@ -232,43 +232,28 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
 
   return (
     <>
-      {/* Backdrop overlay */}
-      <div
-        className="block-settings-backdrop"
-        onClick={onClose}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: isDarkMode ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.4)',
-          backdropFilter: 'blur(2px)',
-          zIndex: 999,
-          animation: 'fadeIn 0.2s ease-out',
-        }}
-      />
+      {/* Removed backdrop overlay to allow workflow interaction */}
 
       <div
         className={`block-settings-panel ${isDarkMode ? 'dark' : ''}`}
         style={{
           position: 'fixed',
           right: '20px',
-          top: '50%',
-          transform: 'translateY(-50%)',
-          width: '420px',
-          maxWidth: 'calc(100vw - 40px)',
-          maxHeight: 'calc(100vh - 120px)',
+          top: '80px',
+          width: '380px',
+          maxWidth: 'calc(40vw - 40px)',
+          maxHeight: 'calc(100vh - 100px)',
           backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
-          borderRadius: '16px',
+          borderRadius: '12px',
           boxShadow: isDarkMode
-            ? '0 20px 50px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(148, 163, 184, 0.1)'
-            : '0 20px 50px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+            ? '0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(148, 163, 184, 0.1)'
+            : '0 10px 30px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05)',
           display: 'flex',
           flexDirection: 'column',
-          zIndex: 1000,
+          zIndex: 100,
           animation: 'slideInRight 0.3s ease-out',
           border: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
+          pointerEvents: 'auto',
         }}
       >
       <div className="panel-header" style={{

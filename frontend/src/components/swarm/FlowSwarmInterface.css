@@ -152,6 +152,10 @@
   border-left: 3px solid #f59e0b;
   padding: 4px 8px;
   margin: 4px 0;
+  font-size: 11px;
+  pointer-events: none; /* Don't block interaction */
+  position: relative;
+  z-index: 1; /* Stay below input fields */
 }
 
 .node-dimmed {

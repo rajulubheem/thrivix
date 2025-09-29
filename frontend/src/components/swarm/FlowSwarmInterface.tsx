@@ -414,6 +414,7 @@ const FlowSwarmInterface: React.FC = () => {
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('LR');
   const [showGrid, setShowGrid] = useState(true);
   const [showMinimap, setShowMinimap] = useState(false);
+  const [showConversationPanel, setShowConversationPanel] = useState(true);
   const [toolsLoading, setToolsLoading] = useState(false);
   const [highlightPath, setHighlightPath] = useState(false);
   const [followActive, setFollowActive] = useState<boolean>(true);
@@ -823,6 +824,9 @@ const FlowSwarmInterface: React.FC = () => {
         } else if (e.key === '\\') {
           e.preventDefault();
           setOutputPanelWidth(prev => prev <= 350 ? 500 : 300); // Toggle between collapsed and default
+        } else if (e.key === '/') {
+          e.preventDefault();
+          setShowConversationPanel(prev => !prev); // Toggle conversation panel visibility
         }
       }
 
@@ -2320,6 +2324,9 @@ const FlowSwarmInterface: React.FC = () => {
             if (response.ok && data.success) {
               console.log('Tool execution result:', data);
 
+              // Get the actual result from the correct location
+              const blockResult = data.results?.[id] || data.result;
+
               // Update node with success status and result
               setNodes((nds) =>
                 nds.map((node) =>
@@ -2331,8 +2338,8 @@ const FlowSwarmInterface: React.FC = () => {
                           status: 'completed',
                           isCompleted: true,
                           isExecuting: false,
-                          executionResult: data.result,
-                          executionError: undefined
+                          executionResult: blockResult,
+                          executionError: blockResult?.error || undefined
                         }
                       }
                     : node
@@ -3069,13 +3076,25 @@ const FlowSwarmInterface: React.FC = () => {
     if (machine.states) {
       const { nodes: enhancedNodes, edges: enhancedEdges } = await stateMachineAdapter.convertToEnhancedWorkflow(machine);
 
-      // Add execution handlers and dark mode
+      // Add execution handlers and dark mode - FORCE PROFESSIONAL BLOCKS
       const processedNodes = enhancedNodes.map(node => {
-        if (node.type === 'toolBlock' || node.data?.type === 'tool') {
+        // Force professional block type for proper styling
+        const forceProfessional = {
+          ...node,
+          type: 'professional', // Always use professional blocks
+          data: {
+            ...node.data,
+            type: node.data?.type || node.data?.nodeType || 'analysis', // Ensure subType is set
+          }
+        };
+
+        if (forceProfessional.data?.type === 'tool_call' || forceProfessional.data?.toolName) {
+          // For tool blocks, keep them as tool type but with professional styling
           return {
-            ...node,
+            ...forceProfessional,
+            type: 'tool', // Tool blocks use the tool type for execution
             data: {
-              ...node.data,
+              ...forceProfessional.data,
               onExecuteTool: async (id: string, toolName: string, parameters: any) => {
                 // Resolve placeholders using shared utility
                 const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
@@ -3158,10 +3177,12 @@ const FlowSwarmInterface: React.FC = () => {
             }
           };
         }
+
+        // For non-tool blocks, use professional type
         return {
-          ...node,
+          ...forceProfessional,
           data: {
-            ...node.data,
+            ...forceProfessional.data,
             isDarkMode: isDarkMode
           }
         };
@@ -4941,6 +4962,14 @@ const FlowSwarmInterface: React.FC = () => {
                   Minimap: {showMinimap ? 'On' : 'Off'}
                 </button>
 
+                <button
+                  className={`panel-button ${showConversationPanel ? 'active' : ''}`}
+                  onClick={() => setShowConversationPanel(!showConversationPanel)}
+                  title="Toggle conversation panel"
+                >
+                  💬 Chat: {showConversationPanel ? 'On' : 'Off'}
+                </button>
+
                 <button onClick={resetView} className="panel-button">
                   Clear
                 </button>
@@ -5233,13 +5262,14 @@ const FlowSwarmInterface: React.FC = () => {
           </ReactFlow>
         </div>
 
-        {/* Resizable Divider */}
-        <div
-          className="resize-divider"
-          title="Drag to resize • Double-click to reset"
-          onDoubleClick={() => {
-            setOutputPanelWidth(500); // Reset to default width
-          }}
+        {/* Resizable Divider - only show when panel is visible */}
+        {showConversationPanel && (
+          <div
+            className="resize-divider"
+            title="Drag to resize • Double-click to reset"
+            onDoubleClick={() => {
+              setOutputPanelWidth(500); // Reset to default width
+            }}
           onMouseDown={(e) => {
             e.preventDefault();
             const startX = e.clientX;
@@ -5308,29 +5338,36 @@ const FlowSwarmInterface: React.FC = () => {
             }}
           />
         </div>
+        )}
 
-        {/* Chatbot Output Panel */}
-        <div className="flow-output-panel" style={{ width: `${outputPanelWidth}px` }}>
+        {/* Chatbot Output Panel with Toggle */}
+        <div className="flow-output-panel" style={{
+          width: showConversationPanel ? `${outputPanelWidth}px` : '0px',
+          overflow: showConversationPanel ? 'visible' : 'hidden',
+          transition: 'width 0.3s ease-in-out'
+        }}>
+          {showConversationPanel && (
+            <>
+              <ImprovedChatbotOutput
+                agents={stableAgents}
+                nodes={nodes}
+                selectedAgent={selectedAgent}
+                onAgentSelect={handleAgentSelect}
+                onNodeFocus={handleNodeFocus}
+                isDarkMode={isDarkMode}
+              />
 
-
-          <ImprovedChatbotOutput
-            agents={stableAgents}
-            nodes={nodes}
-            selectedAgent={selectedAgent}
-            onAgentSelect={handleAgentSelect}
-            onNodeFocus={handleNodeFocus}
-            isDarkMode={isDarkMode}
-          />
-
-          {/* Improved Raw Data Viewer */}
-          {showRawDataViewer && executionId && (
-            <ImprovedStateDataViewer
-              execId={executionId}
-              isDarkMode={isDarkMode}
-              onClose={() => setShowRawDataViewer(false)}
-              nodes={nodes}
-              edges={edges}
-            />
+              {/* Improved Raw Data Viewer */}
+              {showRawDataViewer && executionId && (
+                <ImprovedStateDataViewer
+                  execId={executionId}
+                  isDarkMode={isDarkMode}
+                  onClose={() => setShowRawDataViewer(false)}
+                  nodes={nodes}
+                  edges={edges}
+                />
+              )}
+            </>
           )}
 
           {/* Add Node Modal - Replaced by Unified Block Manager */}

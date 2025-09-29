@@ -360,7 +360,6 @@ async def execute_tool_logic(tool_name: str, parameters: Dict[str, Any]) -> Any:
 
     elif tool_name == "current_time":
         import pytz
-        from datetime import datetime
 
         timezone = parameters.get("timezone", "UTC")
         try:
@@ -423,6 +422,83 @@ async def execute_tool_logic(tool_name: str, parameters: Dict[str, Any]) -> Any:
             }
         except Exception as e:
             return {"error": f"Request failed: {str(e)}"}
+
+    elif tool_name == "tavily_search":
+        # Execute Tavily search
+        try:
+            import os
+            import sys
+            import requests
+
+            # Get API key
+            api_key = os.getenv("TAVILY_API_KEY")
+            if not api_key:
+                return {"error": "TAVILY_API_KEY environment variable is not set"}
+
+            # Get the query parameter (required)
+            query = parameters.get("query", "")
+            if not query:
+                return {"error": "Query parameter is required"}
+
+            # Get optional parameters
+            search_depth = parameters.get("search_depth", "basic")
+            topic = parameters.get("topic", "general")
+            max_results = parameters.get("max_results", 5)
+            include_raw_content = parameters.get("include_raw_content", False)
+
+            # Build API request
+            api_payload = {
+                "api_key": api_key,
+                "query": query,
+                "search_depth": search_depth,
+                "max_results": min(max_results, 10),
+                "include_answer": True,
+                "include_raw_content": include_raw_content,
+                "include_images": False
+            }
+
+            # Add topic if it's news
+            if topic == "news":
+                api_payload["topic"] = "news"
+
+            # Make API request to Tavily
+            response = requests.post(
+                "https://api.tavily.com/search",
+                json=api_payload,
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                return {"error": f"Tavily API error: {response.status_code}"}
+
+            data = response.json()
+            results = data.get("results", [])
+            answer = data.get("answer", "")
+
+            # Format results
+            formatted_results = []
+            for i, result in enumerate(results, 1):
+                formatted_results.append({
+                    "index": i,
+                    "title": result.get("title", "Untitled"),
+                    "url": result.get("url", ""),
+                    "content": result.get("content", "")[:500] if result.get("content") else "",
+                    "score": result.get("score", 0)
+                })
+
+            # Return the result
+            return {
+                "success": True,
+                "query": query,
+                "answer": answer,
+                "results": formatted_results,
+                "total_results": len(results)
+            }
+        except requests.exceptions.Timeout:
+            return {"error": "Tavily search request timed out"}
+        except Exception as e:
+            return {"error": f"Tavily search failed: {str(e)}"}
 
     else:
         # For other tools, return a mock response

@@ -406,6 +406,488 @@ export const workflowTemplates: WorkflowTemplate[] = [
     }
   },
 
+  // ============== AMAZON DEVICE & SERVICES TEMPLATES ==============
+  {
+    id: 'echo-device-diagnostics',
+    name: 'Echo Device Diagnostics',
+    description: 'Automated diagnostic and resolution system for Echo/Alexa devices',
+    category: 'complex',
+    tags: ['amazon', 'echo', 'alexa', 'diagnostics', 'support'],
+    machine: {
+      name: 'Echo Device Diagnostics',
+      initial_state: 'device_intake',
+      states: [
+        {
+          id: 'device_intake',
+          name: 'Device Intake',
+          type: 'analysis',
+          description: 'Analyze customer complaint and extract device information',
+          agent_role: 'Support Analyst',
+          tools: ['device_identifier', 'account_lookup'],
+          transitions: { success: 'parallel_diagnostics' }
+        },
+        {
+          id: 'parallel_diagnostics',
+          name: 'Parallel Diagnostics',
+          type: 'parallel',
+          description: 'Run multiple diagnostic checks simultaneously',
+          agent_role: 'Diagnostic Coordinator',
+          tools: [],
+          transitions: { all_completed: 'issue_classification' }
+        },
+        {
+          id: 'cloud_health_check',
+          name: 'Cloud Health Check',
+          type: 'tool_call',
+          description: 'Check AWS cloud connectivity and account status',
+          agent_role: 'Cloud Specialist',
+          tools: ['aws_status_check', 'account_validator'],
+          transitions: { success: 'return', failure: 'return' }
+        },
+        {
+          id: 'local_network_scan',
+          name: 'Network Scan',
+          type: 'tool_call',
+          description: 'Analyze WiFi strength, router compatibility, and network interference',
+          agent_role: 'Network Analyst',
+          tools: ['network_diagnostics', 'wifi_analyzer'],
+          transitions: { success: 'return', failure: 'return' }
+        },
+        {
+          id: 'voice_history_analysis',
+          name: 'Voice History Analysis',
+          type: 'analysis',
+          description: 'Review last 24 hours of voice commands and responses',
+          agent_role: 'Voice Analytics Expert',
+          tools: ['alexa_voice_logs', 'nlp_analyzer'],
+          transitions: { success: 'return', failure: 'return' }
+        },
+        {
+          id: 'hardware_status_check',
+          name: 'Hardware Status Check',
+          type: 'tool_call',
+          description: 'Check microphone array, speaker output, and LED indicators',
+          agent_role: 'Hardware Specialist',
+          tools: ['device_hardware_api', 'diagnostic_mode'],
+          transitions: { success: 'return', failure: 'return' }
+        },
+        {
+          id: 'issue_classification',
+          name: 'Issue Classification',
+          type: 'decision',
+          description: 'Classify issue severity and determine resolution path',
+          agent_role: 'Resolution Expert',
+          transitions: {
+            network_issue: 'network_resolution',
+            hardware_failure: 'hardware_resolution',
+            software_bug: 'software_resolution',
+            user_error: 'user_guidance',
+            unknown: 'escalate_to_human'
+          }
+        },
+        {
+          id: 'network_resolution',
+          name: 'Network Resolution',
+          type: 'parallel',
+          description: 'Automated network fixes',
+          agent_role: 'Network Engineer',
+          tools: ['network_reset', 'channel_optimizer', 'dns_updater'],
+          transitions: { all_completed: 'verify_fix' }
+        },
+        {
+          id: 'hardware_resolution',
+          name: 'Hardware Resolution',
+          type: 'decision',
+          description: 'Determine if remote fix possible or replacement needed',
+          agent_role: 'Hardware Engineer',
+          requires_approval: true,
+          transitions: {
+            remote_fixable: 'remote_hardware_fix',
+            needs_replacement: 'initiate_rma'
+          }
+        },
+        {
+          id: 'software_resolution',
+          name: 'Software Resolution',
+          type: 'tool_call',
+          description: 'Apply firmware updates and clear cache',
+          agent_role: 'Software Engineer',
+          tools: ['firmware_updater', 'cache_cleaner', 'factory_reset'],
+          transitions: { success: 'verify_fix', failure: 'escalate_to_human' }
+        },
+        {
+          id: 'user_guidance',
+          name: 'User Guidance',
+          type: 'transformation',
+          description: 'Generate personalized troubleshooting guide for customer',
+          agent_role: 'Customer Success',
+          tools: ['content_generator', 'email_sender'],
+          transitions: { success: 'monitor_resolution' }
+        },
+        {
+          id: 'remote_hardware_fix',
+          name: 'Remote Hardware Fix',
+          type: 'tool_call',
+          description: 'Attempt remote calibration and component reset',
+          agent_role: 'Remote Support',
+          tools: ['remote_calibration', 'component_reset'],
+          transitions: { success: 'verify_fix', failure: 'initiate_rma' }
+        },
+        {
+          id: 'initiate_rma',
+          name: 'Initiate RMA',
+          type: 'tool_call',
+          description: 'Create RMA ticket and schedule device replacement',
+          agent_role: 'RMA Coordinator',
+          tools: ['rma_system', 'logistics_api', 'customer_notification'],
+          transitions: { success: 'track_rma' }
+        },
+        {
+          id: 'escalate_to_human',
+          name: 'Escalate to Human',
+          type: 'human',
+          description: 'Complex issue requiring specialist intervention',
+          agent_role: 'Level 3 Technical Support',
+          transitions: {
+            resolved: 'close_ticket',
+            needs_engineering: 'engineering_escalation'
+          }
+        },
+        {
+          id: 'verify_fix',
+          name: 'Verify Fix',
+          type: 'validation',
+          description: 'Run diagnostic tests to confirm issue resolution',
+          agent_role: 'QA Specialist',
+          tools: ['device_health_check', 'voice_test'],
+          transitions: {
+            validated: 'close_ticket',
+            invalid: 'escalate_to_human'
+          }
+        },
+        {
+          id: 'monitor_resolution',
+          name: 'Monitor Resolution',
+          type: 'analysis',
+          description: 'Monitor device for 24 hours to ensure stability',
+          agent_role: 'Monitoring Specialist',
+          tools: ['telemetry_monitor', 'alert_system'],
+          transitions: { success: 'close_ticket' }
+        },
+        {
+          id: 'track_rma',
+          name: 'Track RMA',
+          type: 'loop',
+          description: 'Track replacement device shipping and setup',
+          agent_role: 'Logistics Tracker',
+          max_iterations: 10,
+          transitions: {
+            completed: 'close_ticket',
+            timeout: 'escalate_to_human'
+          }
+        },
+        {
+          id: 'engineering_escalation',
+          name: 'Engineering Escalation',
+          type: 'tool_call',
+          description: 'Create engineering ticket with full diagnostic data',
+          agent_role: 'Engineering Liaison',
+          tools: ['jira_integration', 'log_aggregator'],
+          transitions: { success: 'close_ticket' }
+        },
+        {
+          id: 'close_ticket',
+          name: 'Close Ticket',
+          type: 'final',
+          description: 'Resolution achieved, update CRM and collect feedback',
+          tools: ['crm_update', 'feedback_collector']
+        }
+      ],
+      edges: [
+        { source: 'device_intake', target: 'parallel_diagnostics', event: 'success' },
+        { source: 'parallel_diagnostics', target: 'issue_classification', event: 'all_completed' },
+        { source: 'issue_classification', target: 'network_resolution', event: 'network_issue' },
+        { source: 'issue_classification', target: 'hardware_resolution', event: 'hardware_failure' },
+        { source: 'issue_classification', target: 'software_resolution', event: 'software_bug' },
+        { source: 'issue_classification', target: 'user_guidance', event: 'user_error' },
+        { source: 'issue_classification', target: 'escalate_to_human', event: 'unknown' },
+        { source: 'network_resolution', target: 'verify_fix', event: 'all_completed' },
+        { source: 'hardware_resolution', target: 'remote_hardware_fix', event: 'remote_fixable' },
+        { source: 'hardware_resolution', target: 'initiate_rma', event: 'needs_replacement' },
+        { source: 'software_resolution', target: 'verify_fix', event: 'success' },
+        { source: 'software_resolution', target: 'escalate_to_human', event: 'failure' },
+        { source: 'user_guidance', target: 'monitor_resolution', event: 'success' },
+        { source: 'remote_hardware_fix', target: 'verify_fix', event: 'success' },
+        { source: 'remote_hardware_fix', target: 'initiate_rma', event: 'failure' },
+        { source: 'initiate_rma', target: 'track_rma', event: 'success' },
+        { source: 'escalate_to_human', target: 'close_ticket', event: 'resolved' },
+        { source: 'escalate_to_human', target: 'engineering_escalation', event: 'needs_engineering' },
+        { source: 'verify_fix', target: 'close_ticket', event: 'validated' },
+        { source: 'verify_fix', target: 'escalate_to_human', event: 'invalid' },
+        { source: 'monitor_resolution', target: 'close_ticket', event: 'success' },
+        { source: 'track_rma', target: 'close_ticket', event: 'completed' },
+        { source: 'track_rma', target: 'escalate_to_human', event: 'timeout' },
+        { source: 'engineering_escalation', target: 'close_ticket', event: 'success' }
+      ]
+    }
+  },
+
+  {
+    id: 'smart-home-orchestration',
+    name: 'Smart Home Setup & Optimization',
+    description: 'Intelligent setup and optimization of complete Alexa smart home ecosystem',
+    category: 'complex',
+    tags: ['amazon', 'smart-home', 'alexa', 'iot', 'automation'],
+    machine: {
+      name: 'Smart Home Orchestration',
+      initial_state: 'initialize_setup',
+      states: [
+        {
+          id: 'initialize_setup',
+          name: 'Initialize Setup',
+          type: 'analysis',
+          description: 'Analyze home layout and existing devices',
+          agent_role: 'Setup Coordinator',
+          tools: ['home_analyzer', 'device_inventory'],
+          transitions: { success: 'network_discovery' }
+        },
+        {
+          id: 'network_discovery',
+          name: 'Network Discovery',
+          type: 'tool_call',
+          description: 'Scan network for compatible smart devices',
+          agent_role: 'Network Scanner',
+          tools: ['network_scanner', 'device_identifier'],
+          transitions: { success: 'device_categorization', failure: 'manual_device_entry' }
+        },
+        {
+          id: 'manual_device_entry',
+          name: 'Manual Device Entry',
+          type: 'human',
+          description: 'User manually inputs device information',
+          agent_role: 'Setup Assistant',
+          transitions: { success: 'device_categorization' }
+        },
+        {
+          id: 'device_categorization',
+          name: 'Device Categorization',
+          type: 'analysis',
+          description: 'Categorize devices by type, brand, and compatibility',
+          agent_role: 'Device Analyst',
+          tools: ['device_database', 'compatibility_checker'],
+          transitions: { success: 'parallel_device_setup' }
+        },
+        {
+          id: 'parallel_device_setup',
+          name: 'Parallel Device Setup',
+          type: 'parallel',
+          description: 'Configure all device categories simultaneously',
+          agent_role: 'Setup Manager',
+          tools: [],
+          transitions: { all_completed: 'routine_generation' }
+        },
+        {
+          id: 'setup_lighting',
+          name: 'Setup Lighting',
+          type: 'loop',
+          description: 'Configure all smart lights and switches',
+          agent_role: 'Lighting Specialist',
+          max_iterations: 20,
+          tools: ['philips_hue_api', 'lifx_api', 'smart_switch_api'],
+          transitions: { completed: 'return', failure: 'lighting_fallback' }
+        },
+        {
+          id: 'setup_security',
+          name: 'Setup Security',
+          type: 'parallel',
+          description: 'Configure security devices',
+          agent_role: 'Security Expert',
+          tools: ['ring_api', 'arlo_api', 'august_api'],
+          transitions: { all_completed: 'return' }
+        },
+        {
+          id: 'setup_climate',
+          name: 'Setup Climate',
+          type: 'tool_call',
+          description: 'Connect thermostats and environment sensors',
+          agent_role: 'Climate Specialist',
+          tools: ['nest_api', 'ecobee_api', 'sensor_config'],
+          transitions: { success: 'return', failure: 'climate_fallback' }
+        },
+        {
+          id: 'setup_entertainment',
+          name: 'Setup Entertainment',
+          type: 'tool_call',
+          description: 'Configure Fire TV, sound systems, and streaming devices',
+          agent_role: 'Entertainment Expert',
+          tools: ['firetv_api', 'sonos_api', 'spotify_connect'],
+          transitions: { success: 'return', failure: 'return' }
+        },
+        {
+          id: 'setup_appliances',
+          name: 'Setup Appliances',
+          type: 'tool_call',
+          description: 'Connect smart appliances and outlets',
+          agent_role: 'Appliance Specialist',
+          tools: ['smart_plug_api', 'appliance_connector'],
+          transitions: { success: 'return', failure: 'return' }
+        },
+        {
+          id: 'lighting_fallback',
+          name: 'Lighting Fallback',
+          type: 'human',
+          description: 'Manual intervention for unsupported lighting',
+          agent_role: 'Smart Home Specialist',
+          transitions: { success: 'return' }
+        },
+        {
+          id: 'climate_fallback',
+          name: 'Climate Fallback',
+          type: 'analysis',
+          description: 'Alternative climate control setup',
+          agent_role: 'Climate Expert',
+          transitions: { success: 'return' }
+        },
+        {
+          id: 'routine_generation',
+          name: 'Routine Generation',
+          type: 'transformation',
+          description: 'AI generates personalized Alexa routines based on devices',
+          agent_role: 'Routine Designer',
+          tools: ['routine_generator', 'ai_optimizer'],
+          transitions: { success: 'routine_validation' }
+        },
+        {
+          id: 'routine_validation',
+          name: 'Routine Validation',
+          type: 'decision',
+          description: 'User reviews and approves suggested routines',
+          agent_role: 'Validation Expert',
+          requires_approval: true,
+          transitions: {
+            approved: 'room_configuration',
+            rejected: 'custom_routine_creation'
+          }
+        },
+        {
+          id: 'custom_routine_creation',
+          name: 'Custom Routine Creation',
+          type: 'human',
+          description: 'User creates custom routines with guidance',
+          agent_role: 'Routine Designer',
+          transitions: { success: 'room_configuration' }
+        },
+        {
+          id: 'room_configuration',
+          name: 'Room Configuration',
+          type: 'loop',
+          description: 'Assign devices to rooms and create groups',
+          agent_role: 'Room Organizer',
+          max_iterations: 15,
+          tools: ['room_mapper', 'device_grouper'],
+          transitions: { completed: 'voice_training' }
+        },
+        {
+          id: 'voice_training',
+          name: 'Voice Training',
+          type: 'parallel',
+          description: 'Train Alexa for household voices and preferences',
+          agent_role: 'Voice Coach',
+          tools: ['voice_recognition', 'profile_creator'],
+          transitions: { all_completed: 'system_test' }
+        },
+        {
+          id: 'system_test',
+          name: 'System Test',
+          type: 'validation',
+          description: 'Comprehensive testing of all integrations',
+          agent_role: 'QA Engineer',
+          tools: ['integration_tester', 'performance_monitor'],
+          transitions: {
+            validated: 'optimization',
+            invalid: 'troubleshooting'
+          }
+        },
+        {
+          id: 'troubleshooting',
+          name: 'Troubleshooting',
+          type: 'analysis',
+          description: 'Identify and fix integration issues',
+          agent_role: 'Troubleshooting Expert',
+          tools: ['diagnostic_suite', 'auto_fixer'],
+          transitions: {
+            success: 'system_test',
+            failure: 'manual_intervention'
+          }
+        },
+        {
+          id: 'manual_intervention',
+          name: 'Manual Intervention',
+          type: 'human',
+          description: 'Expert assistance for complex issues',
+          agent_role: 'Integration Specialist',
+          transitions: { success: 'optimization' }
+        },
+        {
+          id: 'optimization',
+          name: 'Optimization',
+          type: 'tool_call',
+          description: 'Optimize system performance and energy efficiency',
+          agent_role: 'Optimization Expert',
+          tools: ['performance_optimizer', 'energy_analyzer', 'scene_optimizer'],
+          transitions: { success: 'monitoring' }
+        },
+        {
+          id: 'monitoring',
+          name: 'Monitoring',
+          type: 'loop',
+          description: 'Continuous monitoring and learning for 7 days',
+          agent_role: 'Monitoring Specialist',
+          max_iterations: 7,
+          tools: ['usage_tracker', 'anomaly_detector', 'suggestion_engine'],
+          transitions: { completed: 'final_report' }
+        },
+        {
+          id: 'final_report',
+          name: 'Final Report',
+          type: 'final',
+          description: 'Generate setup report and optimization recommendations',
+          tools: ['report_generator', 'recommendation_engine', 'email_sender']
+        }
+      ],
+      edges: [
+        { source: 'initialize_setup', target: 'network_discovery', event: 'success' },
+        { source: 'network_discovery', target: 'device_categorization', event: 'success' },
+        { source: 'network_discovery', target: 'manual_device_entry', event: 'failure' },
+        { source: 'manual_device_entry', target: 'device_categorization', event: 'success' },
+        { source: 'device_categorization', target: 'parallel_device_setup', event: 'success' },
+        { source: 'parallel_device_setup', target: 'routine_generation', event: 'all_completed' },
+        { source: 'setup_lighting', target: 'return', event: 'completed' },
+        { source: 'setup_lighting', target: 'lighting_fallback', event: 'failure' },
+        { source: 'setup_security', target: 'return', event: 'all_completed' },
+        { source: 'setup_climate', target: 'return', event: 'success' },
+        { source: 'setup_climate', target: 'climate_fallback', event: 'failure' },
+        { source: 'setup_entertainment', target: 'return', event: 'success' },
+        { source: 'setup_appliances', target: 'return', event: 'success' },
+        { source: 'lighting_fallback', target: 'return', event: 'success' },
+        { source: 'climate_fallback', target: 'return', event: 'success' },
+        { source: 'routine_generation', target: 'routine_validation', event: 'success' },
+        { source: 'routine_validation', target: 'room_configuration', event: 'approved' },
+        { source: 'routine_validation', target: 'custom_routine_creation', event: 'rejected' },
+        { source: 'custom_routine_creation', target: 'room_configuration', event: 'success' },
+        { source: 'room_configuration', target: 'voice_training', event: 'completed' },
+        { source: 'voice_training', target: 'system_test', event: 'all_completed' },
+        { source: 'system_test', target: 'optimization', event: 'validated' },
+        { source: 'system_test', target: 'troubleshooting', event: 'invalid' },
+        { source: 'troubleshooting', target: 'system_test', event: 'success' },
+        { source: 'troubleshooting', target: 'manual_intervention', event: 'failure' },
+        { source: 'manual_intervention', target: 'optimization', event: 'success' },
+        { source: 'optimization', target: 'monitoring', event: 'success' },
+        { source: 'monitoring', target: 'final_report', event: 'completed' }
+      ]
+    }
+  },
+
   // ============== COMPLEX TEMPLATES ==============
   {
     id: 'multimodal-ai-pipeline',
