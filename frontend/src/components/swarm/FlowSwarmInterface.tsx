@@ -33,7 +33,7 @@ import { NodeData, EdgeData } from './types/FlowTypes';
 import { BlockStatus } from '../../types/workflow';
 import ProfessionalAgentNode from './components/ProfessionalAgentNode';
 import OptimizedSmoothEdge from './components/OptimizedSmoothEdge';
-import ChatbotOutput from './components/ChatbotOutput';
+import ImprovedChatbotOutput from './components/ImprovedChatbotOutput';
 import { useTheme } from '../../contexts/ThemeContext';
 import { EnhancedAgentNode } from './components/EnhancedAgentNode';
 import { ProfessionalWorkflowBlock } from './components/ProfessionalWorkflowBlock';
@@ -42,6 +42,7 @@ import { ImprovedEnhancedToolBlock } from './components/ImprovedEnhancedToolBloc
 import UnifiedBlockManager, { BlockConfig } from './components/UnifiedBlockManager';
 import BlockSettingsPanel from './components/BlockSettingsPanel';
 import { WorkflowToolbar } from './components/WorkflowToolbar';
+import ImprovedStateDataViewer from './components/ImprovedStateDataViewer';
 import { v4 as uuidv4 } from 'uuid';
 import { toolSchemaService, ToolSchema } from '../../services/toolSchemaService';
 import { unifiedToolService } from '../../services/unifiedToolService';
@@ -373,7 +374,13 @@ const FlowSwarmInterface: React.FC = () => {
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic' | 'neural'>('dynamic');
-  const [outputPanelWidth, setOutputPanelWidth] = useState(400);
+  const [outputPanelWidth, setOutputPanelWidth] = useState(() => {
+    // Load saved width from localStorage or use default
+    const saved = localStorage.getItem('chatbot_panel_width');
+    const savedWidth = saved ? parseInt(saved, 10) : 400;
+    // Ensure saved width is within bounds (min: 300, max: 800)
+    return Math.min(Math.max(savedWidth, 300), 800);
+  });
   const [activelyStreamingAgents, setActivelyStreamingAgents] = useState<Set<string>>(new Set());
   const [currentExecutingNode, setCurrentExecutingNode] = useState<string | null>(null);
   const [nextExecutingNode, setNextExecutingNode] = useState<string | null>(null);
@@ -415,6 +422,8 @@ const FlowSwarmInterface: React.FC = () => {
   const [executionTrace, setExecutionTrace] = useState<string[]>([]);
   const [replayMode, setReplayMode] = useState<boolean>(false);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
+  const [showRawDataViewer, setShowRawDataViewer] = useState<boolean>(false);
+  const [stateExecutionData, setStateExecutionData] = useState<any[]>([]);
   const [availableTools, setAvailableTools] = useState<string[]>([]);
   const [toolDetails, setToolDetails] = useState<Record<string, { description?: string; category?: string }>>({});
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
@@ -798,9 +807,24 @@ const FlowSwarmInterface: React.FC = () => {
     })();
   }, []);
 
-  // Keyboard shortcuts for replay navigation
+  // Keyboard shortcuts for replay navigation and panel resizing
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Panel resize shortcuts
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '[') {
+          e.preventDefault();
+          setOutputPanelWidth(prev => Math.max(300, prev - 50)); // Decrease width (min: 300px)
+        } else if (e.key === ']') {
+          e.preventDefault();
+          setOutputPanelWidth(prev => Math.min(800, prev + 50)); // Increase width (max: 800px)
+        } else if (e.key === '\\') {
+          e.preventDefault();
+          setOutputPanelWidth(prev => prev <= 350 ? 500 : 300); // Toggle between collapsed and default
+        }
+      }
+
+      // Replay navigation
       if (!replayMode) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -830,6 +854,11 @@ const FlowSwarmInterface: React.FC = () => {
   useEffect(() => {
     try { localStorage.setItem('flowswarm_selected_tools', JSON.stringify(Array.from(selectedTools))); } catch {}
   }, [selectedTools]);
+
+  // Persist chatbot panel width
+  useEffect(() => {
+    try { localStorage.setItem('chatbot_panel_width', outputPanelWidth.toString()); } catch {}
+  }, [outputPanelWidth]);
 
   // Load saved parallel children overrides once
   useEffect(() => {
@@ -1462,6 +1491,27 @@ const FlowSwarmInterface: React.FC = () => {
       case 'state_entered':
         // A state is being executed
         if (agent_id) {
+          // Capture state execution data for raw viewer
+          setStateExecutionData(prev => {
+            const existingIndex = prev.findIndex(d => d.stateId === agent_id);
+            const newData = {
+              stateId: agent_id,
+              stateName: payload?.state?.name || agent_id,
+              timestamp: frame.ts || Date.now() / 1000,
+              input: payload,
+              output: null,
+              context: payload?.state || {},
+              transitions: payload?.state?.transitions || {},
+            };
+
+            if (existingIndex >= 0) {
+              const updated = [...prev];
+              updated[existingIndex] = { ...updated[existingIndex], ...newData };
+              return updated;
+            }
+            return [...prev, newData];
+          });
+
           setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
           setAgents(prev => {
             const updated = new Map(prev);
@@ -1500,12 +1550,29 @@ const FlowSwarmInterface: React.FC = () => {
       case 'state_exited':
         // State completed execution
         if (agent_id) {
+          // Update state execution data with output
+          setStateExecutionData(prev => {
+            const existingIndex = prev.findIndex(d => d.stateId === agent_id);
+            if (existingIndex >= 0) {
+              const updated = [...prev];
+              const startTime = updated[existingIndex].timestamp;
+              updated[existingIndex] = {
+                ...updated[existingIndex],
+                output: payload?.result || payload,
+                nextEvent: payload?.next_event,
+                duration: ((frame.ts || Date.now() / 1000) - startTime) * 1000
+              };
+              return updated;
+            }
+            return prev;
+          });
+
           setActivelyStreamingAgents(prev => {
             const updated = new Set(prev);
             updated.delete(agent_id);
             return updated;
           });
-          
+
           setAgents(prev => {
             const updated = new Map(prev);
             const agent = updated.get(agent_id);
@@ -1804,6 +1871,51 @@ const FlowSwarmInterface: React.FC = () => {
         }
         break;
         
+      case 'workflow_completed': {
+        setIsRunning(false);
+        setIsExecuting(false);
+        setCurrentExecutingNode(null);
+        setNextExecutingNode(null);
+        setActivelyStreamingAgents(new Set());
+        setExecutionActions(new Map());
+        setConnectionStatus('connected');
+
+        setNodes(nodes => nodes.map(node => ({
+          ...node,
+          data: {
+            ...node.data,
+            isExecuting: false,
+            isDimmed: false,
+            currentAction: undefined,
+            currentActionDetail: undefined,
+            activeTools: []
+          }
+        })));
+        break;
+      }
+
+      case 'workflow_failed': {
+        setIsRunning(false);
+        setIsExecuting(false);
+        setCurrentExecutingNode(null);
+        setNextExecutingNode(null);
+        setActivelyStreamingAgents(new Set());
+        setExecutionActions(new Map());
+        setConnectionStatus('error');
+
+        setNodes(nodes => nodes.map(node => ({
+          ...node,
+          data: {
+            ...node.data,
+            isExecuting: false,
+            currentAction: undefined,
+            currentActionDetail: undefined,
+            activeTools: []
+          }
+        })));
+        break;
+      }
+
       case 'error':
         if (agent_id) {
           setActivelyStreamingAgents(prev => {
@@ -1885,7 +1997,10 @@ const FlowSwarmInterface: React.FC = () => {
   }, [executionId, selectedAgent]);
 
   const startExecution = async () => {
-    if (!task.trim()) return;
+    if (!task.trim() || isRunning) return;
+
+    setIsRunning(true);
+    setStateExecutionData([]); // Clear previous execution data
 
     // If there are no nodes, first plan the workflow
     if (nodes.length === 0 && executionMode === 'dynamic') {
@@ -1908,37 +2023,24 @@ const FlowSwarmInterface: React.FC = () => {
 
         const planData = await planRes.json();
 
-        if (planData.machine) {
-          // Import the generated workflow
-          await importStateMachine(planData.machine, true, false);
-
-          // Wait a bit for the UI to update
-          await new Promise(resolve => setTimeout(resolve, 500));
-
-          // Now execute the planned workflow
-          const machine = buildMachineFromGraph();
-          const execRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              task,
-              machine,
-              tool_preferences: {
-                selected_tools: Array.from(selectedTools),
-                restrict_to_selected: selectedTools.size > 0
-              }
-            })
-          });
-
-          if (!execRes.ok) throw new Error(`Execute HTTP error! status: ${execRes.status}`);
-
-          const execData = await execRes.json();
-          setExecutionId(execData.exec_id);
-          setIsRunning(true);
-          setTimeout(() => connectWebSocket(execData.exec_id, false), 100);
+        if (!planData.machine) {
+          console.warn('Plan response did not include a machine definition.');
+          setIsRunning(false);
+          return;
         }
+
+        // Import the generated workflow
+        await importStateMachine(planData.machine, true, false);
+
+        // Wait a bit for the UI to update
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Keep UI interactive after planning; execution can be triggered explicitly once blocks are reviewed
+        setIsRunning(false);
+        setConnectionStatus('disconnected');
+        setExecutionId(null);
       } catch (error) {
-        console.error('Plan and execute failed:', error);
+        console.error('Workflow planning failed:', error);
         setIsRunning(false);
         setConnectionStatus('error');
       }
@@ -3407,6 +3509,7 @@ const FlowSwarmInterface: React.FC = () => {
 
   const runPlannedWorkflow = useCallback(async ()=>{
     try{
+      setStateExecutionData([]); // Clear previous execution data
       const machine = buildMachineFromGraph();
       const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, machine, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0 } }) });
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3981,6 +4084,11 @@ const FlowSwarmInterface: React.FC = () => {
             parsedData = { type: blockData };
           }
 
+          if (parsedData?.source === 'unified-block-manager' && parsedData.block) {
+            addUnifiedBlock(parsedData.block as BlockConfig, pos);
+            return;
+          }
+
           // Check if additional JSON data exists
           if (jsonData) {
             try {
@@ -4477,6 +4585,14 @@ const FlowSwarmInterface: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={() => setShowRawDataViewer(!showRawDataViewer)}
+                  className={`panel-button ${showRawDataViewer ? 'active' : ''}`}
+                  title="View raw state execution data"
+                >
+                  Raw Data
+                </button>
+
+                <button
                   className="panel-button"
                   onClick={() => setFollowActive(prev => !prev)}
                   title="Follow active node"
@@ -4752,17 +4868,105 @@ const FlowSwarmInterface: React.FC = () => {
           </ReactFlow>
         </div>
 
+        {/* Resizable Divider */}
+        <div
+          className="resize-divider"
+          title="Drag to resize • Double-click to reset"
+          onDoubleClick={() => {
+            setOutputPanelWidth(500); // Reset to default width
+          }}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startWidth = outputPanelWidth;
+
+            const handleMouseMove = (e: MouseEvent) => {
+              const deltaX = startX - e.clientX;
+              const newWidth = Math.min(
+                Math.max(startWidth + deltaX, 300), // Minimum width: 300px
+                Math.min(800, window.innerWidth - 500) // Maximum width: 800px or window width - 500px for flow canvas
+              );
+              setOutputPanelWidth(newWidth);
+              // Save to localStorage immediately for persistence
+              localStorage.setItem('chatbot_panel_width', newWidth.toString());
+            };
+
+            const handleMouseUp = () => {
+              document.removeEventListener('mousemove', handleMouseMove);
+              document.removeEventListener('mouseup', handleMouseUp);
+              document.body.style.cursor = '';
+              document.body.style.userSelect = '';
+              document.body.classList.remove('resizing');
+            };
+
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            document.body.classList.add('resizing');
+          }}
+          style={{
+            position: 'absolute',
+            right: `${outputPanelWidth}px`,
+            top: 0,
+            bottom: '70px', // Stop before the input area
+            width: '6px',
+            cursor: 'col-resize',
+            zIndex: 50, // Reduced z-index to stay below modals
+            background: isDarkMode
+              ? 'linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.5), transparent)'
+              : 'linear-gradient(90deg, transparent, rgba(203, 213, 225, 0.5), transparent)',
+            transition: 'background 0.2s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = isDarkMode
+              ? 'linear-gradient(90deg, transparent, #3b82f6, transparent)'
+              : 'linear-gradient(90deg, transparent, #3b82f6, transparent)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = isDarkMode
+              ? 'linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.5), transparent)'
+              : 'linear-gradient(90deg, transparent, rgba(203, 213, 225, 0.5), transparent)';
+          }}
+        >
+          {/* Drag Handle Indicator */}
+          <div
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '2px',
+              height: '40px',
+              background: isDarkMode ? '#475569' : '#cbd5e1',
+              borderRadius: '2px',
+            }}
+          />
+        </div>
+
         {/* Chatbot Output Panel */}
         <div className="flow-output-panel" style={{ width: `${outputPanelWidth}px` }}>
 
 
-          <ChatbotOutput
+          <ImprovedChatbotOutput
             agents={stableAgents}
             nodes={nodes}
             selectedAgent={selectedAgent}
             onAgentSelect={handleAgentSelect}
             onNodeFocus={handleNodeFocus}
+            isDarkMode={isDarkMode}
           />
+
+          {/* Improved Raw Data Viewer */}
+          {showRawDataViewer && executionId && (
+            <ImprovedStateDataViewer
+              execId={executionId}
+              isDarkMode={isDarkMode}
+              onClose={() => setShowRawDataViewer(false)}
+              nodes={nodes}
+              edges={edges}
+            />
+          )}
 
           {/* Add Node Modal - Replaced by Unified Block Manager */}
           {false && showAddNode && (
