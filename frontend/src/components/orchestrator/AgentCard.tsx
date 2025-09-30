@@ -1,11 +1,12 @@
 import React from 'react';
-import { 
-  Bot, Brain, Search, Code, Database, Shield, 
-  Zap, CheckCircle, AlertCircle, Settings, 
+import {
+  Bot, Brain, Search, Code, Database, Shield,
+  Zap, CheckCircle, AlertCircle, Settings,
   Copy, TestTube, Trash2, ChevronRight,
   Sparkles, Globe, FileText, Terminal
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface AgentCardProps {
   agent: {
@@ -56,6 +57,7 @@ const toolCategories: Record<string, { icon: any; color: string }> = {
 };
 
 export default function AgentCard({ agent, isSelected, onClick, onRemove, onClone, onTest }: AgentCardProps) {
+  const { isDark } = useTheme();
   const RoleIcon = roleIcons[agent.role] || Bot;
   const modelInfo = modelBadges[agent.model] || modelBadges['gpt-4o-mini'];
   
@@ -89,19 +91,21 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
       }`}
       onClick={onClick}
     >
-      <div className={`p-4 rounded-xl border backdrop-blur-lg ${
-        isSelected 
-          ? 'bg-blue-600/10 border-blue-500/50' 
-          : 'bg-slate-900/50 border-slate-700/50 hover:bg-slate-900/70'
+      <div className={`p-4 rounded-xl border-2 backdrop-blur-lg transition-all ${
+        isSelected
+          ? 'bg-blue-600/10 border-blue-500 shadow-xl scale-[1.02]'
+          : isDark
+            ? 'bg-slate-900/50 border-slate-700/50 hover:bg-slate-900/70'
+            : 'bg-gradient-to-br from-white to-blue-50 border-blue-200 hover:border-blue-400 hover:shadow-lg'
       }`}>
         {/* Header */}
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-start gap-3">
             <div className={`p-2.5 rounded-lg ${
-              isSelected ? 'bg-blue-600/20' : 'bg-slate-800/50'
+              isSelected ? 'bg-blue-600/20' : isDark ? 'bg-slate-800/50' : 'bg-gradient-to-br from-blue-100 to-purple-100'
             }`}>
               <RoleIcon className={`h-5 w-5 ${
-                isSelected ? 'text-blue-400' : 'text-slate-400'
+                isSelected ? 'text-blue-500' : isDark ? 'text-slate-400' : 'text-blue-600'
               }`} />
             </div>
             <div className="flex-1">
@@ -113,7 +117,7 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
                   </span>
                 )}
               </div>
-              <p className="text-sm text-slate-400 mt-0.5">{agent.role}</p>
+              <p className={`text-sm mt-0.5 font-medium ${isDark ? 'text-slate-400' : 'text-blue-700'}`}>{agent.role}</p>
             </div>
           </div>
           
@@ -124,20 +128,20 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
                 e.stopPropagation();
                 onTest();
               }}
-              className="p-1.5 hover:bg-slate-700/50 rounded-lg transition-colors"
+              className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-slate-700/50' : 'hover:bg-gray-200'}`}
               title="Test Agent"
             >
-              <TestTube className="h-3.5 w-3.5 text-slate-400" />
+              <TestTube className={`h-3.5 w-3.5 ${isDark ? 'text-slate-400' : 'text-gray-500'}`} />
             </button>
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onClone();
               }}
-              className="p-1.5 hover:bg-slate-700/50 rounded-lg transition-colors"
+              className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-slate-700/50' : 'hover:bg-gray-200'}`}
               title="Clone Agent"
             >
-              <Copy className="h-3.5 w-3.5 text-slate-400" />
+              <Copy className={`h-3.5 w-3.5 ${isDark ? 'text-slate-400' : 'text-gray-500'}`} />
             </button>
             <button
               onClick={(e) => {
@@ -153,7 +157,7 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
         </div>
 
         {/* Description */}
-        <p className="text-xs text-slate-500 mb-3 line-clamp-2">
+        <p className={`text-xs mb-3 line-clamp-2 font-medium ${isDark ? 'text-slate-500' : 'text-gray-700'}`}>
           {agent.description || 'No description provided'}
         </p>
 
@@ -162,10 +166,10 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
           <div className={`flex items-center gap-1.5 px-2 py-1 bg-${modelInfo.color}-600/20 rounded-lg`}>
             <span className="text-sm">{modelInfo.icon}</span>
             <span className="text-xs font-medium text-white">{agent.model}</span>
-            <span className="text-xs text-slate-400">• {modelInfo.speed}</span>
+            <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-gray-600'}`}>• {modelInfo.speed}</span>
           </div>
-          <div className="px-2 py-1 bg-slate-800/50 rounded-lg">
-            <span className="text-xs text-slate-400">Temp: {agent.temperature.toFixed(1)}</span>
+          <div className={`px-2 py-1 rounded-lg ${isDark ? 'bg-slate-800/50' : 'bg-gradient-to-r from-orange-100 to-yellow-100 border border-orange-200'}`}>
+            <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-gray-600'}`}>Temp: {agent.temperature.toFixed(1)}</span>
           </div>
           {agent.auto_approve && (
             <div className="px-2 py-1 bg-green-600/20 rounded-lg">
@@ -177,16 +181,16 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
         {/* Tools Summary */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">
+            <span className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-gray-600'}`}>
               Tools ({agent.tools.length})
             </span>
             {agent.tools.length > 3 && (
-              <ChevronRight className="h-3 w-3 text-slate-500" />
+              <ChevronRight className={`h-3 w-3 ${isDark ? 'text-slate-500' : 'text-gray-400'}`} />
             )}
           </div>
           
           {agent.tools.length === 0 ? (
-            <div className="text-xs text-slate-500 italic">No tools configured</div>
+            <div className={`text-xs italic ${isDark ? 'text-slate-500' : 'text-gray-500'}`}>No tools configured</div>
           ) : (
             <div className="flex flex-wrap gap-1">
               {Object.entries(categorizedTools).slice(0, 3).map(([category, tools]) => {
@@ -198,12 +202,12 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
                     className={`flex items-center gap-1 px-2 py-0.5 bg-${color}-600/20 rounded text-xs`}
                   >
                     <CategoryIcon className="h-3 w-3" />
-                    <span className="text-slate-300">{tool}</span>
+                    <span className={isDark ? 'text-slate-300' : 'text-gray-700'}>{tool}</span>
                   </div>
                 ));
               })}
               {agent.tools.length > 3 && (
-                <div className="px-2 py-0.5 bg-slate-700/50 rounded text-xs text-slate-400">
+                <div className={`px-2 py-0.5 rounded text-xs ${isDark ? 'bg-slate-700/50 text-slate-400' : 'bg-gray-200 text-gray-600'}`}>
                   +{agent.tools.length - 3} more
                 </div>
               )}
@@ -212,7 +216,7 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
         </div>
 
         {/* Status Indicator */}
-        <div className="mt-3 pt-3 border-t border-slate-700/50">
+        <div className={`mt-3 pt-3 border-t ${isDark ? 'border-slate-700/50' : 'border-gray-200'}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {readinessLevel === 'ready' ? (
@@ -232,7 +236,7 @@ export default function AgentCard({ agent, isSelected, onClick, onRemove, onClon
                 </>
               )}
             </div>
-            <Settings className="h-3.5 w-3.5 text-slate-500" />
+            <Settings className={`h-3.5 w-3.5 ${isDark ? 'text-slate-500' : 'text-gray-500'}`} />
           </div>
         </div>
       </div>

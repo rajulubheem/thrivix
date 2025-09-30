@@ -528,7 +528,7 @@ export const UnifiedOrchestratorV2: React.FC = () => {
     console.log('Request body:', requestBody);
     
     try {
-      const response = await fetch('http://localhost:8000/api/v1/unified/orchestrate', {
+      const response = await fetch('/api/v1/unified-orchestrator/orchestrate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),

@@ -272,15 +272,27 @@ const ImprovedParameterInput: React.FC<{
 
     default: // string
       if (parameter.enum && parameter.enum.length > 0) {
+        // Prioritize: actual value > default value > empty string (only if not required)
+        let currentValue = value;
+        if (currentValue === undefined || currentValue === null || currentValue === '') {
+          currentValue = parameter.default || '';
+          // If still no value and field is required, use first enum option
+          if (!currentValue && parameter.required && parameter.enum.length > 0) {
+            currentValue = parameter.enum[0];
+          }
+        }
+
         return (
           <select
-            value={value || ''}
+            value={currentValue}
             onChange={(e) => handleChange(e.target.value)}
             className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2
                      bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-700
                      text-gray-800 dark:text-gray-200 focus:ring-blue-500"
           >
-            <option value="">Select {parameter.name}...</option>
+            {!parameter.required && !currentValue && (
+              <option value="">Select {parameter.name}...</option>
+            )}
             {parameter.enum.map(option => (
               <option key={option} value={option}>{option}</option>
             ))}
@@ -706,7 +718,14 @@ export const ImprovedEnhancedToolBlock = memo<NodeProps<ImprovedEnhancedToolBloc
   dragging
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const [localParameters, setLocalParameters] = useState<Record<string, any>>(data.parameters || {});
+  // Initialize with existing parameters to survive unmount/remount cycles
+  const [localParameters, setLocalParameters] = useState<Record<string, any>>(() => {
+    // Prioritize existing data.parameters to maintain state across viewport changes
+    const initialParams = data.parameters && Object.keys(data.parameters).length > 0
+      ? { ...data.parameters }
+      : {};
+    return initialParams;
+  });
   const [showMenu, setShowMenu] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
   const [expandedParams, setExpandedParams] = useState(true);
@@ -716,6 +735,25 @@ export const ImprovedEnhancedToolBlock = memo<NodeProps<ImprovedEnhancedToolBloc
 
   const blockRef = useRef<HTMLDivElement>(null);
   const updateNodeInternals = useUpdateNodeInternals();
+
+  // Sync parameters only when they change from external sources
+  useEffect(() => {
+    // Skip if parameters are the same (prevents infinite loops)
+    if (data.parameters &&
+        JSON.stringify(data.parameters) !== JSON.stringify(localParameters) &&
+        Object.keys(data.parameters).length > 0) {
+
+      // Only update if this looks like an external update
+      // (has different values than what we have locally)
+      const shouldUpdate = Object.keys(data.parameters).some(
+        key => data.parameters![key] !== localParameters[key]
+      );
+
+      if (shouldUpdate) {
+        setLocalParameters(data.parameters);
+      }
+    }
+  }, [data.parameters]); // Removed localParameters from deps to prevent loops
 
   // Update results when data changes from parent
   useEffect(() => {
@@ -733,19 +771,53 @@ export const ImprovedEnhancedToolBlock = memo<NodeProps<ImprovedEnhancedToolBloc
   const ToolIcon = toolIcon;
   const toolColor = data.toolSchema?.color || CATEGORY_COLORS[data.toolSchema?.category || 'utility'] || '#6B7280';
 
-  // Auto-save parameters
+  // Auto-save is now handled immediately in handleParameterChange
+  // This effect is kept only for backwards compatibility with programmatic updates
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (data.onUpdate && JSON.stringify(localParameters) !== JSON.stringify(data.parameters)) {
-        data.onUpdate(id, { parameters: localParameters });
-      }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [localParameters, id, data]);
+    // Only update if parameters changed from external source (not from user input)
+    if (data.parameters && JSON.stringify(localParameters) !== JSON.stringify(data.parameters)) {
+      // Check if this is an external update (not from our handleParameterChange)
+      const timer = setTimeout(() => {
+        if (data.onUpdate && JSON.stringify(localParameters) !== JSON.stringify(data.parameters)) {
+          data.onUpdate(id, { parameters: localParameters });
+        }
+      }, 100); // Reduced delay since most updates are now immediate
+      return () => clearTimeout(timer);
+    }
+  }, [localParameters, id, data.parameters, data.onUpdate]);
 
   const handleParameterChange = (name: string, value: any) => {
-    setLocalParameters(prev => ({ ...prev, [name]: value }));
+    const newParams = { ...localParameters, [name]: value };
+    setLocalParameters(newParams);
+
+    // Immediately save parameters to node data to prevent loss on unmount
+    if (data.onUpdate) {
+      data.onUpdate(id, { parameters: newParams });
+    }
   };
+
+  // Initialize parameters with defaults when the tool is first added
+  useEffect(() => {
+    if (data.toolSchema && data.toolSchema.parameters) {
+      const shouldInitialize = Object.keys(localParameters).length === 0 ||
+                              !localParameters.hasOwnProperty('query'); // Reinitialize if core params missing
+      if (shouldInitialize && data.parameters) {
+        // Use provided parameters from the workflow/data
+        setLocalParameters(data.parameters);
+      } else if (shouldInitialize) {
+        // Fall back to schema defaults
+        const defaultParams: Record<string, any> = {};
+        data.toolSchema.parameters.forEach(param => {
+          if (param.default !== undefined) {
+            defaultParams[param.name] = param.default;
+          }
+        });
+        if (Object.keys(defaultParams).length > 0) {
+          setLocalParameters(defaultParams);
+        }
+      }
+    }
+  }, [data.toolSchema, data.parameters]);
 
   const handleExecute = async () => {
     if (data.onExecuteTool && data.toolName) {

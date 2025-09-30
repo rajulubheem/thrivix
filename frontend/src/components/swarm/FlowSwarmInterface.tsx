@@ -34,6 +34,8 @@ import { BlockStatus } from '../../types/workflow';
 import ProfessionalAgentNode from './components/ProfessionalAgentNode';
 import OptimizedSmoothEdge from './components/OptimizedSmoothEdge';
 import InteractiveEdge from './components/InteractiveEdge';
+import EditableInteractiveEdge from './components/EditableInteractiveEdge';
+import EnhancedEditableEdge from './components/EnhancedEditableEdge';
 import ImprovedChatbotOutput from './components/ImprovedChatbotOutput';
 import { useTheme } from '../../contexts/ThemeContext';
 import { EnhancedAgentNode } from './components/EnhancedAgentNode';
@@ -370,6 +372,21 @@ const FlowSwarmInterface: React.FC = () => {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [agents, setAgents] = useState<Map<string, Agent>>(new Map());
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+
+  // Undo/Redo History
+  const [history, setHistory] = useState<{ nodes: Node[], edges: Edge[] }[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const maxHistorySize = 50; // Maximum number of history states to keep
+
+  // Initialize history when nodes or edges are first loaded
+  useEffect(() => {
+    if (nodes.length > 0 || edges.length > 0) {
+      if (history.length === 0) {
+        setHistory([{ nodes, edges }]);
+        setHistoryIndex(0);
+      }
+    }
+  }, [nodes.length, edges.length]); // Only track length changes to avoid infinite loops
   const [task, setTask] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
@@ -456,19 +473,6 @@ const FlowSwarmInterface: React.FC = () => {
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
   const agentSequences = useRef<Map<string, number>>(new Map());
-
-  // Keyboard shortcut for Block Manager
-  useEffect(() => {
-    const handleKeydown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + B to open Block Manager
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
-        e.preventDefault();
-        setShowUnifiedManager(true);
-      }
-    };
-    window.addEventListener('keydown', handleKeydown);
-    return () => window.removeEventListener('keydown', handleKeydown);
-  }, []);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Camera follow helpers
   const pendingFocusIdRef = useRef<string | null>(null);
@@ -568,18 +572,93 @@ const FlowSwarmInterface: React.FC = () => {
     toolBlock: ImprovedEnhancedToolBlock  // Alias for compatibility
   }), []);
   const edgeTypes = useMemo<EdgeTypes>(() => ({
-    animated: InteractiveEdge,
-    smoothstep: InteractiveEdge,
-    default: InteractiveEdge,
-    bezier: InteractiveEdge,
-    straight: InteractiveEdge,
-    interactive: InteractiveEdge,
+    animated: EnhancedEditableEdge,
+    smoothstep: EnhancedEditableEdge,
+    default: EnhancedEditableEdge,
+    straight: EnhancedEditableEdge,
+    interactive: EnhancedEditableEdge,
+    editable: EnhancedEditableEdge,
   }), []);
   
   // Optimized state management
   const layoutCache = useRef<{ nodes: Node[], edges: Edge[] }>({ nodes: [], edges: [] });
   const updateTimer = useRef<NodeJS.Timeout | null>(null);
   const lastLayoutedAgentIds = useRef<Set<string>>(new Set());
+
+  // Undo/Redo Functions
+  const saveToHistory = useCallback((newNodes: Node[], newEdges: Edge[]) => {
+    // Don't save if we're in the middle of an undo/redo operation
+    if (historyIndex !== history.length - 1) {
+      // We're not at the end of history, so truncate future history
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push({ nodes: newNodes, edges: newEdges });
+
+      // Keep history size under control
+      if (newHistory.length > maxHistorySize) {
+        newHistory.shift();
+      }
+
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+    } else {
+      // We're at the end of history, just append
+      const newHistory = [...history, { nodes: newNodes, edges: newEdges }];
+
+      // Keep history size under control
+      if (newHistory.length > maxHistorySize) {
+        newHistory.shift();
+      } else {
+        setHistoryIndex(historyIndex + 1);
+      }
+
+      setHistory(newHistory);
+    }
+  }, [history, historyIndex]);
+
+  const undo = useCallback(() => {
+    if (historyIndex > 0) {
+      const previousState = history[historyIndex - 1];
+      setNodes(previousState.nodes);
+      setEdges(previousState.edges);
+      setHistoryIndex(historyIndex - 1);
+    }
+  }, [history, historyIndex, setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const nextState = history[historyIndex + 1];
+      setNodes(nextState.nodes);
+      setEdges(nextState.edges);
+      setHistoryIndex(historyIndex + 1);
+    }
+  }, [history, historyIndex, setNodes, setEdges]);
+
+  // Keyboard shortcuts for undo/redo and block manager
+  useEffect(() => {
+    const handleKeydown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + B to open Block Manager
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        setShowUnifiedManager(true);
+      }
+
+      // Cmd/Ctrl + Z for undo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+
+      // Cmd/Ctrl + Shift + Z or Cmd/Ctrl + Y for redo
+      if (((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') ||
+          ((e.metaKey || e.ctrlKey) && e.key === 'y')) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [undo, redo, setShowUnifiedManager]);
+
   const preventRerender = useRef(false);
 
   // Optimized graph update with better performance
@@ -663,7 +742,7 @@ const FlowSwarmInterface: React.FC = () => {
             id: `${agent.parent}-${agent.id}`,
             source: agent.parent,
             target: agent.id,
-            type: 'smoothstep',
+            type: 'editable',
             animated: agent.status === 'running',
             data: {
               isActive: parentAgent?.status === 'completed' && agent.status === 'running',
@@ -1045,7 +1124,7 @@ const FlowSwarmInterface: React.FC = () => {
                 id: `${edge.source}-${edge.target}-${edge.event}`,
                 source: edge.source,
                 target: edge.target,
-                type: 'smoothstep',
+                type: 'editable',
                 animated: false,
                 label: edge.event !== 'success' ? edge.event : '',
                 labelStyle: { fill: '#94a3b8', fontSize: 11 },
@@ -1142,7 +1221,7 @@ const FlowSwarmInterface: React.FC = () => {
                 id: `${edge.source}-${edge.target}-${edge.event}`,
                 source: edge.source,
                 target: edge.target,
-                type: 'smoothstep',
+                type: 'editable',
                 animated: false,
                 label: edge.event !== 'success' ? edge.event : '',
                 labelStyle: { fill: '#94a3b8', fontSize: 11 },
@@ -1321,7 +1400,7 @@ const FlowSwarmInterface: React.FC = () => {
             id: `${edge.source}-${edge.target}`,
             source: edge.source,
             target: edge.target,
-            type: 'smoothstep',
+            type: 'editable',
             animated: false,
             data: {
               label: edge.type === 'dependency' ? '' : edge.type,
@@ -1397,7 +1476,7 @@ const FlowSwarmInterface: React.FC = () => {
             id: `${edge.source}-${edge.target}-${edge.event}`,
             source: edge.source,
             target: edge.target,
-            type: 'smoothstep',
+            type: 'editable',
             animated: false,
             label: edge.event !== 'success' ? edge.event : '',
             labelStyle: { fill: '#94a3b8', fontSize: 11 },
@@ -2264,6 +2343,15 @@ const FlowSwarmInterface: React.FC = () => {
         enabled: true,
         advancedMode: false,
         isWide: false,
+        onUpdate: (id: string, updates: any) => {
+          setNodes((nds) =>
+            nds.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, ...updates } }
+                : node
+            )
+          );
+        },
         onToggleEnabled: (id: string) => {
           setNodes((nds) =>
             nds.map((node) =>
@@ -2291,14 +2379,11 @@ const FlowSwarmInterface: React.FC = () => {
             )
           );
         },
-        onUpdate: (id: string, updates: any) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, ...updates } }
-                : node
-            )
-          );
+        onOpenSettings: (id: string) => {
+          const node = nodes.find(n => n.id === id);
+          if (node) {
+            setSelectedNodeForSettings(node);
+          }
         },
         onDelete: (id: string) => {
           setNodes((nds) => nds.filter((node) => node.id !== id));
@@ -2577,14 +2662,11 @@ const FlowSwarmInterface: React.FC = () => {
             )
           );
         },
-        onUpdate: (id: string, updates: any) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, ...updates } }
-                : node
-            )
-          );
+        onOpenSettings: (id: string) => {
+          const node = nodes.find(n => n.id === id);
+          if (node) {
+            setSelectedNodeForSettings(node);
+          }
         },
         onDelete: (id: string) => {
           setNodes((nds) => nds.filter((node) => node.id !== id));
@@ -2732,6 +2814,12 @@ const FlowSwarmInterface: React.FC = () => {
               )
             );
           },
+          onOpenSettings: (id: string) => {
+            const node = nodes.find(n => n.id === id);
+            if (node) {
+              setSelectedNodeForSettings(node);
+            }
+          },
           isDarkMode
         }
       };
@@ -2754,7 +2842,7 @@ const FlowSwarmInterface: React.FC = () => {
             target: targetId,
             sourceHandle: event === 'failure' || event === 'false' ? 'failure' : 'source',
             targetHandle: 'target',
-            type: 'smoothstep',
+            type: 'editable',
             animated: true,
             style: { stroke: '#94A3B8', strokeWidth: 2 },
             data: { event, isDarkMode }
@@ -3161,6 +3249,15 @@ const FlowSwarmInterface: React.FC = () => {
             type: 'tool', // Tool blocks use the tool type for execution
             data: {
               ...forceProfessional.data,
+              onUpdate: (id: string, updates: any) => {
+                setNodes((nds) =>
+                  nds.map((node) =>
+                    node.id === id
+                      ? { ...node, data: { ...node.data, ...updates } }
+                      : node
+                  )
+                );
+              },
               onExecuteTool: async (id: string, toolName: string, parameters: any) => {
                 // Resolve placeholders using shared utility
                 const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
@@ -4095,15 +4192,28 @@ const FlowSwarmInterface: React.FC = () => {
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     event.stopPropagation();
     preventRerender.current = true;
+
+    // Single click only selects the node, doesn't open settings
     setSelectedAgent(prev => prev === node.id ? null : node.id);
-    // Show settings panel for the clicked node
-    setSelectedNodeForSettings(node);
+
+    // Open settings panel only on double-click
+    if (event.detail === 2) {
+      setSelectedNodeForSettings(node);
+    }
+
     // Reset highlight path if selecting a new node
     if (highlightPath && selectedAgent !== node.id) {
       setHighlightPath(false);
     }
     setTimeout(() => { preventRerender.current = false; }, 100);
   }, [highlightPath, selectedAgent]);
+
+  // Add context menu handler for node settings
+  const onNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedNodeForSettings(node);
+  }, []);
 
   // Enhanced path highlighting for state machine visualization
   useEffect(() => {
@@ -4595,8 +4705,18 @@ const FlowSwarmInterface: React.FC = () => {
                 ev = 'failure';
               } else if (connection.sourceHandle === 'retry') {
                 ev = 'retry';
+              } else if (connection.sourceHandle === 'timeout') {
+                ev = 'timeout';
               } else if (connection.sourceHandle && connection.sourceHandle !== 'source' && connection.sourceHandle !== 'true') {
                 ev = connection.sourceHandle;
+              }
+
+              // Allow custom label through a prompt (optional)
+              if (editMode) {
+                const customLabel = window.prompt('Enter connection label (e.g., success, failure, retry, timeout, or custom):', ev);
+                if (customLabel !== null) {
+                  ev = customLabel || ev;
+                }
               }
 
               // Check for duplicate edges
@@ -4617,7 +4737,7 @@ const FlowSwarmInterface: React.FC = () => {
                 target: connection.target,
                 sourceHandle: connection.sourceHandle,
                 targetHandle: connection.targetHandle,
-                type: 'smoothstep',
+                type: 'editable',
                 animated: ev === 'success',
                 label: ev !== 'success' ? ev : '',
                 labelStyle: { fill: '#94a3b8', fontSize: 11 },
@@ -4665,6 +4785,7 @@ const FlowSwarmInterface: React.FC = () => {
               }
             }}
             onNodeClick={onNodeClick}
+            onNodeContextMenu={onNodeContextMenu}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             connectionMode={ConnectionMode.Loose}
@@ -4683,14 +4804,35 @@ const FlowSwarmInterface: React.FC = () => {
             proOptions={{ hideAttribution: true }}
             deleteKeyCode={['Delete','Backspace']}
             onEdgeUpdate={async (oldEdge, newCon)=>{
-              if (!editMode) return;
+              if (!editMode) return false;
+
+              // Preserve the existing label - don't prompt for change during drag
               const ev = (oldEdge as any).label || 'success';
-              setEdges(prev=>prev.filter(e=>e.id!==oldEdge.id).concat([{ ...oldEdge, id: `${newCon.source}-${newCon.target}-${ev}`, source: newCon.source!, target: newCon.target!, label: ev }] as any));
+
+              setEdges(prev=>prev.filter(e=>e.id!==oldEdge.id).concat([{
+                ...oldEdge,
+                id: `${newCon.source}-${newCon.target}-${ev}`,
+                source: newCon.source!,
+                target: newCon.target!,
+                label: ev,
+                type: 'editable',
+                style: { ...oldEdge.style },
+                animated: false
+              }] as any));
+
               if (executionId){
                 try{
-                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges:[{ source: oldEdge.source, target: oldEdge.target, event: ev }], edges:[{ source: newCon.source, target: newCon.target, event: ev }] }) });
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({
+                      remove_edges:[{ source: oldEdge.source, target: oldEdge.target, event: ev }],
+                      edges:[{ source: newCon.source, target: newCon.target, event: ev }]
+                    })
+                  });
                 }catch(e){ console.error('Edge update failed', e); }
               }
+              return true;
             }}
             onNodeDragStart={() => {
               preventRerender.current = true;
@@ -4711,23 +4853,90 @@ const FlowSwarmInterface: React.FC = () => {
             defaultViewport={{ x: 0, y: 0, zoom: 0.75 }}
             onlyRenderVisibleElements
             edgeUpdaterRadius={10}
+            edgesUpdatable={editMode}
             onNodesDelete={async (nds) => {
-              if (executionId && nds?.length) {
-                try {
-                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_states: nds.map(n=>n.id) })
+              // Don't process if nodes array is invalid
+              if (!nds || !Array.isArray(nds) || nds.length === 0) return;
+
+              try {
+                // Save current state to history before deletion
+                saveToHistory(nodes, edges);
+
+                // Update local state first
+                const nodeIds = nds.map(n => n.id);
+
+                // Use callback pattern to ensure we're working with latest state
+                setNodes((currentNodes) => {
+                  if (!currentNodes || !Array.isArray(currentNodes)) return [];
+                  return currentNodes.filter(node => !nodeIds.includes(node.id));
+                });
+
+                setEdges((currentEdges) => {
+                  if (!currentEdges || !Array.isArray(currentEdges)) return [];
+                  return currentEdges.filter(edge =>
+                    !nodeIds.includes(edge.source) && !nodeIds.includes(edge.target)
+                  );
+                });
+
+                // Clear any selected state
+                setSelectedAgent(null);
+                setSelectedNodeForSettings(null);
+
+                // Then update backend if execution exists
+                if (executionId) {
+                  fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ remove_states: nodeIds })
+                  }).catch(e => {
+                    console.error('Remove states from backend failed', e);
                   });
-                } catch (e) { console.error('Remove states failed', e); }
+                }
+              } catch (error) {
+                console.error('Error during node deletion:', error);
+                // Restore edit mode if something went wrong
+                setEditMode(true);
               }
             }}
             onEdgesDelete={async (eds) => {
-              if (executionId && eds?.length) {
-                try {
-                  const payload = { remove_edges: eds.map((e:any)=>({ source:e.source, target:e.target, event: (e.label && typeof e.label==='string' && e.label.length>0)? e.label : 'success' })) };
-                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+              // Don't process if edges array is invalid
+              if (!eds || !Array.isArray(eds) || eds.length === 0) return;
+
+              try {
+                // Save current state to history before deletion
+                saveToHistory(nodes, edges);
+
+                // Update local state first
+                const edgeIds = eds.map(e => e.id);
+
+                // Use callback pattern to ensure we're working with latest state
+                setEdges((currentEdges) => {
+                  if (!currentEdges || !Array.isArray(currentEdges)) return [];
+                  return currentEdges.filter(edge => !edgeIds.includes(edge.id));
+                });
+
+                // Then update backend if execution exists
+                if (executionId) {
+                  const payload = {
+                    remove_edges: eds.map((e:any) => ({
+                      source: e.source,
+                      target: e.target,
+                      event: (e.label && typeof e.label === 'string' && e.label.length > 0) ? e.label : 'success'
+                    }))
+                  };
+
+                  fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify(payload)
+                  }).catch(e => {
+                    console.error('Remove edges from backend failed', e);
                   });
-                } catch (e) { console.error('Remove edges failed', e); }
+                }
+              } catch (error) {
+                console.error('Error during edge deletion:', error);
+                // Restore edit mode if something went wrong
+                setEditMode(true);
               }
             }}
             noDragClassName="nodrag"
@@ -5006,6 +5215,37 @@ const FlowSwarmInterface: React.FC = () => {
 
             <Panel position="top-left" style={{ top: '80px' }}>
               <div className="panel-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                {/* Undo/Redo buttons */}
+                <button
+                  className="panel-button"
+                  onClick={undo}
+                  disabled={historyIndex <= 0}
+                  title="Undo (Ctrl/Cmd + Z)"
+                  style={{
+                    opacity: historyIndex <= 0 ? 0.5 : 1,
+                    cursor: historyIndex <= 0 ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  ↶ Undo
+                </button>
+                <button
+                  className="panel-button"
+                  onClick={redo}
+                  disabled={historyIndex >= history.length - 1}
+                  title="Redo (Ctrl/Cmd + Y)"
+                  style={{
+                    opacity: historyIndex >= history.length - 1 ? 0.5 : 1,
+                    cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  ↷ Redo
+                </button>
+                <div style={{
+                  width: '1px',
+                  height: '24px',
+                  background: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+                  margin: '0 4px'
+                }} />
                 {highlightPath && (
                   <div style={{
                     display: 'flex',

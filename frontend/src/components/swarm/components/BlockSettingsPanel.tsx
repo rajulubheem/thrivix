@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, ChevronDown, ChevronRight, Settings, Wrench, Save, Trash2, Copy } from 'lucide-react';
 import './BlockSettingsPanel.css';
 
@@ -81,6 +81,7 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
   availableTools = [],
   position
 }) => {
+  const panelRef = useRef<HTMLDivElement>(null);
   const [formData, setFormData] = useState({
     name: node?.data?.name || node?.data?.label || '',
     type: node?.data?.type || node?.data?.nodeType || 'analysis',
@@ -122,6 +123,30 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  // Add click-outside-to-close handler
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        // Check if the click is on a workflow block (don't close if clicking on a block)
+        const targetElement = event.target as HTMLElement;
+        const isWorkflowBlock = targetElement.closest('.workflow-block');
+        if (!isWorkflowBlock) {
+          onClose();
+        }
+      }
+    };
+
+    // Add event listener after a short delay to prevent immediate closure
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [onClose]);
 
@@ -241,83 +266,23 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
       {/* Removed backdrop overlay to allow workflow interaction */}
 
       <div
+        ref={panelRef}
         className={`block-settings-panel ${isDarkMode ? 'dark' : ''}`}
-        style={{
-          position: 'fixed',
-          right: '20px',
-          top: '80px',
-          width: '380px',
-          maxWidth: 'calc(40vw - 40px)',
-          maxHeight: 'calc(100vh - 100px)',
-          backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
-          borderRadius: '12px',
-          boxShadow: isDarkMode
-            ? '0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(148, 163, 184, 0.1)'
-            : '0 10px 30px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05)',
-          display: 'flex',
-          flexDirection: 'column',
-          zIndex: 100,
-          animation: 'slideInRight 0.3s ease-out',
-          border: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
-          pointerEvents: 'auto',
-        }}
       >
-      <div className="panel-header" style={{
-        padding: '20px 24px',
-        borderBottom: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
-        background: isDarkMode
-          ? 'linear-gradient(to bottom, #0f172a, #0f172a)'
-          : 'linear-gradient(to bottom, #ffffff, #fafafa)',
-      }}>
-        <div className="header-title" style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          color: isDarkMode ? '#f1f5f9' : '#0f172a',
-        }}>
-          <Settings size={20} color={isDarkMode ? '#60a5fa' : '#3b82f6'} />
-          <h3 style={{
-            margin: 0,
-            fontSize: '18px',
-            fontWeight: 600,
-            color: 'inherit',
-          }}>Block Settings</h3>
+      <div className="panel-header">
+        <div className="header-title">
+          <Settings size={20} />
+          <h3>Block Settings</h3>
         </div>
         <button
           className="close-btn"
           onClick={onClose}
-          style={{
-            width: '36px',
-            height: '36px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: isDarkMode ? '#1e293b' : '#f1f5f9',
-            border: 'none',
-            borderRadius: '8px',
-            color: isDarkMode ? '#94a3b8' : '#64748b',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = isDarkMode ? '#334155' : '#e2e8f0';
-            e.currentTarget.style.color = isDarkMode ? '#f1f5f9' : '#0f172a';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = isDarkMode ? '#1e293b' : '#f1f5f9';
-            e.currentTarget.style.color = isDarkMode ? '#94a3b8' : '#64748b';
-          }}
         >
           <X size={20} />
         </button>
       </div>
 
-      <div className="panel-content" style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: '20px',
-        backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
-      }}>
+      <div className="panel-content">
         {/* Basic Information */}
         <div className="settings-section">
           <button
@@ -438,10 +403,6 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
                     <label
                       key={tool}
                       className="tool-checkbox"
-                      style={{
-                        backgroundColor: isChecked ? (isDarkMode ? '#1e3a8a' : '#eff6ff') : 'transparent',
-                        borderColor: isChecked ? '#3b82f6' : undefined
-                      }}
                     >
                       <input
                         type="checkbox"
@@ -459,11 +420,7 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
                   No tools selected - the agent will use LLM capabilities only
                 </div>
               ) : (
-                <div className="tools-hint" style={{
-                  backgroundColor: isDarkMode ? '#1e3a8a' : '#eff6ff',
-                  borderColor: '#3b82f6',
-                  color: isDarkMode ? '#93c5fd' : '#1e40af'
-                }}>
+                <div className="tools-hint">
                   <strong>Selected tools ({formData.tools.length}):</strong> {formData.tools.join(', ')}
                 </div>
               )}
@@ -558,16 +515,7 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
         </div>
       </div>
 
-      <div className="panel-footer" style={{
-        padding: '20px 24px',
-        borderTop: isDarkMode ? '1px solid #1e293b' : '1px solid #e5e7eb',
-        display: 'flex',
-        justifyContent: 'flex-end',
-        gap: '12px',
-        backgroundColor: isDarkMode ? '#0f172a' : '#fafafa',
-        borderBottomLeftRadius: '16px',
-        borderBottomRightRadius: '16px',
-      }}>
+      <div className="panel-footer">
         <button className="btn-secondary" onClick={onClose}>
           Cancel
         </button>

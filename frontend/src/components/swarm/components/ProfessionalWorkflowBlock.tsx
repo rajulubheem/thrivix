@@ -42,6 +42,7 @@ interface WorkflowBlockData {
   onToggleEnabled?: (id: string) => void;
   onToggleAdvanced?: (id: string) => void;
   onToggleWide?: (id: string) => void;
+  onOpenSettings?: (id: string) => void;
   availableTools?: string[];
 }
 
@@ -317,6 +318,22 @@ export const ProfessionalWorkflowBlock = memo<NodeProps<WorkflowBlockData>>(({
             ⏭️ Next: {data.nextStepPreview || 'Preparing...'}
           </div>
         </div>
+      )}
+
+      {/* Settings Button - Appears on Hover */}
+      {isHovered && data.onOpenSettings && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            data.onOpenSettings?.(id);
+          }}
+          className="absolute -top-2 -left-2 z-20 w-8 h-8 bg-blue-500 text-white rounded-full
+                     flex items-center justify-center shadow-lg hover:bg-blue-600 transition-all
+                     hover:scale-110 active:scale-95"
+          title="Open Settings"
+        >
+          <Settings size={14} />
+        </button>
       )}
 
       {/* Header */}

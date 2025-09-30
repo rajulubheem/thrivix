@@ -131,7 +131,7 @@ export default function UnifiedOrchestratorV3() {
     setError(null);
     
     try {
-      const response = await fetch('http://localhost:8000/api/v1/unified/orchestrate', {
+      const response = await fetch('/api/v1/unified-orchestrator/orchestrate', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -298,7 +298,7 @@ export default function UnifiedOrchestratorV3() {
     setError(null);
     
     try {
-      const response = await fetch('http://localhost:8000/api/v1/unified/orchestrate', {
+      const response = await fetch('/api/v1/unified-orchestrator/orchestrate', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

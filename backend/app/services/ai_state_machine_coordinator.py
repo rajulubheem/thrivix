@@ -1436,8 +1436,8 @@ No extra commentary after that line.""",
                 if ne:
                     next_event = ne
 
-            elif state_type in ['analysis', 'decision', 'loop']:
-                # Create analysis agent
+            elif state_type in ['analysis', 'decision', 'loop', 'agent']:
+                # Create analysis agent - handle both 'analysis' and 'agent' types
                 # Build enhanced mission-aware context
                 enhanced_context_str = ""
                 if mission and relevant_context:
@@ -1623,16 +1623,50 @@ No extra commentary after that line.""",
                         'previous_results': dict(context.get('results', {})),
                     }
                     try:
-                        ev, _ = await self.execute_state(child_state, child_ctx)
-                        # Merge results back
-                        context['results'].update(child_ctx.get('results', {}))
-                        await self.hub.publish_control(ControlFrame(
-                            exec_id=context['exec_id'],
-                            type="parallel_child_completed",
-                            agent_id=state_id,
-                            payload={"child": cid, "event": ev}
-                        ))
-                        return ev
+                        # For parallel_load branches, we need to execute the full chain, not just one state
+                        if state_type == 'parallel_load':
+                            # Execute the child and follow its transitions until it reaches the join
+                            current_child_id = cid
+                            child_steps = 0
+                            max_child_steps = 50  # Prevent infinite loops in branches
+
+                            while current_child_id and child_steps < max_child_steps:
+                                child_steps += 1
+                                current_child = states_map.get(current_child_id)
+                                if not current_child:
+                                    break
+
+                                # Execute the current state in the branch
+                                ev, _ = await self.execute_state(current_child, child_ctx)
+
+                                # Follow the transition
+                                next_child_id = (current_child.get('transitions') or {}).get(ev)
+
+                                # Stop if we've reached a join node or parallel node
+                                next_state = states_map.get(next_child_id)
+                                if not next_child_id or not next_state:
+                                    break
+                                if next_state.get('type') in ('join', 'parallel', 'parallel_load'):
+                                    # We've reached a convergence point
+                                    break
+
+                                current_child_id = next_child_id
+
+                            # Merge results back
+                            context['results'].update(child_ctx.get('results', {}))
+                            return ev
+                        else:
+                            # Regular parallel execution - just execute the single state
+                            ev, _ = await self.execute_state(child_state, child_ctx)
+                            # Merge results back
+                            context['results'].update(child_ctx.get('results', {}))
+                            await self.hub.publish_control(ControlFrame(
+                                exec_id=context['exec_id'],
+                                type="parallel_child_completed",
+                                agent_id=state_id,
+                                payload={"child": cid, "event": ev}
+                            ))
+                            return ev
                     except Exception as ce:
                         logger.warning(f"Parallel child {cid} failed: {ce}")
                         await self.hub.publish_control(ControlFrame(
@@ -1700,31 +1734,68 @@ No extra commentary after that line.""",
                 # Determine a reasonable next state target to continue after aggregation.
                 # If this is a fan-out pattern (parallel -> children), try to find a common downstream target.
                 forced_next: Optional[str] = None
-                # Prefer precomputed join for parallel_load
+
+                # For parallel_load, we should NOT skip to the join immediately
+                # Instead, let the normal flow continue through the branches
                 if state_type == 'parallel_load':
-                    try:
+                    # For parallel_load, we need to ensure all branches are actually executed
+                    # Check if we have properly executed all the branches
+                    all_executed = all(c['id'] in already for c in contributors)
+
+                    if not all_executed:
+                        # Branches haven't all executed yet, don't jump ahead
+                        logger.info(f"Parallel_load {state_id}: Not all branches executed yet, continuing execution")
+                        forced_next = None
+                    else:
+                        # All branches executed, now we can move to the join
+                        # Use the precomputed join if available
                         forced_next = (context.get('fanout_joins') or {}).get(state_id)
+                        if not forced_next:
+                            # Try to find the common target of all branches
+                            try:
+                                child_set = {c['id'] for c in contributors}
+                                counts: Dict[str, int] = {}
+                                for e in edges:
+                                    src = e.get('source')
+                                    tgt = e.get('target')
+                                    if src in child_set and tgt and tgt != state_id and tgt not in child_set:
+                                        counts[tgt] = counts.get(tgt, 0) + 1
+                                # Only proceed to join if ALL branches point to the same target
+                                if counts:
+                                    # Check if all branches have the same target
+                                    max_count = max(counts.values())
+                                    if max_count == len(contributors):
+                                        # All branches converge to the same node
+                                        forced_next = max(counts.items(), key=lambda kv: kv[1])[0]
+                                    else:
+                                        # Not all branches converge yet
+                                        forced_next = None
+                            except Exception:
+                                forced_next = None
+                else:
+                    # For regular parallel (aggregator), find the next node
+                    try:
+                        child_set = {c['id'] for c in contributors}
+                        # Count outgoing targets from children that are not looping back to parallel or staying within children
+                        counts: Dict[str, int] = {}
+                        for e in edges:
+                            src = e.get('source'); tgt = e.get('target')
+                            if src in child_set and tgt and tgt != state_id and tgt not in child_set:
+                                counts[tgt] = counts.get(tgt, 0) + 1
+                        if counts:
+                            # Pick the most common target (simple join)
+                            # But ensure ALL branches have completed before jumping
+                            all_branches_done = all(cid in already for cid in child_set)
+                            if all_branches_done:
+                                forced_next = max(counts.items(), key=lambda kv: kv[1])[0]
                     except Exception:
                         forced_next = None
-                try:
-                    child_set = {c['id'] for c in contributors}
-                    # Count outgoing targets from children that are not looping back to parallel or staying within children
-                    counts: Dict[str, int] = {}
-                    for e in edges:
-                        src = e.get('source'); tgt = e.get('target')
-                        if src in child_set and tgt and tgt != state_id and tgt not in child_set:
-                            counts[tgt] = counts.get(tgt, 0) + 1
-                    if counts:
-                        # Pick the most common target (simple join)
-                        forced_next = max(counts.items(), key=lambda kv: kv[1])[0]
-                except Exception:
-                    forced_next = None
 
-                if not forced_next:
-                    # Fallback: if the parallel node has an explicit transition for our next_event, use that
-                    tgt = (state.get('transitions') or {}).get(next_event)
-                    if tgt:
-                        forced_next = tgt
+                    if not forced_next:
+                        # Fallback: if the parallel node has an explicit transition for our next_event, use that
+                        tgt = (state.get('transitions') or {}).get(next_event)
+                        if tgt:
+                            forced_next = tgt
 
                 if forced_next:
                     # Store in context to steer the main loop
@@ -1802,6 +1873,72 @@ No extra commentary after that line.""",
 
                 # Store provided input as the result for this state
                 result = provided_data if provided_data is not None else f"Input {next_event}"
+
+            else:
+                # Default handler for unrecognized state types
+                logger.warning(f"Unrecognized state type '{state_type}' for state {state_id}, treating as analysis block")
+
+                # Treat unrecognized types as analysis blocks that should invoke the LLM
+                # This ensures we don't silently skip blocks with new/custom types
+                allowed_events = list(state.get('transitions', {}).keys()) or ['success']
+
+                # Build context for the agent
+                context_str = ""
+                if context.get('previous_results'):
+                    prev_results = context['previous_results']
+                    context_str = "Previous results:\n"
+                    for k, v in list(prev_results.items())[-3:]:  # Last 3 results
+                        if v:
+                            context_str += f"- {k}: {str(v)[:500]}\n"
+
+                # Create a simple agent to generate content based on description
+                description = state.get('description', f'Execute {state_type} task')
+                agent_role = state.get('agent_role', 'Agent')
+
+                # Use StrandsAgentRuntime like the analysis blocks
+                agent_config = StrandsAgentConfig(
+                    name=state.get('name', state_id),
+                    system_prompt=f"""You are {agent_role}.
+
+{context_str}
+
+Your task: {description}
+
+Analyze the context and complete the task described above. Provide a clear, actionable response.
+If this is meant to generate test cases or other content, create appropriate examples based on the context.
+
+At the very end of your response, output exactly one line:
+NEXT_EVENT: {allowed_events[0] if allowed_events else 'success'}""",
+                    model=state.get('model', 'gpt-4o-mini'),
+                    temperature=0.7,
+                    tools=[]
+                )
+
+                agent_runtime = StrandsAgentRuntime(
+                    agent_id=state_id,
+                    config=agent_config
+                )
+
+                # Store agent
+                self.active_agents[state_id] = agent_runtime
+
+                # Execute the agent
+                output = ""
+                async for frame in agent_runtime.stream_execute(description):
+                    if isinstance(frame, TokenFrame):
+                        output += frame.token
+                        # Forward token to UI
+                        frame.agent_id = state_id
+                        await self.hub.publish(frame)
+
+                result = output.strip()
+
+                # Parse next event from result
+                ne = self._parse_next_event(result, allowed_events)
+                if ne:
+                    next_event = ne
+                else:
+                    next_event = allowed_events[0] if allowed_events else 'success'
 
         except Exception as e:
             logger.error(f"State execution error: {e}")
