@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { API_BASE_URL } from '../config/api';
 
 export interface ToolParameter {
   name: string;
@@ -69,7 +70,7 @@ class ToolSchemaService {
   private loaded = false;
 
   constructor() {
-    this.baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
+    this.baseUrl = `${API_BASE_URL}/api/v1`;
   }
 
   async loadSchemas(): Promise<void> {

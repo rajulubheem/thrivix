@@ -551,10 +551,21 @@ async def submit_state_machine_decision(exec_id: str, payload: Dict[str, Any]):
         return {"success": False, "message": "Execution not found"}
 
     coordinator = exec_info.get("coordinator")
+    hub = exec_info.get("hub")
     if not coordinator:
         return {"success": False, "message": "Coordinator not found for execution"}
 
     ok = coordinator.submit_decision(exec_id, state_id, event)
+
+    # Publish control frame to notify frontend that decision was submitted
+    if ok and hub:
+        await hub.publish_control(ControlFrame(
+            exec_id=exec_id,
+            type="decision_submitted",
+            agent_id=state_id,
+            payload={"state_id": state_id, "event": event}
+        ))
+
     return {"success": ok}
 
 

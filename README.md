@@ -49,18 +49,55 @@
 
 ## 🚀 Quick Start
 
+### Option 1: Automated Setup (Recommended)
+
 ```bash
 # Clone repository
 git clone https://github.com/rajulubheem/thrivix.git
 cd thrivix
 
-# Backend setup (Python 3.11+ required)
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+# Install Redis (required for streaming workflows)
+# macOS:
+brew install redis
+brew services start redis
+
+# Linux (Ubuntu/Debian):
+# sudo apt-get install redis-server
+# sudo systemctl start redis
+
+# Run setup script
+./setup.sh
 
 # Configure API keys
+# Edit backend/.env and add your API keys:
+# - OPENAI_API_KEY=your_key_here
+# - TAVILY_API_KEY=your_key_here
+
+# Start backend (Terminal 1)
+cd backend
+source venv/bin/activate
+uvicorn app.main:app --reload --port 8000
+
+# Start frontend (Terminal 2)
+cd frontend
+npm start
+```
+
+### Option 2: Manual Setup
+
+```bash
+# Install Redis first (required)
+# macOS:
+brew install redis && brew services start redis
+
+# Linux (Ubuntu/Debian):
+# sudo apt-get install redis-server && sudo systemctl start redis
+
+# Backend setup (Python 3.11+ required)
+cd backend
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 cp .env.template .env
 # Edit .env and add your OpenAI and Tavily API keys
 
@@ -117,7 +154,7 @@ Thrivix is a platform that helps you create and execute workflows using multiple
 - **OpenAI GPT-4** - Language model
 - **Tavily API** - Web search
 - **WebSocket/SSE** - Real-time updates
-- **Redis** - Event pub/sub (optional)
+- **Redis** - Event pub/sub and streaming coordination (required)
 - **SQLite** - Session storage
 
 ### Frontend
@@ -144,8 +181,9 @@ REDIS_URL=redis://localhost:6379/0
 
 ### Environment Requirements
 
-- Python 3.11 or higher
-- Node.js 18 or higher
+- **Python 3.11 or higher**
+- **Node.js 18 or higher**
+- **Redis** (required for streaming workflows)
 - 8GB RAM recommended
 - 2GB disk space
 

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { WS_BASE_URL } from '../../../config/api';
 import './ImprovedStateDataViewer.css';
 
 interface Frame {
@@ -100,9 +101,7 @@ const ImprovedStateDataViewer: React.FC<ImprovedStateDataViewerProps> = ({
   }, [execId]);
 
   const connectWebSocket = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const port = window.location.hostname === 'localhost' ? '8000' : window.location.port || '8000';
-    const wsUrl = `${protocol}//${window.location.hostname}:${port}/api/v1/ws/${execId}?start_from=0`;
+    const wsUrl = `${WS_BASE_URL}/api/v1/ws/${execId}?start_from=0`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
