@@ -1,19 +1,43 @@
-# Deployment Guide
+# Thrivix Production Deployment Guide
 
-## Quick Start
+## 🚀 Super Easy Deployment (Cloudflare Tunnel)
 
-### Local Development
+### Step 1: Deploy the Application
 
 ```bash
-# Run the setup script
-./scripts/setup.sh
-
-# Add your API keys to backend/.env
-# Start backend: cd backend && python main.py
-# Start frontend: cd frontend && npm start
+./deploy.sh
 ```
 
-### Docker Deployment
+This automatically:
+- Builds frontend for production
+- Copies your API keys from `.env` to `.env.production`
+- Prepares everything for deployment
+
+### Step 2: Start the Production Server
+
+```bash
+./start-production.sh
+```
+
+The server starts on `http://0.0.0.0:8000` serving:
+- Frontend (React app) at `/`
+- Backend API at `/api/v1`
+
+### Step 3: Configure Cloudflare Tunnel
+
+In your Cloudflare Zero Trust dashboard:
+
+**Service Configuration:**
+- Type: `HTTP`
+- URL: `http://127.0.0.1:8000`
+- Public hostname: `truewave.info`
+- Path: `*` (all paths)
+
+**Done!** Your app is live at `https://truewave.info`
+
+---
+
+## Alternative: Docker Deployment
 
 ```bash
 # Copy environment template
@@ -22,8 +46,8 @@ cp .env.production .env
 # Edit .env with your API keys
 # Required: OPENAI_API_KEY and TAVILY_API_KEY
 
-# Run deployment script
-./scripts/deploy.sh
+# Run docker compose
+docker-compose up -d
 ```
 
 ## Deployment Options

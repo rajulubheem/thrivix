@@ -70,7 +70,14 @@ app = FastAPI(
 # If compression is needed elsewhere, add conditional logic to skip SSE paths.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://localhost:3002"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "http://localhost:3002",
+        "https://truewave.info",
+        "http://truewave.info"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -124,10 +131,10 @@ class SelectiveGZipMiddleware(BaseHTTPMiddleware):
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
-# Add catch-all OPTIONS handler for CORS preflight
-@app.options("/{full_path:path}")
+# Add catch-all OPTIONS handler for CORS preflight - only for API routes
+@app.options("/api/{full_path:path}")
 async def options_handler(full_path: str):
-    """Handle OPTIONS requests for CORS preflight"""
+    """Handle OPTIONS requests for CORS preflight on API routes"""
     return {"message": "OK"}
 
 # Test SSE endpoint
@@ -167,3 +174,35 @@ async def health_check():
 async def readiness_check():
     # Check database, redis, etc.
     return {"status": "ready"}
+
+
+# Serve static frontend files in production
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+# Check if frontend build exists
+frontend_build_path = Path(__file__).parent.parent.parent / "frontend" / "build"
+
+if frontend_build_path.exists() and os.getenv("ENVIRONMENT", "development") == "production":
+    # Mount static files
+    app.mount("/static", StaticFiles(directory=str(frontend_build_path / "static")), name="static")
+
+    # Serve index.html for all non-API routes
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        # Don't intercept API routes
+        if full_path.startswith("api/") or full_path.startswith("health") or full_path.startswith("ready") or full_path.startswith("test-sse"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # Check if file exists in build directory
+        file_path = frontend_build_path / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+
+        # Default to index.html for SPA routing
+        return FileResponse(frontend_build_path / "index.html")
+
+    logger.info("✅ Serving frontend from build directory in production mode")
