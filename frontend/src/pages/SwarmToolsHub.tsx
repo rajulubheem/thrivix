@@ -492,7 +492,7 @@ export default function SwarmToolsHub() {
 
   const CategoryIcon = ({ category }: { category: string }) => {
     const Icon = categoryIcons[category] || categoryIcons.unknown;
-    return <Icon className="h-4 w-4" />;
+    return <Icon className={`h-4 w-4 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />;
   };
 
   return (
@@ -506,7 +506,7 @@ export default function SwarmToolsHub() {
                 onClick={() => navigate('/swarm')}
                 className={`p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
               >
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className={`h-5 w-5 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />
               </button>
               <div>
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
@@ -523,19 +523,19 @@ export default function SwarmToolsHub() {
                 onClick={() => setShowFilters(!showFilters)}
                 className={`p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
               >
-                <Filter className="h-5 w-5" />
+                <Filter className={`h-5 w-5 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />
               </button>
               <button
                 onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
                 className={`p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
               >
-                {viewMode === 'grid' ? <List className="h-5 w-5" /> : <Grid3x3 className="h-5 w-5" />}
+                {viewMode === 'grid' ? <List className={`h-5 w-5 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} /> : <Grid3x3 className={`h-5 w-5 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />}
               </button>
               <button
                 onClick={toggleTheme}
                 className={`p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
               >
-                {isDark ? <Sun className="h-5 w-5 text-yellow-400" /> : <Moon className="h-5 w-5" />}
+                {isDark ? <Sun className="h-5 w-5 text-yellow-400" /> : <Moon className="h-5 w-5 text-gray-700" />}
               </button>
               <button
                 onClick={() => navigate('/orchestrator/config')}
@@ -556,14 +556,14 @@ export default function SwarmToolsHub() {
               placeholder="Search tools by name, description, or category..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className={`w-full pl-12 pr-4 py-3 ${isDark ? 'bg-slate-800/50 border-slate-700' : 'bg-gray-50 border-gray-300'} border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+              className={`w-full pl-12 pr-4 py-3 ${isDark ? 'bg-slate-800/50 border-slate-700 text-slate-200 placeholder-slate-500' : 'bg-gray-50 border-gray-300 text-gray-900 placeholder-gray-500'} border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
             />
             {search && (
               <button
                 onClick={() => setSearch('')}
                 className={`absolute right-4 top-3.5 p-1 ${isDark ? 'hover:bg-slate-700' : 'hover:bg-gray-200'} rounded`}
               >
-                <X className="h-4 w-4" />
+                <X className={`h-4 w-4 ${isDark ? 'text-slate-400' : 'text-gray-600'}`} />
               </button>
             )}
           </div>
@@ -584,8 +584,8 @@ export default function SwarmToolsHub() {
                   className="flex-shrink-0 overflow-y-auto"
                 >
                   <div className={`h-full ${isDark ? 'bg-slate-900/50' : 'bg-white/80'} backdrop-blur-lg rounded-xl border ${isDark ? 'border-slate-800' : 'border-gray-200'} p-4`}>
-                    <h3 className="font-semibold mb-4 flex items-center gap-2">
-                      <Layers className="h-4 w-4" />
+                    <h3 className={`font-semibold mb-4 flex items-center gap-2 ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
+                      <Layers className={`h-4 w-4 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />
                       Categories
                     </h3>
                     <div className="space-y-1">
@@ -598,7 +598,7 @@ export default function SwarmToolsHub() {
                         }`}
                       >
                         <span className="flex items-center gap-2">
-                          <Package className="h-4 w-4" />
+                          <Package className={`h-4 w-4 ${!selectedCategory ? (isDark ? 'text-blue-400' : 'text-blue-600') : ''}`} />
                           All Tools
                         </span>
                         <span className={`text-xs ${isDark ? 'text-slate-500' : 'text-gray-500'}`}>
@@ -629,8 +629,8 @@ export default function SwarmToolsHub() {
                     {/* Recently Used */}
                     {recentlyUsed.length > 0 && (
                       <div className={`mt-6 pt-6 border-t ${isDark ? 'border-slate-800' : 'border-gray-200'}`}>
-                        <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm">
-                          <Clock className="h-3.5 w-3.5" />
+                        <h3 className={`font-semibold mb-3 flex items-center gap-2 text-sm ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
+                          <Clock className={`h-3.5 w-3.5 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />
                           Recently Used
                         </h3>
                         <div className="space-y-1">
@@ -658,18 +658,18 @@ export default function SwarmToolsHub() {
 
                     {/* Stats */}
                     <div className={`mt-6 pt-6 border-t ${isDark ? 'border-slate-800' : 'border-gray-200'}`}>
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <Activity className="h-4 w-4" />
+                      <h3 className={`font-semibold mb-3 flex items-center gap-2 ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
+                        <Activity className={`h-4 w-4 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />
                         Statistics
                       </h3>
                       <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                           <span className={isDark ? 'text-slate-400' : 'text-gray-600'}>Total Tools</span>
-                          <span className="font-medium">{tools.length}</span>
+                          <span className={`font-medium ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>{tools.length}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className={isDark ? 'text-slate-400' : 'text-gray-600'}>Categories</span>
-                          <span className="font-medium">{categories.length}</span>
+                          <span className={`font-medium ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>{categories.length}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className={isDark ? 'text-slate-400' : 'text-gray-600'}>Added Today</span>
@@ -687,7 +687,7 @@ export default function SwarmToolsHub() {
               {/* Tools Grid/List - Scrollable */}
               <div className="flex-1 overflow-y-auto pr-2">
                 <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold">
+                  <h2 className={`text-lg font-semibold ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
                     {selectedCategory ? (
                       <span className="flex items-center gap-2">
                         <CategoryIcon category={selectedCategory} />
@@ -727,7 +727,7 @@ export default function SwarmToolsHub() {
                                 <CategoryIcon category={tool.category || 'unknown'} />
                               </div>
                               <div className="flex-1">
-                                <h3 className="font-semibold text-base">{tool.name}</h3>
+                                <h3 className={`font-semibold text-base ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>{tool.name}</h3>
                                 <p className={`text-sm ${isDark ? 'text-slate-400' : 'text-gray-600'} mt-1`}>
                                   {tool.description}
                                 </p>
@@ -739,7 +739,7 @@ export default function SwarmToolsHub() {
                           </div>
 
                           <div className="flex items-center gap-2 mt-3">
-                            <span className={`px-2 py-1 text-xs rounded-lg ${isDark ? 'bg-slate-800' : 'bg-gray-100'}`}>
+                            <span className={`px-2 py-1 text-xs rounded-lg ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-gray-100 text-gray-700'}`}>
                               {tool.source || 'local'}
                             </span>
                             {tool.capabilities?.slice(0, 2).map(cap => (
@@ -759,12 +759,12 @@ export default function SwarmToolsHub() {
                             >
                               {copiedTool === tool.name ? (
                                 <>
-                                  <Check className="h-3 w-3" />
+                                  <Check className={`h-3 w-3 ${isDark ? 'text-slate-300' : 'text-gray-800'}`} />
                                   Copied!
                                 </>
                               ) : (
                                 <>
-                                  <Copy className="h-3 w-3" />
+                                  <Copy className={`h-3 w-3 ${isDark ? 'text-slate-400' : 'text-gray-600'}`} />
                                   Copy name
                                 </>
                               )}
@@ -802,7 +802,7 @@ export default function SwarmToolsHub() {
                       <div className={`p-4 ${isDark ? 'bg-slate-800/50' : 'bg-gray-100'} rounded-full w-20 h-20 mx-auto mb-4 flex items-center justify-center`}>
                         <Info className={`h-8 w-8 ${isDark ? 'text-slate-500' : 'text-gray-400'}`} />
                       </div>
-                      <h3 className="font-semibold mb-2">Select a Tool</h3>
+                      <h3 className={`font-semibold mb-2 ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>Select a Tool</h3>
                       <p className={`text-sm ${isDark ? 'text-slate-400' : 'text-gray-600'}`}>
                         Choose a tool from the list to view details, test it, and add it to your agents
                       </p>
@@ -819,7 +819,7 @@ export default function SwarmToolsHub() {
                               <CategoryIcon category={selected.category || 'unknown'} />
                             </div>
                             <div>
-                              <h3 className="font-semibold text-lg">{selected.name}</h3>
+                              <h3 className={`font-semibold text-lg ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>{selected.name}</h3>
                               <p className={`text-sm ${isDark ? 'text-slate-400' : 'text-gray-600'} mt-1`}>
                                 {selected.description}
                               </p>
@@ -854,8 +854,8 @@ export default function SwarmToolsHub() {
                       {/* Parameters */}
                       <div className="p-5">
                         <div className="mb-4">
-                          <h4 className="font-medium mb-2 flex items-center gap-2">
-                            <Code className="h-4 w-4" />
+                          <h4 className={`font-medium mb-2 flex items-center gap-2 ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
+                            <Code className={`h-4 w-4 ${isDark ? 'text-slate-300' : 'text-gray-700'}`} />
                             Parameters
                           </h4>
                           
@@ -873,7 +873,7 @@ export default function SwarmToolsHub() {
                                     setParams({});
                                   }
                                 }}
-                                className={`w-full px-3 py-2 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-300'} border rounded-lg text-sm`}
+                                className={`w-full px-3 py-2 ${isDark ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-gray-300 text-gray-900'} border rounded-lg text-sm`}
                               >
                                 <option value={0}>Example Template</option>
                                 <option value={1}>Custom Parameters</option>
@@ -891,7 +891,7 @@ export default function SwarmToolsHub() {
                                   // Invalid JSON, don't update
                                 }
                               }}
-                              className={`w-full px-3 py-2 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-300'} border rounded-lg font-mono text-sm resize-none`}
+                              className={`w-full px-3 py-2 ${isDark ? 'bg-slate-800 border-slate-700 text-slate-200 placeholder-slate-500' : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'} border rounded-lg font-mono text-sm resize-none`}
                               rows={8}
                               placeholder="{}"
                             />
@@ -902,7 +902,7 @@ export default function SwarmToolsHub() {
                               {copiedTool === 'params' ? (
                                 <Check className="h-4 w-4 text-green-500" />
                               ) : (
-                                <Copy className="h-4 w-4" />
+                                <Copy className={`h-4 w-4 ${isDark ? 'text-slate-400' : 'text-gray-600'}`} />
                               )}
                             </button>
                           </div>
@@ -935,7 +935,7 @@ export default function SwarmToolsHub() {
                         {/* Result */}
                         {result && (
                           <div className="mt-4">
-                            <h4 className="font-medium mb-2 flex items-center gap-2">
+                            <h4 className={`font-medium mb-2 flex items-center gap-2 ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
                               {result.error ? (
                                 <>
                                   <AlertCircle className="h-4 w-4 text-red-500" />
@@ -949,7 +949,7 @@ export default function SwarmToolsHub() {
                               )}
                             </h4>
                             <div className={`relative ${isDark ? 'bg-slate-800' : 'bg-gray-50'} rounded-lg p-3 overflow-auto max-h-64`}>
-                              <pre className="text-xs font-mono">
+                              <pre className={`text-xs font-mono ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>
                                 {JSON.stringify(result, null, 2)}
                               </pre>
                               <button
@@ -959,7 +959,7 @@ export default function SwarmToolsHub() {
                                 {copiedTool === 'result' ? (
                                   <Check className="h-4 w-4 text-green-500" />
                                 ) : (
-                                  <Copy className="h-4 w-4" />
+                                  <Copy className={`h-4 w-4 ${isDark ? 'text-slate-400' : 'text-gray-600'}`} />
                                 )}
                               </button>
                             </div>

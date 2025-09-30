@@ -139,8 +139,8 @@ const ExecutionResults: React.FC<ExecutionResultsProps> = ({ result }) => {
                 if (paragraph.startsWith('#')) {
                   const level = paragraph.match(/^#+/)?.[0].length || 1;
                   const text = paragraph.replace(/^#+\s*/, '');
-                  const HeaderTag = `h${Math.min(level + 2, 6)}` as keyof JSX.IntrinsicElements;
-                  return <HeaderTag key={index}>{text}</HeaderTag>;
+                  const Tag = `h${Math.min(level + 2, 6)}`;
+                  return React.createElement(Tag, { key: index }, text);
                 }
                 
                 // Check for bullet points

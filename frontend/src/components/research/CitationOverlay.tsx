@@ -28,7 +28,7 @@ export default function CitationOverlay({ text, citations, sources }: CitationOv
 
   const renderTextWithCitations = () => {
     let processedText = text;
-    const elements: JSX.Element[] = [];
+    const elements: React.ReactElement[] = [];
     let lastIndex = 0;
 
     // Sort citations by their position in the text

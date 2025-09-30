@@ -11,6 +11,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
 import { Card } from '../ui/card';
 import { Brain, ChevronDown, ChevronUp, Download, History, Printer, Send, Square, Bot, User, Link as LinkIcon, Plus, PlayCircle, Settings } from 'lucide-react';
+import { API_BASE_URL } from '../../config/api';
 import '../../styles/unified-theme.css';
 import '../../styles/scholarly-research.css';
 
@@ -19,12 +20,12 @@ type Thought = { type: string; content: string; timestamp: string };
 type Source = { id: string; title: string; url: string; domain: string; snippet?: string; favicon?: string; thumbnail?: string; number?: number };
 type Message = { id?: string; role: 'user' | 'assistant'; content: string; timestamp?: string; sources?: Source[]; thoughts?: Thought[]; mode?: Mode };
 
-const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const apiUrl = API_BASE_URL;
 
-const modeConfig: Record<Mode, { name: string; endpoint: string; statusEndpoint: string; continueEndpoint: string | null; useConversation: boolean; }>= {
-  fast:   { name: 'Quick',   endpoint: '/api/v1/research/start',             statusEndpoint: '/api/v1/research/status',           continueEndpoint: null,                                useConversation: false },
-  deep:   { name: 'Deep',    endpoint: '/api/v1/research/start-strands-real', statusEndpoint: '/api/v1/research/status-strands-real', continueEndpoint: '/api/v1/research/continue-strands-real', useConversation: true  },
-  scholar:{ name: 'Scholar', endpoint: '/api/v1/research/start-strands-real', statusEndpoint: '/api/v1/research/status-strands-real', continueEndpoint: '/api/v1/research/continue-strands-real', useConversation: true  },
+const modeConfig: Record<Mode, { name: string; endpoint: string; statusEndpoint: string; streamEndpoint: string | null; continueEndpoint: string | null; useConversation: boolean; }>= {
+  fast:   { name: 'Quick',   endpoint: '/api/v1/research/start',             statusEndpoint: '/api/v1/research/status',           streamEndpoint: null, continueEndpoint: null,                                useConversation: false },
+  deep:   { name: 'Deep',    endpoint: '/api/v1/research/start-strands-real', statusEndpoint: '/api/v1/research/status-strands-real', streamEndpoint: '/api/v1/research/stream-events-strands-real', continueEndpoint: '/api/v1/research/continue-strands-real', useConversation: true  },
+  scholar:{ name: 'Scholar', endpoint: '/api/v1/research/start-strands-real', statusEndpoint: '/api/v1/research/status-strands-real', streamEndpoint: '/api/v1/research/stream-events-strands-real', continueEndpoint: '/api/v1/research/continue-strands-real', useConversation: true  },
 };
 
 const safeDomain = (url: string) => { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return ''; } };
@@ -199,7 +200,14 @@ const ScholarlyResearchView: React.FC = () => {
         try { sseRef.current.close(); } catch {}
         sseRef.current = null;
       }
-      const es = new EventSource(`${apiUrl}/api/v1/research/stream-events-strands-real/${sid}`);
+      // Only connect to SSE if mode has a stream endpoint
+      const streamEndpoint = modeConfig[mode].streamEndpoint;
+      if (!streamEndpoint) {
+        // No SSE for this mode, use polling instead
+        startPollingSnapshot(sid);
+        return;
+      }
+      const es = new EventSource(`${apiUrl}${streamEndpoint}/${sid}`);
       sseRef.current = es;
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       // SSE watchdog: fallback to snapshot polling if no events in 5s
@@ -289,8 +297,10 @@ const ScholarlyResearchView: React.FC = () => {
       setLiveContent('');
       pendingContentRef.current = '';
       if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-      // Trigger backend link check
-      fetch(`${apiUrl}/api/v1/research/check-links-strands-real/${sid}`, { method:'POST' }).catch(()=>{});
+      // Trigger backend link check (only for modes that support it)
+      if (mode === 'deep' || mode === 'scholar') {
+        fetch(`${apiUrl}/api/v1/research/check-links-strands-real/${sid}`, { method:'POST' }).catch(()=>{});
+      }
       // Refresh full message history to include trace attached by backend
       fetch(`${apiUrl}${modeConfig[mode].statusEndpoint}/${sid}`)
         .then(res => res.json())
@@ -346,8 +356,16 @@ const ScholarlyResearchView: React.FC = () => {
     try {
       const isContinuation = !!sessionId && messages.length > 0 && !!modeConfig[mode].continueEndpoint;
       const url = `${apiUrl}${isContinuation ? modeConfig[mode].continueEndpoint : modeConfig[mode].endpoint}`;
-      const res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ query, session_id: sid, require_approval: false, mode, model_provider: modelProvider, model_id: modelId }) });
+      const res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ query, session_id: isContinuation ? sid : undefined, require_approval: false, mode, model_provider: modelProvider, model_id: modelId }) });
       if (!res.ok) throw new Error('Failed to start');
+      const data = await res.json();
+      // Use backend's session_id if this is a new session
+      if (data.session_id && !isContinuation) {
+        sid = data.session_id;
+        setSessionId(sid);
+        navigate(`/conversation/${sid}`);
+        saveSession(sid);
+      }
       connectEvents(sid);
     } catch (err:any) { setError(err.message || 'Failed to start research'); setIsLoading(false); setIsThinking(false); }
   };
