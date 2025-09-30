@@ -14,7 +14,7 @@ import './ImprovedChatbotOutput.css';
 interface Agent {
   id: string;
   name: string;
-  output: string;
+  output: any;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'needs_input' | string;
   startTime?: number;
   endTime?: number;
@@ -107,12 +107,21 @@ const ImprovedChatbotOutput: React.FC<ImprovedChatbotOutputProps> = ({
     }
   };
 
-  const processContent = (content: string): string => {
+  const processContent = (content: any): string => {
+    if (content == null) return '';
+    if (typeof content !== 'string') {
+      try {
+        return JSON.stringify(content, null, 2);
+      } catch {
+        return String(content);
+      }
+    }
     // Remove NEXT_EVENT from display
     return content.replace(/NEXT_EVENT:\s*\w+/g, '').trim();
   };
 
-  const extractNextEvent = (content: string): string | null => {
+  const extractNextEvent = (content: any): string | null => {
+    if (typeof content !== 'string') return null;
     const match = content.match(/NEXT_EVENT:\s*(\w+)/);
     return match ? match[1] : null;
   };
@@ -147,11 +156,14 @@ const ImprovedChatbotOutput: React.FC<ImprovedChatbotOutputProps> = ({
     // Apply search filter
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      filtered = filtered.filter(agent =>
-        agent.name.toLowerCase().includes(term) ||
-        agent.output.toLowerCase().includes(term) ||
-        agent.role?.toLowerCase().includes(term)
-      );
+      filtered = filtered.filter(agent => {
+        const out = agent.output == null ? '' : (typeof agent.output === 'string' ? agent.output : (() => { try { return JSON.stringify(agent.output); } catch { return String(agent.output); } })());
+        return (
+          (agent.name || '').toLowerCase().includes(term) ||
+          out.toLowerCase().includes(term) ||
+          (agent.role || '').toLowerCase().includes(term)
+        );
+      });
     }
 
     return filtered;
@@ -159,7 +171,8 @@ const ImprovedChatbotOutput: React.FC<ImprovedChatbotOutputProps> = ({
 
   const renderAgentMessage = (agent: typeof sortedAgents[0]) => {
     const isSelected = selectedAgent === agent.id;
-    const processedContent = processContent(agent.output);
+    const isAggregate = agent.output && typeof agent.output === 'object' && !Array.isArray(agent.output);
+    const processedContent = isAggregate ? '' : processContent(agent.output);
     const nextEvent = extractNextEvent(agent.output);
 
     // Find the corresponding node for block reference
@@ -269,7 +282,43 @@ const ImprovedChatbotOutput: React.FC<ImprovedChatbotOutputProps> = ({
         )}
 
         {/* Content */}
-        {processedContent && (
+        {isAggregate ? (
+          // Render aggregated join data: each child becomes its own well-formatted markdown block
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {Object.entries(agent.output as Record<string, any>).map(([childId, childContent]) => {
+              const childNode = nodes.find((n:any) => n.id === childId);
+              const childName = childNode?.data?.name || childId;
+              const childText = processContent(childContent);
+              return (
+                <div key={childId} style={{
+                  border: `1px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
+                  borderRadius: 8,
+                  padding: 10,
+                  background: isDarkMode ? '#0f172a' : '#f8fafc'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <GitBranch size={14} />
+                      <span style={{ fontWeight: 600 }}>{childName}</span>
+                    </div>
+                    <button
+                      onClick={(e)=>{ e.stopPropagation(); copyToClipboard(childText, `${agent.id}:${childId}`); }}
+                      title="Copy section"
+                      style={{ background: 'transparent', border: 'none', color: isDarkMode ? '#94a3b8' : '#64748b', cursor: 'pointer' }}
+                    >
+                      {copiedId === `${agent.id}:${childId}` ? <Check size={14}/> : <Copy size={14}/>}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.6, color: isDarkMode ? '#cbd5e1' : '#334155', maxHeight: '300px', overflowY: 'auto' }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {childText}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : processedContent && (
           <div style={{
             fontSize: '13px',
             lineHeight: '1.6',
@@ -343,7 +392,7 @@ const ImprovedChatbotOutput: React.FC<ImprovedChatbotOutputProps> = ({
                 em: ({ children }) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
               }}
             >
-              {processedContent}
+            {processedContent}
             </ReactMarkdown>
           </div>
         )}

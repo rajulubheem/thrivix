@@ -12,6 +12,7 @@ import subprocess
 import os
 import tempfile
 from datetime import datetime
+from pathlib import Path
 
 from app.core.security import get_current_user
 from app.services.strands_tool_definitions import STRANDS_TOOL_SCHEMAS
@@ -131,10 +132,10 @@ async def execute_tool_logic(tool_name: str, parameters: Dict[str, Any]) -> Any:
         try:
             # Detect file type
             mime_type, _ = mimetypes.guess_type(path)
-            file_extension = os.path.splitext(path)[1].lower()
+            file_extension = Path(path).suffix.lower()
 
             # Check file size first
-            file_size = os.path.getsize(path)
+            file_size = Path(path).stat().st_size
             max_size = 10 * 1024 * 1024  # 10MB limit
 
             if file_size > max_size:
@@ -331,7 +332,7 @@ async def execute_tool_logic(tool_name: str, parameters: Dict[str, Any]) -> Any:
         content = parameters.get("content", "")
         try:
             # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
             with open(path, 'w') as f:
                 f.write(content)
             return {"success": True, "path": path, "bytes_written": len(content)}

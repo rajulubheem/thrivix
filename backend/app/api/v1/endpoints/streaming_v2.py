@@ -543,6 +543,7 @@ async def submit_state_machine_decision(exec_id: str, payload: Dict[str, Any]):
     """Submit a human decision for a state in the current execution"""
     state_id = payload.get("state_id")
     event = payload.get("event")
+    data = payload.get("data")
     if not state_id or not event:
         return {"success": False, "message": "state_id and event are required"}
 
@@ -555,7 +556,7 @@ async def submit_state_machine_decision(exec_id: str, payload: Dict[str, Any]):
     if not coordinator:
         return {"success": False, "message": "Coordinator not found for execution"}
 
-    ok = coordinator.submit_decision(exec_id, state_id, event)
+    ok = coordinator.submit_decision(exec_id, state_id, event, data)
 
     # Publish control frame to notify frontend that decision was submitted
     if ok and hub:
@@ -563,9 +564,8 @@ async def submit_state_machine_decision(exec_id: str, payload: Dict[str, Any]):
             exec_id=exec_id,
             type="decision_submitted",
             agent_id=state_id,
-            payload={"state_id": state_id, "event": event}
+            payload={"state_id": state_id, "event": event, "data": data}
         ))
-
     return {"success": ok}
 
 

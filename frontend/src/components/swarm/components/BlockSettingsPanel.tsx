@@ -88,7 +88,8 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
     description: node?.data?.description || '',
     tools: collectNodeTools(node),
     parameters: node?.data?.parameters || {},
-    enabled: node?.data?.enabled !== false
+    enabled: node?.data?.enabled !== false,
+    isStart: !!node?.data?.isStart
   });
 
   const [expandedSections, setExpandedSections] = useState({
@@ -144,7 +145,8 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
       description: node?.data?.description || '',
       tools: toolsArray,
       parameters: node?.data?.parameters || {},
-      enabled: node?.data?.enabled !== false
+      enabled: node?.data?.enabled !== false,
+      isStart: !!node?.data?.isStart
     });
   }, [node]);
 
@@ -196,7 +198,8 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
       toolsPlanned: toolsToSave, // Keep both for compatibility
       selected_tools: toolsToSave,
       parameters: formData.parameters,
-      enabled: formData.enabled
+      enabled: formData.enabled,
+      isStart: !!formData.isStart
     };
 
     console.log('BlockSettingsPanel - Updating node with data:', updatedData);
@@ -227,6 +230,9 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
     { value: 'decision', label: 'Decision' },
     { value: 'input', label: 'Input' },
     { value: 'parallel', label: 'Parallel' },
+    { value: 'parallel_load', label: 'Parallel Load' },
+    { value: 'join', label: 'Join' },
+    { value: 'loop', label: 'Loop' },
     { value: 'final', label: 'Final State' }
   ];
 
@@ -520,6 +526,15 @@ const BlockSettingsPanel: React.FC<BlockSettingsPanelProps> = ({
                   onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
                 />
                 <span>Block Enabled</span>
+              </label>
+
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={!!formData.isStart}
+                  onChange={(e) => setFormData({ ...formData, isStart: e.target.checked })}
+                />
+                <span>Mark as Start</span>
               </label>
 
               <div className="danger-zone">

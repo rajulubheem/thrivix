@@ -110,6 +110,16 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
           },
           {
             type: 'professional',
+            subType: 'input',
+            name: 'Start',
+            description: 'Workflow starting point (human input)',
+            icon: Settings,
+            color: '#14B8A6',
+            category: 'workflow',
+            agent_role: 'Initiator'
+          },
+          {
+            type: 'professional',
             subType: 'decision',
             name: 'Decision',
             description: 'Human or automated decision point',
@@ -127,6 +137,16 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
             color: '#EC4899',
             category: 'workflow',
             agent_role: 'Coordinator'
+          },
+          {
+            type: 'professional',
+            subType: 'parallel_load',
+            name: 'Parallel Load',
+            description: 'Fan-out to multiple tasks and join automatically',
+            icon: Layers,
+            color: '#22C55E',
+            category: 'workflow',
+            agent_role: 'Load Coordinator'
           },
           {
             type: 'professional',
@@ -158,6 +178,17 @@ const UnifiedBlockManager: React.FC<UnifiedBlockManagerProps> = ({
             color: '#10B981',
             category: 'workflow',
             agent_role: 'Finalizer'
+          }
+          ,
+          {
+            type: 'professional',
+            subType: 'join',
+            name: 'Join',
+            description: 'Join multiple branches and forward aggregated data',
+            icon: GitBranch,
+            color: '#0EA5E9',
+            category: 'workflow',
+            agent_role: 'Joiner'
           }
         ]
       },

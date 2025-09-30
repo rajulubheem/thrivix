@@ -405,6 +405,9 @@ const FlowSwarmInterface: React.FC = () => {
   const [hasStateMachineStructure, setHasStateMachineStructure] = useState<boolean>(false);
   // Human-in-the-loop decision modal
   const [decisionPrompt, setDecisionPrompt] = useState<null | {stateId: string, name: string, description?: string, allowed: string[]}>(null);
+  // Human input modal
+  const [inputPrompt, setInputPrompt] = useState<null | { stateId: string; name: string; description?: string; allowed: string[]; schema?: any }>(null);
+  const [inputValue, setInputValue] = useState<string>("");
   // Tools hub state
   const [showToolsHub, setShowToolsHub] = useState(false);
   // Get theme from context
@@ -955,9 +958,10 @@ const FlowSwarmInterface: React.FC = () => {
       const agent = updated.get(agent_id);
       
       if (agent) {
+        const base = typeof agent.output === 'string' ? agent.output : '';
         updated.set(agent_id, {
           ...agent,
-          output: final ? agent.output : agent.output + text
+          output: final ? base : base + text
         });
       }
       
@@ -1480,6 +1484,28 @@ const FlowSwarmInterface: React.FC = () => {
                   highlighted: n.id === st.id,
                 },
               })));
+            }
+          }, 100);
+        }
+        break;
+      case 'human_input_required':
+        if (payload?.state && payload?.allowed_events) {
+          const st = payload.state;
+          setInputPrompt({
+            stateId: st.id,
+            name: st.name,
+            description: st.description,
+            allowed: payload.allowed_events as string[],
+            schema: payload.input_schema
+          });
+          setInputValue('');
+          setTimeout(() => {
+            const nodeToFocus = nodes.find(n => n.id === st.id);
+            if (nodeToFocus) {
+              const x = nodeToFocus.position.x + 110;
+              const y = nodeToFocus.position.y + 50;
+              setCenter(x, y, { zoom: 1.2, duration: 500 });
+              setSelectedAgent(st.id);
             }
           }, 100);
         }
@@ -2136,33 +2162,65 @@ const FlowSwarmInterface: React.FC = () => {
           enabled: n.data.enabled !== false
         };
       }
-      // Handle regular nodes
+      // Handle tool blocks properly (map to tool_call)
+      const data = n.data || {};
+      const rawType = data.nodeType || data.type; // prefer explicit nodeType, fallback to type
+      if (n.type === 'tool' || rawType === 'tool' || data.toolName) {
+        const tname = data.toolName || (Array.isArray(data.toolsPlanned) ? data.toolsPlanned[0] : undefined);
+        return {
+          id: n.id,
+          name: data.name || data.label || tname || n.id,
+          type: 'tool_call',
+          description: data.description || '',
+          agent_role: data.agent_role || data.agentRole || 'Executor',
+          tools: tname ? [tname] : (Array.isArray(data.toolsPlanned) ? data.toolsPlanned : []),
+          parameters: data.parameters || {},
+        };
+      }
+      // Handle regular nodes with better type fallback (include data.type)
+      const derivedType = rawType ? (rawType === 'tool' ? 'tool_call' : rawType) : 'analysis';
       return {
         id: n.id,
-        name: n.data?.name || n.data?.label || n.id,
-        type: n.data?.nodeType || 'analysis',
-        description: n.data?.description || '',
-        agent_role: n.data?.agentRole || '',
-        tools: Array.isArray(n.data?.toolsPlanned)? n.data.toolsPlanned : []
+        name: data.name || data.label || n.id,
+        type: derivedType,
+        description: data.description || '',
+        agent_role: data.agentRole || data.agent_role || '',
+        tools: Array.isArray(data.toolsPlanned) ? data.toolsPlanned : (Array.isArray(data.tools) ? data.tools : [])
       };
     });
     const edgesJson = edges.map((e:any)=>({ source: e.source, target: e.target, event: (e.label && typeof e.label==='string' && e.label.length>0)? e.label : 'success' }));
-    // Find the initial state - look for nodes with no incoming edges, or named 'start'/'initial'
-    const nodesWithNoIncoming = nodes.filter(n =>
-      !edges.some(e => e.target === n.id)
-    );
-    let initial = nodesWithNoIncoming[0]?.id || nodes[0]?.id || 'start';
-
-    // Prefer nodes explicitly named 'start' or 'initial'
-    const startNode = nodes.find(n =>
-      n.data.name?.toLowerCase() === 'start' ||
-      n.data.name?.toLowerCase() === 'initial' ||
-      n.id === 'start' ||
-      n.id === 'initial'
-    );
-    if (startNode) {
-      initial = startNode.id;
+    // Determine initial state preference order:
+    // 1) Node explicitly marked isStart
+    // 2) First node with type 'input'
+    // 3) Node with no incoming edges
+    // 4) Named 'start'/'initial'
+    // 5) Fallback to first node
+    let initial: string | undefined;
+    const startMarked = nodes.find(n => !!(n.data as any)?.isStart);
+    if (startMarked) {
+      initial = startMarked.id;
+    } else {
+      const firstInput = nodes.find(n => (n.data as any)?.type === 'input' || (n.data as any)?.nodeType === 'input');
+      if (firstInput) {
+        initial = firstInput.id;
+      }
     }
+    if (!initial) {
+      const nodesWithNoIncoming = nodes.filter(n => !edges.some(e => e.target === n.id));
+      if (nodesWithNoIncoming.length > 0) {
+        initial = nodesWithNoIncoming[0].id;
+      }
+    }
+    if (!initial) {
+      const startNode = nodes.find(n =>
+        n.data.name?.toLowerCase() === 'start' ||
+        n.data.name?.toLowerCase() === 'initial' ||
+        n.id === 'start' ||
+        n.id === 'initial'
+      );
+      if (startNode) initial = startNode.id;
+    }
+    if (!initial) initial = nodes[0]?.id || 'start';
 
     return { name: `User Planned Workflow`, initial_state: initial, states, edges: edgesJson };
   }, [nodes, edges]);
@@ -2452,10 +2510,18 @@ const FlowSwarmInterface: React.FC = () => {
           nodeType: blockConfig.subType as any,
           icon: blockConfig.icon,
           color: blockConfig.color,
-          category: blockConfig.category
+          category: blockConfig.category,
+          // If user adds a Start block, mark it as the start
+          isStart: blockConfig.name?.toLowerCase() === 'start'
         }
       };
-      setNodes((nds) => [...nds, newNode]);
+      setNodes((nds) => {
+        if ((newNode.data as any).isStart) {
+          // Ensure uniqueness: clear isStart on others
+          return nds.map(n => ({ ...n, data: { ...n.data, isStart: false } })).concat(newNode);
+        }
+        return [...nds, newNode];
+      });
     }
   }, [nodes.length, setNodes, isDarkMode, addToolBlock]);
 
@@ -4377,6 +4443,49 @@ const FlowSwarmInterface: React.FC = () => {
           </div>
         </div>
       )}
+      {inputPrompt && (
+        <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+          <div style={{ background: '#0f172a', color: '#e2e8f0', padding: 20, borderRadius: 8, width: 520 }}>
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Provide Input</h3>
+            <div style={{ fontWeight: 600 }}>{inputPrompt.name}</div>
+            {inputPrompt.description && (
+              <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 6 }}>{inputPrompt.description}</div>
+            )}
+            <div style={{ marginTop: 12 }}>
+              <textarea
+                className="task-input"
+                style={{ width: '100%', height: 120 }}
+                value={inputValue}
+                onChange={(e)=>setInputValue(e.target.value)}
+                placeholder="Type your input here..."
+              />
+            </div>
+            <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(inputPrompt.allowed || ['submitted']).map(ev => (
+                  <button key={ev} className="panel-button" onClick={async () => {
+                    try {
+                      if (!executionId) return;
+                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/decision`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ state_id: inputPrompt.stateId, event: ev, data: inputValue })
+                      });
+                      setInputPrompt(null);
+                      setInputValue('');
+                    } catch (e) {
+                      console.error('Failed to submit input', e);
+                    }
+                  }}>{ev}</button>
+                ))}
+              </div>
+              <div>
+                <button className="panel-button" onClick={()=>{ setInputPrompt(null); setInputValue(''); }}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header className="flow-header">
         <div className="header-brand">
@@ -5065,7 +5174,7 @@ const FlowSwarmInterface: React.FC = () => {
               </button>
 
                 {/* Collapse / Expand for selected parallel */}
-                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || (n.data as any)?.nodeType === 'parallel')) && (
+                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || ['parallel','parallel_load'].includes((n.data as any)?.nodeType))) && (
                   <button
                     className="panel-button"
                     onClick={() => {
@@ -5085,12 +5194,12 @@ const FlowSwarmInterface: React.FC = () => {
                 )}
 
                 {/* Edit Children for selected parallel */}
-                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || (n.data as any)?.nodeType === 'parallel')) && (
+                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || ['parallel','parallel_load'].includes((n.data as any)?.nodeType))) && (
                   <button className="panel-button" onClick={() => setShowChildrenEditor(selectedAgent!)} title="Edit parallel children">Edit Children</button>
                 )}
 
                 {/* Show editor button if a parallel node is selected */}
-                {selectedAgent && nodes.find(n => n.id === selectedAgent && (n.data as any)?.nodeType === 'parallel') && (
+                {selectedAgent && nodes.find(n => n.id === selectedAgent && ['parallel','parallel_load'].includes((n.data as any)?.nodeType)) && (
                   <button className="panel-button" onClick={() => setShowChildrenEditor(selectedAgent!)} title="Edit parallel children">Edit Children</button>
                 )}
               </div>
@@ -5683,13 +5792,24 @@ const FlowSwarmInterface: React.FC = () => {
           isDarkMode={isDarkMode}
           onClose={() => setSelectedNodeForSettings(null)}
           onUpdate={(nodeId: string, data: any) => {
-            setNodes((nds) =>
-              nds.map((n) =>
+            setNodes((nds) => {
+              // If node is marked as start, ensure uniqueness by clearing others
+              if (data && data.isStart) {
+                return nds.map(n => ({
+                  ...n,
+                  data: {
+                    ...n.data,
+                    ...(n.id === nodeId ? data : {}),
+                    isStart: n.id === nodeId
+                  }
+                }));
+              }
+              return nds.map((n) =>
                 n.id === nodeId
                   ? { ...n, data: { ...n.data, ...data } }
                   : n
-              )
-            );
+              );
+            });
             // Update the selectedNodeForSettings to reflect the changes
             setSelectedNodeForSettings(prev =>
               prev && prev.id === nodeId

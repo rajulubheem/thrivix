@@ -93,16 +93,25 @@ class AIStateMachineCoordinator:
         return f"{exec_id}:{state_id}"
 
     
-    def submit_decision(self, exec_id: str, state_id: str, event: str) -> bool:
+    def submit_decision(self, exec_id: str, state_id: str, event: str, data: Optional[Any] = None) -> bool:
+        """Submit a human decision or input. If data is provided, it is attached.
+        The waiter receives a dict: {"event": str, "data": Any} for richer inputs.
+        """
         key = self._decision_key(exec_id, state_id)
         fut = self._decision_waiters.get(key)
         if fut and not fut.done():
-            fut.set_result(event)
+            try:
+                fut.set_result({"event": event, "data": data})
+            except Exception:
+                # Fallback to event-only
+                fut.set_result(event)
             return True
         return False
 
-    async def _await_human_decision(self, exec_id: str, state: Dict[str, Any], allowed: list[str], timeout: float = 300.0) -> Optional[str]:
-        """Publish a decision request and wait for user input via API."""
+    async def _await_human_decision(self, exec_id: str, state: Dict[str, Any], allowed: list[str], timeout: float = 300.0) -> Optional[Union[str, Dict[str, Any]]]:
+        """Publish a decision request and wait for user input via API.
+        Returns either an event string or a dict with {"event", "data"} for input states.
+        """
         # Notify UI
         await self.hub.publish_control(ControlFrame(
             exec_id=exec_id,
@@ -1222,6 +1231,8 @@ Output only the JSON object. No commentary.
         pri = [
             (['approve', 'approved'], 'approve'),
             (['reject', 'rejected'], 'reject'),
+            (['true', 'yes'], 'success'),
+            (['false', 'no'], 'failure'),
             (['validated', 'ok', 'ready', 'all_ready', 'proceed', 'success', 'pass'], 'validated'),
             (['invalid', 'fail', 'failure', 'error', 'unresolved', 'timeout'], 'failure'),
             (['needs_review', 'review', 'revise', 'partial', 'partial_success'], 'needs_review'),
@@ -1381,16 +1392,20 @@ No extra commentary after that line.""",
                 # Stream execution
                 output = ""
 
-                # Include tool parameters if available
+                # Include tool parameters and recent aggregates if available
                 metadata = {
                     **(context.get('previous_results', {})),
                     'allowed_events': allowed_events,
                 }
+                agg = context.get('last_parallel_aggregate')
+                if agg and context.get('last_state') == agg.get('aggregator'):
+                    metadata['parallel_aggregate'] = agg
 
-                # Add tool parameters from state if present
-                if state.get('tool_parameters'):
-                    metadata['tool_parameters'] = state['tool_parameters']
-                    logger.info(f"Using tool parameters for state {state_id}: {state['tool_parameters']}")
+                # Add tool parameters from state if present (support both 'parameters' and 'tool_parameters')
+                params = state.get('parameters') or state.get('tool_parameters')
+                if params:
+                    metadata['tool_parameters'] = params
+                    logger.info(f"Using tool parameters for state {state_id}: {params}")
 
                 agent_context = AgentContext(
                     exec_id=context['exec_id'],
@@ -1421,7 +1436,7 @@ No extra commentary after that line.""",
                 if ne:
                     next_event = ne
 
-            elif state_type in ['analysis', 'decision']:
+            elif state_type in ['analysis', 'decision', 'loop']:
                 # Create analysis agent
                 # Build enhanced mission-aware context
                 enhanced_context_str = ""
@@ -1492,16 +1507,22 @@ No extra commentary after that line.""",
                 
                 # Stream execution
                 output = ""
+                # Include any recent parallel aggregation details for analysis/decision
+                agg2 = context.get('last_parallel_aggregate')
+                base_meta = {
+                    **(context.get('previous_results', {})),
+                    'allowed_events': allowed_events,
+                }
+                if agg2 and context.get('last_state') == agg2.get('aggregator'):
+                    base_meta['parallel_aggregate'] = agg2
+
                 agent_context = AgentContext(
                     exec_id=context['exec_id'],
                     agent_id=state_id,
                     task=state.get('description', state.get('task', 'Execute assigned task')),  # Use original task, context is in system prompt
                     config=agent_config.__dict__,
                     parent_result=context.get('previous_results', {}).get(context.get('last_state'), ""),
-                    metadata={
-                        **(context.get('previous_results', {})),
-                        'allowed_events': allowed_events,
-                    }
+                    metadata=base_meta
                 )
                 async for frame in agent_runtime.stream(agent_context):
                     # Publish based on frame type
@@ -1518,35 +1539,60 @@ No extra commentary after that line.""",
                             if result_text:
                                 output = result_text
                 
-                result = output if output else "Analysis completed"
+                result = output if output else ("Loop step completed" if state_type == 'loop' else "Analysis completed")
                 # Parse or infer next event from the model output
                 ne = self._parse_next_event(result, allowed_events)
-                if ne and state_type != 'decision':
-                    next_event = ne
-                else:
-                    # For decision states (or if we couldn't infer), ask human if possible
+                if state_type == 'decision':
+                    # Always involve human for explicit decision states
                     human_choice = await self._await_human_decision(context['exec_id'], state, allowed_events)
-                    if human_choice and human_choice in allowed_events:
+                    if isinstance(human_choice, dict):
+                        evt = human_choice.get('event')
+                        if evt and evt in allowed_events:
+                            next_event = evt
+                        else:
+                            next_event = ne or next_event
+                    elif isinstance(human_choice, str) and human_choice in allowed_events:
                         next_event = human_choice
                     elif ne:
                         next_event = ne
-                        
-            elif state_type == 'parallel':
+                else:
+                    # Non-decision states: prefer parser, else fall back to human if ambiguous
+                    if ne:
+                        next_event = ne
+                    else:
+                        human_choice = await self._await_human_decision(context['exec_id'], state, allowed_events)
+                        if isinstance(human_choice, dict):
+                            evt = human_choice.get('event')
+                            if evt and evt in allowed_events:
+                                next_event = evt
+                        elif isinstance(human_choice, str) and human_choice in allowed_events:
+                            next_event = human_choice
+
+            elif state_type in ('parallel', 'parallel_load'):
                 # Execute contributing branches whose transitions feed back into this parallel aggregator.
                 graph = context.get('graph') or {}
                 edges: List[Dict[str, Any]] = graph.get('edges', [])
                 states_map: Dict[str, Dict[str, Any]] = graph.get('states', {})
 
                 # Prefer explicit children if provided; else infer via heuristic (sources targeting this id)
-                # UI override children mapping can come from context
                 overrides = (context.get('ui_overrides') or {}).get('parallel_children', {})
                 explicit_children = state.get('children') or overrides.get(state_id) or []
+                contributor_ids: List[str] = []
                 if explicit_children:
                     contributor_ids = [cid for cid in explicit_children if cid in states_map]
                 else:
-                    contributor_ids = [e.get('source') for e in edges if e.get('target') == state_id]
+                    if state_type == 'parallel_load':
+                        # Fan-out model: children are nodes directly targeted by this node
+                        contributor_ids = list({e.get('target') for e in edges if e.get('source') == state_id})
+                    else:
+                        # Aggregator model: children are nodes that fed into this node
+                        contributor_ids = list({e.get('source') for e in edges if e.get('target') == state_id})
                 # Filter valid, non-final contributors
                 contributors = [states_map[cid] for cid in contributor_ids if cid in states_map and states_map[cid].get('type') != 'final']
+                # Fallback: if none detected, try union of incoming and outgoing just in case
+                if not contributors:
+                    all_ids = {e.get('source') for e in edges if e.get('target') == state_id} | {e.get('target') for e in edges if e.get('source') == state_id}
+                    contributors = [states_map[cid] for cid in all_ids if cid in states_map and states_map[cid].get('type') not in ('final', 'parallel', 'parallel_load', 'join') and cid != state_id]
 
                 # Avoid re-running the same child many times within this exec
                 executed_map: Dict[str, set] = context.setdefault('parallel_executed', {})
@@ -1567,30 +1613,69 @@ No extra commentary after that line.""",
                 if last_state and any(c.get('id') == last_state for c in contributors) and last_state not in already:
                     already.add(last_state)
                     branch_events.append(str(last_event))
-                for child in contributors:
-                    cid = child['id']
-                    if cid in already:
-                        continue
+
+                async def run_child(child_state: Dict[str, Any]):
+                    cid = child_state['id']
+                    # Use a shallow-copied context for child execution to minimize race conditions
+                    child_ctx = {
+                        **context,
+                        'results': dict(context.get('results', {})),
+                        'previous_results': dict(context.get('results', {})),
+                    }
                     try:
-                        ev, _ = await self.execute_state(child, context)
-                        branch_events.append(ev)
-                        already.add(cid)
-                        # Telemetry: child completed
+                        ev, _ = await self.execute_state(child_state, child_ctx)
+                        # Merge results back
+                        context['results'].update(child_ctx.get('results', {}))
                         await self.hub.publish_control(ControlFrame(
                             exec_id=context['exec_id'],
                             type="parallel_child_completed",
                             agent_id=state_id,
                             payload={"child": cid, "event": ev}
                         ))
+                        return ev
                     except Exception as ce:
                         logger.warning(f"Parallel child {cid} failed: {ce}")
-                        branch_events.append('failure')
                         await self.hub.publish_control(ControlFrame(
                             exec_id=context['exec_id'],
                             type="parallel_child_completed",
                             agent_id=state_id,
                             payload={"child": cid, "event": "failure", "error": str(ce)}
                         ))
+                        return 'failure'
+
+                # Launch remaining children concurrently
+                tasks: List[asyncio.Task] = []
+                for child in contributors:
+                    cid = child['id']
+                    if cid in already:
+                        continue
+                    tasks.append(asyncio.create_task(run_child(child)))
+
+                if tasks:
+                    done = await asyncio.gather(*tasks, return_exceptions=False)
+                    branch_events.extend([str(ev) for ev in done])
+
+                # Mark all contributors as executed for this aggregator
+                for c in contributors:
+                    already.add(c['id'])
+
+                # Build aggregate of child results for downstream consumers
+                results_map: Dict[str, Any] = {}
+                try:
+                    for c in contributors:
+                        cid = c['id']
+                        if cid in (context.get('results') or {}):
+                            results_map[cid] = context['results'][cid]
+                except Exception:
+                    results_map = {}
+
+                # Cache last aggregate in context so the very next node can use it
+                context['last_parallel_aggregate'] = {
+                    'aggregator': state_id,
+                    'children': [c['id'] for c in contributors],
+                    'events': list(branch_events),
+                    'results': results_map,
+                }
 
                 # Simple aggregation: success if no failures/timeouts, else failure
                 bad = any(ev in ('failure', 'timeout', 'reject') for ev in branch_events)
@@ -1612,13 +1697,111 @@ No extra commentary after that line.""",
                         next_event = next(iter(allowed)) if allowed else 'success'
                 result = f"Parallel executed {len(contributors)} branches: {', '.join(branch_events) or 'none'}"
 
+                # Determine a reasonable next state target to continue after aggregation.
+                # If this is a fan-out pattern (parallel -> children), try to find a common downstream target.
+                forced_next: Optional[str] = None
+                # Prefer precomputed join for parallel_load
+                if state_type == 'parallel_load':
+                    try:
+                        forced_next = (context.get('fanout_joins') or {}).get(state_id)
+                    except Exception:
+                        forced_next = None
+                try:
+                    child_set = {c['id'] for c in contributors}
+                    # Count outgoing targets from children that are not looping back to parallel or staying within children
+                    counts: Dict[str, int] = {}
+                    for e in edges:
+                        src = e.get('source'); tgt = e.get('target')
+                        if src in child_set and tgt and tgt != state_id and tgt not in child_set:
+                            counts[tgt] = counts.get(tgt, 0) + 1
+                    if counts:
+                        # Pick the most common target (simple join)
+                        forced_next = max(counts.items(), key=lambda kv: kv[1])[0]
+                except Exception:
+                    forced_next = None
+
+                if not forced_next:
+                    # Fallback: if the parallel node has an explicit transition for our next_event, use that
+                    tgt = (state.get('transitions') or {}).get(next_event)
+                    if tgt:
+                        forced_next = tgt
+
+                if forced_next:
+                    # Store in context to steer the main loop
+                    context['forced_next_state_id'] = forced_next
+
                 # Telemetry: aggregated
                 await self.hub.publish_control(ControlFrame(
                     exec_id=context['exec_id'],
                     type="parallel_aggregated",
                     agent_id=state_id,
-                    payload={"children": [c['id'] for c in contributors], "events": branch_events, "next_event": next_event}
+                    payload={"children": [c['id'] for c in contributors], "events": branch_events, "next_event": next_event, "next_state_id": forced_next}
                 ))
+
+            elif state_type == 'join':
+                # Join node: collect results from all incoming sources and pass them forward as a single aggregate
+                graph = context.get('graph') or {}
+                edges: List[Dict[str, Any]] = graph.get('edges', [])
+                incoming = [e.get('source') for e in edges if e.get('target') == state_id]
+                agg_map: Dict[str, Any] = {}
+                for src in incoming:
+                    if not src:
+                        continue
+                    if src in (context.get('results') or {}):
+                        agg_map[src] = context['results'][src]
+                # Save aggregation and set as this state's result
+                context['last_parallel_aggregate'] = {
+                    'aggregator': state_id,
+                    'children': list(agg_map.keys()),
+                    'events': [],
+                    'results': agg_map,
+                }
+                result = agg_map
+                # Choose next event (prefer success)
+                allowed = list((state.get('transitions') or {}).keys())
+                if 'success' in allowed:
+                    next_event = 'success'
+                elif allowed:
+                    next_event = allowed[0]
+
+            elif state_type == 'input':
+                # Request human input explicitly
+                allowed = list(state.get('transitions', {}).keys()) or ['submitted', 'cancel']
+                # Notify UI with explicit input request
+                await self.hub.publish_control(ControlFrame(
+                    exec_id=context['exec_id'],
+                    type="human_input_required",
+                    agent_id=state_id,
+                    payload={
+                        "state": {
+                            "id": state.get('id'),
+                            "name": state.get('name'),
+                            "type": state.get('type'),
+                            "description": state.get('description'),
+                            "agent_role": state.get('agent_role'),
+                        },
+                        "allowed_events": allowed,
+                        "input_schema": state.get('input_schema') or state.get('parameters') or {}
+                    }
+                ))
+
+                selected = await self._await_human_decision(context['exec_id'], state, allowed)
+                # Default to submitted if not provided
+                picked_event: Optional[str] = None
+                provided_data: Any = None
+                if isinstance(selected, dict):
+                    picked_event = selected.get('event')
+                    provided_data = selected.get('data')
+                elif isinstance(selected, str):
+                    picked_event = selected
+
+                if picked_event and picked_event in allowed:
+                    next_event = picked_event
+                else:
+                    next_event = allowed[0]
+
+                # Store provided input as the result for this state
+                result = provided_data if provided_data is not None else f"Input {next_event}"
 
         except Exception as e:
             logger.error(f"State execution error: {e}")
@@ -1790,6 +1973,31 @@ No extra commentary after that line.""",
                 'states': states,
                 'edges': state_machine.get('edges', [])
             }
+            # Precompute fan-out mapping for 'parallel_load' nodes and likely joins
+            try:
+                edges_list: List[Dict[str, Any]] = context['graph']['edges'] or []
+                fanout_children: Dict[str, List[str]] = {}
+                fanout_joins: Dict[str, Optional[str]] = {}
+                by_source: Dict[str, List[Dict[str, Any]]] = {}
+                for e in edges_list:
+                    by_source.setdefault(e.get('source'), []).append(e)
+                for sid, st in states.items():
+                    if st.get('type') == 'parallel_load':
+                        child_ids = list({e.get('target') for e in by_source.get(sid, []) if e.get('target')})
+                        child_ids = [cid for cid in child_ids if cid in states and states[cid].get('type') not in ('final', 'parallel', 'parallel_load', 'join')]
+                        fanout_children[sid] = child_ids
+                        counts: Dict[str, int] = {}
+                        cset = set(child_ids)
+                        for e in edges_list:
+                            src = e.get('source'); tgt = e.get('target')
+                            if src in cset and tgt and tgt not in cset and tgt != sid:
+                                counts[tgt] = counts.get(tgt, 0) + 1
+                        fanout_joins[sid] = max(counts, key=counts.get) if counts else None
+                context['fanout_children'] = fanout_children
+                context['fanout_joins'] = fanout_joins
+            except Exception:
+                context['fanout_children'] = {}
+                context['fanout_joins'] = {}
             # Save live context reference for reruns
             self.context_by_exec[exec_id] = context
             current_state_id = state_machine['initial_state']
@@ -1825,9 +2033,10 @@ No extra commentary after that line.""",
                 if current_state['type'] == 'final':
                     break
                 
-                # Find next state based on transition
+                # Find next state based on transition (allow parallel to override)
+                forced = context.pop('forced_next_state_id', None)
                 transitions = current_state.get('transitions', {})
-                next_state_id = transitions.get(event)
+                next_state_id = forced or transitions.get(event)
                 if not next_state_id:
                     # Fallback: if exactly one transition exists, use it
                     if len(transitions) == 1:
@@ -2091,8 +2300,9 @@ No extra commentary after that line.""",
             if state.get('type') == 'final':
                 break
 
+            forced = ctx.pop('forced_next_state_id', None)
             transitions = state.get('transitions', {})
-            next_state_id = transitions.get(event)
+            next_state_id = forced or transitions.get(event)
             if not next_state_id:
                 if len(transitions) == 1:
                     next_state_id = list(transitions.values())[0]

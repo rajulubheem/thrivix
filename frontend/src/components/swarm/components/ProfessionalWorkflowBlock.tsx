@@ -100,9 +100,11 @@ const BLOCK_CONFIG = {
   validation: { color: '#8B5CF6', icon: Check, label: 'Validation', bgColor: 'rgba(139, 92, 246, 0.1)' },
   transformation: { color: '#EC4899', icon: RefreshCw, label: 'Transform', bgColor: 'rgba(236, 72, 153, 0.1)' },
   parallel: { color: '#84CC16', icon: Zap, label: 'Parallel', bgColor: 'rgba(132, 204, 22, 0.1)' },
+  parallel_load: { color: '#22C55E', icon: Zap, label: 'Parallel Load', bgColor: 'rgba(34, 197, 94, 0.1)' },
   loop: { color: '#F97316', icon: RefreshCw, label: 'Loop', bgColor: 'rgba(249, 115, 22, 0.1)' },
   human: { color: '#6366F1', icon: Users, label: 'Human', bgColor: 'rgba(99, 102, 241, 0.1)' },
-  final: { color: '#EF4444', icon: AlertCircle, label: 'Final', bgColor: 'rgba(239, 68, 68, 0.1)' }
+  final: { color: '#EF4444', icon: AlertCircle, label: 'Final', bgColor: 'rgba(239, 68, 68, 0.1)' },
+  join: { color: '#0EA5E9', icon: GitBranch, label: 'Join', bgColor: 'rgba(14, 165, 233, 0.1)' }
 };
 
 export const ProfessionalWorkflowBlock = memo<NodeProps<WorkflowBlockData>>(({
