@@ -870,6 +870,7 @@ export const ImprovedEnhancedToolBlock = memo<NodeProps<ImprovedEnhancedToolBloc
       <Handle
         type="target"
         position={Position.Top}
+        id="target"
         className="!w-3 !h-3 !bg-gray-400 !border-2 !border-white !-top-1.5"
       />
       <Handle

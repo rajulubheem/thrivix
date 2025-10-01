@@ -23,6 +23,7 @@ import ReactFlow, {
   BaseEdge,
   getBezierPath,
   EdgeProps,
+  useUpdateNodeInternals,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './FlowSwarmInterface.css';
@@ -366,6 +367,7 @@ type Frame = TokenFrame | ControlFrame;
 const FlowSwarmInterface: React.FC = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { fitView, setCenter, getViewport, project, zoomIn, zoomOut } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   
   // State
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -3726,6 +3728,8 @@ const FlowSwarmInterface: React.FC = () => {
         id: edge.id,
         source: edge.source,
         target: edge.target,
+        sourceHandle: edge.sourceHandle,  // Preserve source handle ID
+        targetHandle: edge.targetHandle,  // Preserve target handle ID
         type: edge.type,
         label: edge.label,
         data: edge.data,
@@ -3744,7 +3748,7 @@ const FlowSwarmInterface: React.FC = () => {
       difficulty: 'medium',
       tools: Array.from(selectedTools),
       created: new Date().toISOString(),
-      version: '2.0.0' // Updated version for new format
+      version: '2.1.0' // Updated version with handle preservation
     };
 
     // Convert to JSON and trigger download
@@ -3787,11 +3791,11 @@ const FlowSwarmInterface: React.FC = () => {
 
           // Check if this is a new format template with fullWorkflow
           if (template.fullWorkflow) {
-            // Clear existing workflow
+            // Clear existing workflow first
             setNodes([]);
             setEdges([]);
 
-            // Restore complete workflow with all visual properties
+            // Small timeout to ensure React Flow is ready
             setTimeout(() => {
               // Restore nodes with all their properties and professional block features
               const restoredNodes = template.fullWorkflow.nodes.map((node: any) => {
@@ -3859,31 +3863,100 @@ const FlowSwarmInterface: React.FC = () => {
                 return restoredNode;
               });
 
+              // Restore edges with their visual properties
+              const restoredEdges = template.fullWorkflow.edges.map((edge: any) => {
+                // For v2.1.0+ files, handles should already be present
+                let sourceHandle = edge.sourceHandle;
+                let targetHandle = edge.targetHandle;
+
+                // Backward compatibility: only infer if truly missing (v2.0.0 or older)
+                if (!sourceHandle || !targetHandle) {
+                  // Infer source handle based on edge label/event
+                  const edgeLabel = edge.label || edge.data?.label || edge.data?.event || 'success';
+
+                  // Only set if not already present
+                  if (!sourceHandle) {
+                    if (edgeLabel === 'success' || edgeLabel === '') {
+                      sourceHandle = 'source';
+                    } else if (edgeLabel === 'failure' || edgeLabel === 'error') {
+                      sourceHandle = 'failure';
+                    } else if (edgeLabel === 'retry') {
+                      sourceHandle = 'retry';
+                    } else if (edgeLabel === 'timeout') {
+                      sourceHandle = 'timeout';
+                    } else {
+                      sourceHandle = 'source';
+                    }
+                  }
+
+                  // Only set target if not already present
+                  if (!targetHandle) {
+                    targetHandle = 'target';
+                  }
+
+                  // Special handling for parallel_load and join nodes
+                  const sourceNode = restoredNodes.find((n: any) => n.id === edge.source);
+                  const targetNode = restoredNodes.find((n: any) => n.id === edge.target);
+
+                  if (!sourceHandle && (sourceNode?.data?.type === 'parallel_load' || sourceNode?.data?.nodeType === 'parallel_load')) {
+                    sourceHandle = 'source';
+                  }
+
+                  if (!targetHandle && (targetNode?.data?.type === 'join' || targetNode?.data?.nodeType === 'join')) {
+                    targetHandle = 'target';
+                  }
+                }
+
+                // Map edge types - convert 'bezier' to 'default'
+                let edgeType = edge.type;
+                if (edgeType === 'bezier') {
+                  edgeType = 'default';
+                } else if (!edgeType || edgeType === '') {
+                  edgeType = 'editable';
+                }
+
+                return {
+                  ...edge,
+                  id: edge.id || `${edge.source}-${edge.target}-${sourceHandle}`,  // Ensure unique ID
+                  sourceHandle,
+                  targetHandle,
+                  type: edgeType,
+                  style: {
+                    ...edge.style,
+                    stroke: edge.style?.stroke || (isDarkMode ? '#475569' : '#cbd5e1'),
+                    strokeWidth: edge.style?.strokeWidth || 2
+                  },
+                  markerEnd: edge.markerEnd || {
+                    type: MarkerType.ArrowClosed,
+                    width: 20,
+                    height: 20,
+                    color: isDarkMode ? '#475569' : '#cbd5e1',
+                    orient: 'auto'
+                  }
+                };
+              });
+
+              // Apply nodes and edges
               setNodes(restoredNodes);
 
-              // Restore edges with their visual properties
-              const restoredEdges = template.fullWorkflow.edges.map((edge: any) => ({
-                ...edge,
-                type: edge.type || 'interactive',
-                style: {
-                  ...edge.style,
-                  stroke: edge.style?.stroke || (isDarkMode ? '#475569' : '#cbd5e1'),
-                  strokeWidth: edge.style?.strokeWidth || 2
-                },
-                markerEnd: edge.markerEnd || {
-                  type: MarkerType.ArrowClosed,
-                  width: 20,
-                  height: 20,
-                  color: isDarkMode ? '#475569' : '#cbd5e1',
-                  orient: 'auto'
-                }
-              }));
+              // Short delay to let nodes render, then update internals and add edges
+              setTimeout(() => {
+                // Update node internals to register handles
+                restoredNodes.forEach((node: any) => {
+                  if (node.id) {
+                    updateNodeInternals(node.id);
+                  }
+                });
 
-              setEdges(restoredEdges);
+                // Set edges immediately after updating internals
+                setEdges(restoredEdges);
 
-              // Fit view after loading
-              setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 100);
-            }, 100);
+                // Fit view after everything is loaded
+                setTimeout(() => {
+                  fitView({ padding: 0.2, duration: 400 });
+                }, 50);
+              }, 50);
+            }, 10);
           } else if (template.machine) {
             // Fallback for old format templates
             importStateMachine(template.machine, true);
