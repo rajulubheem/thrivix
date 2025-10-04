@@ -52,6 +52,9 @@ import { toolSchemaService, ToolSchema } from '../../services/toolSchemaService'
 import { unifiedToolService } from '../../services/unifiedToolService';
 import { stateMachineAdapter } from '../../services/stateMachineAdapter';
 import { resolveUserInputsInParams } from '../../utils/parameterResolver';
+import { useWebSocketManager } from './websocket/useWebSocketManager';
+import { FrameHandlers, FrameHandlerContext } from './websocket/frameHandlers';
+import { ConnectionStatus } from './websocket/WebSocketManager';
 
 // Clean Professional Node Component (v3)
 const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
@@ -340,26 +343,7 @@ interface Agent {
   depth?: number;
 }
 
-interface TokenFrame {
-  exec_id: string;
-  agent_id: string;
-  seq: number;
-  text: string;
-  ts: number;
-  final: boolean;
-  frame_type: 'token';
-}
-
-interface ControlFrame {
-  exec_id: string;
-  type: string;
-  agent_id?: string;
-  payload?: any;
-  ts: number;
-  frame_type: 'control';
-}
-
-type Frame = TokenFrame | ControlFrame;
+// Frame types moved to websocket/WebSocketManager.ts
 
 // Layout function has been moved to utils/layoutUtils.ts
 
@@ -392,7 +376,7 @@ const FlowSwarmInterface: React.FC = () => {
   const [task, setTask] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic' | 'neural'>('dynamic');
   const [outputPanelWidth, setOutputPanelWidth] = useState(() => {
     // Load saved width from localStorage or use default
@@ -472,10 +456,7 @@ const FlowSwarmInterface: React.FC = () => {
   const [showUnifiedManager, setShowUnifiedManager] = useState<boolean>(false);
   const [selectedNodeForSettings, setSelectedNodeForSettings] = useState<Node | null>(null);
 
-  // WebSocket
-  const wsRef = useRef<WebSocket | null>(null);
-  const agentSequences = useRef<Map<string, number>>(new Map());
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // WebSocket state is already declared above
   // Camera follow helpers
   const pendingFocusIdRef = useRef<string | null>(null);
   const focusAttemptsRef = useRef<number>(0);
@@ -965,1099 +946,102 @@ const FlowSwarmInterface: React.FC = () => {
     try { localStorage.setItem('flowswarm_parallel_children', JSON.stringify(childrenOverrides)); } catch {}
   }, [childrenOverrides]);
 
+  const softReset = () => {
+    // Reset agents and execution state but preserve visualization structure
+    setAgents(new Map());
+    setSelectedAgent(null);
+    setActivelyStreamingAgents(new Set());
+    // Reset node statuses but keep the structure
+    setNodes(nodes =>
+      nodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          status: 'pending',
+          toolsUsed: []
+        }
+      }))
+    );
+    // Reset edge animations
+    setEdges(edges =>
+      edges.map(edge => ({
+        ...edge,
+        animated: false,
+        style: {
+          ...edge.style,
+          stroke: '#52525b'
+        }
+      }))
+    );
+  };
+
+  // Create frame handler context
+  const frameHandlerContext: FrameHandlerContext = {
+    setNodes,
+    setEdges,
+    setAgents,
+    setActivelyStreamingAgents,
+    setIsRunning,
+    setHasStateMachineStructure,
+    setExecutionTrace,
+    setStateExecutionData,
+    setExecutionHistory,
+    setCurrentExecutingNode,
+    setIsExecuting,
+    setExecutionOrderCounter,
+    setNextExecutingNode,
+    setDecisionPrompt,
+    setInputPrompt,
+    setInputValue,
+    setToolPrefs,
+    setPlanned,
+    setSelectedAgent,
+    setCenter,
+    fitView,
+    layoutDirection,
+    isDarkMode,
+    nodes,
+    executionHistory,
+    executionOrderCounter,
+    pendingFocusIdRef,
+    focusAttemptsRef,
+    followActiveRef,
+    layoutCache,
+    lastLayoutedAgentIds,
+    softReset,
+    getLayoutedElements,
+  };
+
+  const frameHandlersRef = useRef<FrameHandlers>(new FrameHandlers(frameHandlerContext));
+
+  // Update frame handlers when context changes
+  useEffect(() => {
+    frameHandlersRef.current = new FrameHandlers(frameHandlerContext);
+  }, [nodes, executionHistory, executionOrderCounter, layoutDirection, isDarkMode]);
+
   // WebSocket handlers
-  const connectWebSocket = useCallback((execId: string, isReconnect: boolean = false) => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    
-    setConnectionStatus('connecting');
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const startFrom = isReconnect ? '$' : '0';
-    const port = window.location.hostname === 'localhost' ? '8000' : window.location.port || (protocol === 'wss:' ? '443' : '8000');
-    const wsUrl = `${protocol}//${window.location.hostname}:${port}/api/v1/ws/${execId}?start_from=${startFrom}`;
-    
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    
-    ws.onopen = () => {
-      setConnectionStatus('connected');
-      ws.send(JSON.stringify({ type: 'ping' }));
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const frame: Frame = JSON.parse(event.data);
-        handleFrame(frame);
-      } catch (error) {
-        console.error('Parse error:', error);
-      }
-    };
-    
-    ws.onerror = () => {
-      setConnectionStatus('error');
-    };
-    
-    ws.onclose = (event) => {
-      setConnectionStatus('disconnected');
-      wsRef.current = null;
-      
-      if (isRunning && !event.wasClean) {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket(execId, true);
-        }, 2000);
-      }
-    };
-  }, [isRunning]);
+  const { connectWebSocket, disconnectWebSocket, wsRef, agentSequences } = useWebSocketManager({
+    onTokenFrame: (frame) => frameHandlersRef.current.handleTokenFrame(frame),
+    onControlFrame: (frame) => frameHandlersRef.current.handleControlFrame(frame),
+    isRunning
+  });
 
-  const handleFrame = useCallback((frame: Frame) => {
-    if (frame.frame_type === 'token') {
-      handleTokenFrame(frame as TokenFrame);
-    } else if (frame.frame_type === 'control') {
-      handleControlFrame(frame as ControlFrame);
-    }
-  }, []);
-
-  const handleTokenFrame = useCallback((frame: TokenFrame) => {
-    const { agent_id, seq, text, final } = frame;
-    
-    const lastSeq = agentSequences.current.get(agent_id) || 0;
-    if (seq === lastSeq) return;
-    if (seq < lastSeq && !final) return;
-    
-    agentSequences.current.set(agent_id, seq);
-    
-    // Track streaming agents
-    if (!final) {
-      setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
-    }
-    
-    setAgents(prev => {
-      const updated = new Map(prev);
-      const agent = updated.get(agent_id);
-      
-      if (agent) {
-        const base = typeof agent.output === 'string' ? agent.output : '';
-        updated.set(agent_id, {
-          ...agent,
-          output: final ? base : base + text
-        });
-      }
-      
-      return updated;
-    });
-  }, []);
-
-  const handleControlFrame = useCallback((frame: ControlFrame) => {
-    const { type, agent_id, payload } = frame;
-    
-    switch (type) {
-      case 'graph_updated': {
-        // ⚠️  PRESERVE EXISTING BLOCKS: Update only data, don't replace entire graph
-        const machine: any = payload?.machine;
-        if (machine && Array.isArray(machine.states)) {
-          const states = machine.states as any[];
-          const edges = (machine.edges || []) as any[];
-
-          // Update existing nodes instead of replacing them
-          setNodes(currentNodes => {
-            const updatedNodes = currentNodes.map(existingNode => {
-              const machineState = states.find(s => s.id === existingNode.id);
-              if (machineState) {
-                // Update the data of existing node while preserving position and type
-                return {
-                  ...existingNode,
-                  data: {
-                    ...existingNode.data,
-                    // Update only essential data from machine state
-                    status: existingNode.data.status, // Keep current status
-                    tools: machineState.tools || existingNode.data.tools,
-                    toolsPlanned: Array.isArray(machineState.tools) ? machineState.tools : existingNode.data.toolsPlanned,
-                    description: machineState.description || existingNode.data.description,
-                    agentRole: machineState.agent_role || existingNode.data.agentRole,
-                  }
-                };
-              }
-              return existingNode; // Keep unchanged if not in machine
-            });
-
-            // Add only new nodes that don't exist yet
-            const existingIds = new Set(currentNodes.map(n => n.id));
-            const newNodes = states
-              .filter(state => !existingIds.has(state.id))
-              .map((state: any) => ({
-                id: state.id,
-                type: 'agent',
-                position: { x: Math.random() * 400, y: Math.random() * 400 },
-                data: {
-                  label: state.name,
-                  name: state.name,
-                  status: 'pending',
-                  nodeType: state.type,
-                  task: state.task,
-                  tools: state.tools,
-                  toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
-                  description: state.description,
-                  agentRole: state.agent_role,
-                  direction: layoutDirection,
-                  isDarkMode,
-                },
-                targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-                sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-              }));
-
-            return [...updatedNodes, ...newNodes];
-          });
-
-          // Update edges similarly - preserve existing, add new ones
-          setEdges(currentEdges => {
-            const machineEdgeIds = new Set(edges.map((e: any) => `${e.source}-${e.target}-${e.event}`));
-            const existingEdgeIds = new Set(currentEdges.map(e => e.id));
-
-            // Keep existing edges that are still in the machine
-            const preservedEdges = currentEdges.filter(edge => machineEdgeIds.has(edge.id));
-
-            // Add new edges
-            const newEdges = edges
-              .filter((edge: any) => !existingEdgeIds.has(`${edge.source}-${edge.target}-${edge.event}`))
-              .map((edge: any) => ({
-                id: `${edge.source}-${edge.target}-${edge.event}`,
-                source: edge.source,
-                target: edge.target,
-                type: 'editable',
-                animated: false,
-                label: edge.event !== 'success' ? edge.event : '',
-                labelStyle: { fill: '#94a3b8', fontSize: 11 },
-                labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
-                style: { stroke: '#52525b', strokeWidth: 1.5 },
-                markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: '#52525b' },
-              }));
-
-            return [...preservedEdges, ...newEdges];
-          });
-
-          setHasStateMachineStructure(true);
-          console.log('📊 Graph updated preserving existing blocks');
-        }
-        break;
-      }
-      case 'rerun_started': {
-        setIsRunning(true);
-        // soft reset visuals to show fresh run but preserve layout
-        softReset();
-        const id = payload?.start_state || agent_id;
-        if (id) {
-          pendingFocusIdRef.current = id;
-          focusAttemptsRef.current = 0;
-        }
-        break;
-      }
-      case 'rerun_completed': {
-        setIsRunning(false);
-        break;
-      }
-      case 'state_machine_created': {
-        // ⚠️ PRESERVE EXISTING BLOCKS: Don't replace user's blocks during execution
-        const machine: any = payload?.machine;
-        if (machine && Array.isArray(machine.states)) {
-          const states = machine.states as any[];
-          const edges = (machine.edges || []) as any[];
-
-          // Update existing nodes, don't replace them
-          setNodes(currentNodes => {
-            // If we already have nodes (user created them), just update their data
-            if (currentNodes.length > 0) {
-              return currentNodes.map(existingNode => {
-                const machineState = states.find(s => s.id === existingNode.id);
-                if (machineState) {
-                  return {
-                    ...existingNode,
-                    // Keep the existing node structure and position
-                    data: {
-                      ...existingNode.data,
-                      // Only update execution-relevant data
-                      tools: machineState.tools || existingNode.data.tools,
-                      toolsPlanned: Array.isArray(machineState.tools) ? machineState.tools : existingNode.data.toolsPlanned,
-                    }
-                  };
-                }
-                return existingNode;
-              });
-            } else {
-              // Only create new nodes if canvas is empty
-              const newNodes: Node[] = states.map((state: any) => ({
-                id: state.id,
-                type: 'agent',
-                position: { x: Math.random() * 400, y: Math.random() * 400 },
-                data: {
-                  label: state.name,
-                  name: state.name,
-                  status: 'pending',
-                  nodeType: state.type,
-                  task: state.task,
-                  tools: state.tools,
-                  toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
-                  description: state.description,
-                  agentRole: state.agent_role,
-                  direction: layoutDirection,
-                  isDarkMode,
-                },
-                targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-                sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-              }));
-              const layouted = getLayoutedElements(newNodes, [], layoutDirection);
-              return layouted.nodes;
-            }
-          });
-
-          // Similarly for edges - preserve existing ones
-          setEdges(currentEdges => {
-            if (currentEdges.length > 0) {
-              // Keep existing edges, just update if needed
-              return currentEdges;
-            } else {
-              // Only create new edges if none exist
-              const mappedEdges: Edge[] = edges.map((edge: any) => ({
-                id: `${edge.source}-${edge.target}-${edge.event}`,
-                source: edge.source,
-                target: edge.target,
-                type: 'editable',
-                animated: false,
-                label: edge.event !== 'success' ? edge.event : '',
-                labelStyle: { fill: '#94a3b8', fontSize: 11 },
-                labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
-                style: { stroke: '#52525b', strokeWidth: 1.5 },
-                markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: '#52525b' },
-              }));
-              return mappedEdges;
-            }
-          });
-
-          setHasStateMachineStructure(true);
-          setPlanned(true);
-          console.log('📊 State machine created - preserving existing blocks');
-        }
-        break;
-      }
-      case 'parallel_start': {
-        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
-          ...n,
-          data: {
-            ...n.data,
-            parallelRunning: true,
-            parallelChildren: payload?.children || [],
-            parallelCompleted: 0,
-            parallelStartTs: Date.now(),
-            parallelChildEvents: {}
-          }
-        } : n));
-        break;
-      }
-      case 'parallel_child_completed': {
-        const childId = payload?.child;
-        const ev = payload?.event;
-        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
-          ...n,
-          data: {
-            ...n.data,
-            parallelCompleted: (n.data?.parallelCompleted || 0) + 1,
-            parallelChildEvents: {
-              ...(n.data as any)?.parallelChildEvents,
-              [childId]: {
-                event: ev,
-                durationMs: Math.max(0, Date.now() - ((n.data as any)?.parallelStartTs || Date.now()))
-              }
-            }
-          }
-        } : n));
-        break;
-      }
-      case 'parallel_aggregated': {
-        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
-          ...n,
-          data: { ...n.data, parallelRunning: false, parallelSummary: payload?.next_event }
-        } : n));
-        break;
-      }
-      case 'parallel_start': {
-        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
-          ...n,
-          data: { ...n.data, parallelRunning: true, parallelChildren: payload?.children || [] }
-        } : n));
-        if (payload?.children) {
-          const childSet = new Set<string>(payload.children);
-          setEdges(edges => edges.map(e => childSet.has(e.source) && e.target === agent_id ? {
-            ...e,
-            style: { ...e.style, stroke: '#fde047', strokeWidth: 3 },
-          } : e));
-          setTimeout(() => {
-            setEdges(edges => edges.map(e => childSet.has(e.source) && e.target === agent_id ? {
-              ...e,
-              style: { ...e.style, stroke: '#94a3b8', strokeWidth: 2 },
-            } : e));
-          }, 800);
-        }
-        break;
-      }
-      case 'parallel_child_completed': {
-        const childId = payload?.child;
-        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
-          ...n,
-          data: { ...n.data, parallelCompleted: (n.data?.parallelCompleted || 0) + 1 }
-        } : n));
-        if (childId) {
-          setEdges(edges => edges.map(e => e.source === childId && e.target === agent_id ? {
-            ...e,
-            style: { ...e.style, stroke: payload?.event === 'failure' ? '#ef4444' : '#22c55e', strokeWidth: 3 },
-          } : e));
-          setTimeout(() => {
-            setEdges(edges => edges.map(e => e.source === childId && e.target === agent_id ? {
-              ...e,
-              style: { ...e.style, stroke: '#94a3b8', strokeWidth: 2 },
-            } : e));
-          }, 900);
-        }
-        break;
-      }
-      case 'parallel_aggregated': {
-        const nextEvent = payload?.next_event;
-        setNodes(nodes => nodes.map(n => n.id === agent_id ? {
-          ...n,
-          data: { ...n.data, parallelRunning: false, parallelSummary: nextEvent, parallelCompleted: 0 }
-        } : n));
-        break;
-      }
-      case 'tool_preferences': {
-        const unknown = Array.isArray(payload?.unknown) ? payload.unknown : [];
-        const effective = Array.isArray(payload?.effective) ? payload.effective : [];
-        setToolPrefs({ unknown, effective });
-        break;
-      }
-      case 'state_progress':
-        // Update node with progress
-        setNodes(nodes => nodes.map(node => 
-          node.id === agent_id 
-            ? { 
-                ...node, 
-                data: { 
-                  ...node.data, 
-                  progress: payload.progress,
-                  tokens: payload.tokens,
-                  toolCalls: payload.tool_calls 
-                } as NodeData
-              }
-            : node
-        ));
-        break;
-
-      case 'edge_fired':
-        // Animate edge activation
-        const { source, target, event } = payload;
-        setEdges(edges => edges.map(edge => 
-          edge.source === source && edge.target === target
-            ? { ...edge, data: { ...edge.data, isActive: true, event } as EdgeData }
-            : edge
-        ));
-        // Clear after animation
-        setTimeout(() => {
-          setEdges(edges => edges.map(edge => 
-            edge.source === source && edge.target === target
-              ? { ...edge, data: { ...edge.data, isActive: false } as EdgeData }
-              : edge
-          ));
-        }, 1500);
-        break;
-
-      case 'dag_structure':
-        // Switch to DAG structure mode
-        setHasStateMachineStructure(false);
-        // Handle DAG structure from dynamic coordinator
-        if (payload?.nodes && payload?.edges) {
-          const { nodes: dagNodes, edges: dagEdges } = payload;
-          
-          // Convert DAG nodes to React Flow nodes with proper layout
-          const newNodes: Node<NodeData>[] = dagNodes.map((node: any, index: number) => ({
-            id: node.id,
-            type: 'agent',
-            position: { x: 0, y: 0 }, // Will be set by layout
-            data: {
-              label: node.name,
-              name: node.name,
-              agentRole: node.role,
-              task: node.task,
-              status: 'pending',
-              nodeType: node.type,
-              group: node.group,
-              round: node.round || node.depth || 0,
-              direction: layoutDirection,
-            } as NodeData,
-            targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-            sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-          }));
-          
-          // Convert DAG edges to React Flow edges
-          const newEdges: Edge<EdgeData>[] = dagEdges.map((edge: any) => ({
-            id: `${edge.source}-${edge.target}`,
-            source: edge.source,
-            target: edge.target,
-            type: 'editable',
-            animated: false,
-            data: {
-              label: edge.type === 'dependency' ? '' : edge.type,
-            } as EdgeData,
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-              width: 20,
-              height: 20,
-              color: '#94a3b8',
-            },
-            style: {
-              strokeWidth: 2,
-              stroke: '#94a3b8',
-            },
-          }));
-          
-          // Apply layout for proper grid positioning
-          
-          const layouted = getLayoutedElements(newNodes, newEdges, layoutDirection);
-          setNodes(prevNodes => {
-            // Merge with existing nodes if any
-            const existingNodeIds = new Set(prevNodes.map(n => n.id));
-            const nodesToAdd = layouted.nodes.filter(n => !existingNodeIds.has(n.id));
-            return [...prevNodes, ...nodesToAdd];
-          });
-          setEdges(prevEdges => {
-            // Merge with existing edges if any
-            const existingEdgeIds = new Set(prevEdges.map(e => e.id));
-            const edgesToAdd = layouted.edges.filter(e => !existingEdgeIds.has(e.id));
-            return [...prevEdges, ...edgesToAdd];
-          });
-
-          // Fit view to show the complete DAG
-          setTimeout(() => {
-            try {
-              fitView({ padding: 0.2, duration: 400, maxZoom: 1 });
-            } catch (e) {
-              // Ignore fit view errors
-            }
-          }, 100);
-        }
-        break;
-        
-      case 'state_machine_created':
-        // AI has created a state machine - visualize it
-        if (payload?.machine) {
-          const { states, edges } = payload.machine;
-          
-          // Convert to React Flow nodes
-          const newNodes: Node[] = states.map((state: any) => ({
-            id: state.id,
-            type: 'agent',
-            position: { x: 0, y: 0 },
-            data: {
-              label: state.name,
-              name: state.name,
-              status: 'pending',
-              nodeType: state.type,
-              task: state.task,
-              tools: state.tools,
-              toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
-              description: state.description,
-              agentRole: state.agent_role,
-              direction: layoutDirection,
-              isDarkMode,
-            },
-            targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-            sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-          }));
-          
-          // Convert to React Flow edges
-          const mappedEdges: Edge[] = edges.map((edge: any) => ({
-            id: `${edge.source}-${edge.target}-${edge.event}`,
-            source: edge.source,
-            target: edge.target,
-            type: 'editable',
-            animated: false,
-            label: edge.event !== 'success' ? edge.event : '',
-            labelStyle: { fill: '#94a3b8', fontSize: 11 },
-            labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
-            style: {
-              stroke: '#52525b',
-              strokeWidth: 1.5,
-            },
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-              width: 20,
-              height: 20,
-              color: '#52525b',
-            },
-          }));
-          // Deduplicate edges by id to avoid React key collisions
-          const edgeMap = new Map<string, Edge>();
-          for (const e of mappedEdges) {
-            if (!edgeMap.has(e.id)) edgeMap.set(e.id, e);
-          }
-          const newEdges = Array.from(edgeMap.values());
-          
-          // Apply layout and set
-          
-          const layouted = getLayoutedElements(newNodes, newEdges, layoutDirection);
-          // Cache and mark structure as state-machine-driven so we don't overwrite it
-          layoutCache.current = layouted;
-          lastLayoutedAgentIds.current = new Set(states.map((s: any) => s.id));
-          setHasStateMachineStructure(true);
-          setNodes(layouted.nodes);
-          setEdges(layouted.edges);
-          
-          setTimeout(() => fitView({ padding: 0.2, duration: 400, maxZoom: 1 }), 100);
-        }
-        break;
-        
-      case 'next_state_preview':
-        // Preview the next state that will be executed
-        if (payload?.next_state_id) {
-          setNextExecutingNode(payload.next_state_id);
-
-          // Highlight the next node
-          setNodes(nodes => nodes.map(node => {
-            if (node.id === payload.next_state_id) {
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  isNextToExecute: true,
-                  nextStepPreview: payload.preview_text || 'Next step'
-                }
-              };
-            }
-            return node;
-          }));
-        }
-        break;
-
-      case 'human_decision_required':
-        if (payload?.state && payload?.allowed_events) {
-          const st = payload.state;
-          setDecisionPrompt({
-            stateId: st.id,
-            name: st.name,
-            description: st.description,
-            allowed: payload.allowed_events as string[],
-          });
-
-          // Focus on the node that requires decision
-          setTimeout(() => {
-            const nodeToFocus = nodes.find(n => n.id === st.id);
-            if (nodeToFocus) {
-              const x = nodeToFocus.position.x + 110; // Center of node (width/2)
-              const y = nodeToFocus.position.y + 50;  // Center of node (height/2)
-              setCenter(x, y, { zoom: 1.2, duration: 500 });
-              setSelectedAgent(st.id);
-
-              // Highlight the node
-              setNodes(prevNodes => prevNodes.map(n => ({
-                ...n,
-                selected: n.id === st.id,
-                data: {
-                  ...n.data,
-                  highlighted: n.id === st.id,
-                },
-              })));
-            }
-          }, 100);
-        }
-        break;
-      case 'human_input_required':
-        if (payload?.state && payload?.allowed_events) {
-          const st = payload.state;
-          setInputPrompt({
-            stateId: st.id,
-            name: st.name,
-            description: st.description,
-            allowed: payload.allowed_events as string[],
-            schema: payload.input_schema
-          });
-          setInputValue('');
-          setTimeout(() => {
-            const nodeToFocus = nodes.find(n => n.id === st.id);
-            if (nodeToFocus) {
-              const x = nodeToFocus.position.x + 110;
-              const y = nodeToFocus.position.y + 50;
-              setCenter(x, y, { zoom: 1.2, duration: 500 });
-              setSelectedAgent(st.id);
-            }
-          }, 100);
-        }
-        break;
-
-      case 'state_tools_resolved': {
-        const { state_id, tools } = payload || {};
-        if (!state_id) break;
-        setNodes(nodes => nodes.map(n => (
-          n.id === state_id ? { ...n, data: { ...n.data, toolsPlanned: Array.isArray(tools) ? tools : [] } } : n
-        )));
-        break;
-      }
-        
-      case 'state_entered':
-        // A state is being executed
-        if (agent_id) {
-          // Capture state execution data for raw viewer
-          setStateExecutionData(prev => {
-            const existingIndex = prev.findIndex(d => d.stateId === agent_id);
-            const newData = {
-              stateId: agent_id,
-              stateName: payload?.state?.name || agent_id,
-              timestamp: frame.ts || Date.now() / 1000,
-              input: payload,
-              output: null,
-              context: payload?.state || {},
-              transitions: payload?.state?.transitions || {},
-            };
-
-            if (existingIndex >= 0) {
-              const updated = [...prev];
-              updated[existingIndex] = { ...updated[existingIndex], ...newData };
-              return updated;
-            }
-            return [...prev, newData];
-          });
-
-          setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
-          setAgents(prev => {
-            const updated = new Map(prev);
-            updated.set(agent_id, {
-              id: agent_id,
-              name: payload?.state?.name || agent_id,
-              output: '',
-              status: 'running',
-              startTime: Date.now(),
-              parent: payload?.parent,
-              depth: payload?.depth || 0
-            });
-            return updated;
-          });
-          
-          // Update node visualization
-          setNodes(nodes => 
-            nodes.map(node => ({
-              ...node,
-              data: {
-                ...node.data,
-                status: node.id === agent_id ? 'running' : node.data.status,
-              },
-            }))
-          );
-          // Append to trace (de-dupe consecutive)
-          setExecutionTrace((prev: string[]) => (prev.length === 0 || prev[prev.length - 1] !== agent_id) ? [...prev, agent_id] : prev);
-          // Request focus on this node; loop will center when ready
-          if (followActiveRef.current) {
-            pendingFocusIdRef.current = agent_id;
-            focusAttemptsRef.current = 0;
-          }
-        }
-        break;
-        
-      case 'state_exited':
-        // State completed execution
-        if (agent_id) {
-          // Update state execution data with output
-          setStateExecutionData(prev => {
-            const existingIndex = prev.findIndex(d => d.stateId === agent_id);
-            if (existingIndex >= 0) {
-              const updated = [...prev];
-              const startTime = updated[existingIndex].timestamp;
-              updated[existingIndex] = {
-                ...updated[existingIndex],
-                output: payload?.result || payload,
-                nextEvent: payload?.next_event,
-                duration: ((frame.ts || Date.now() / 1000) - startTime) * 1000
-              };
-              return updated;
-            }
-            return prev;
-          });
-
-          setActivelyStreamingAgents(prev => {
-            const updated = new Set(prev);
-            updated.delete(agent_id);
-            return updated;
-          });
-
-          setAgents(prev => {
-            const updated = new Map(prev);
-            const agent = updated.get(agent_id);
-            if (agent) {
-              updated.set(agent_id, {
-                ...agent,
-                status: 'completed',
-                endTime: Date.now(),
-                output: payload?.result || agent.output,
-              });
-            }
-            return updated;
-          });
-          
-          // Update node visualization
-          setNodes(nodes => 
-            nodes.map(node => ({
-              ...node,
-              data: {
-                ...node.data,
-                status: node.id === agent_id ? 'completed' : node.data.status,
-              },
-            }))
-          );
-        }
-        break;
-
-      case 'tool_use': {
-        const toolName = payload?.tool || payload?.name;
-        if (!agent_id || !toolName) break;
-
-        // Update execution history with tool
-        setExecutionHistory(prev => {
-          const updated = new Map(prev);
-          const history = updated.get(agent_id);
-          if (history) {
-            updated.set(agent_id, {
-              ...history,
-              tools: [...history.tools, toolName]
-            });
-          }
-          return updated;
-        });
-
-        // Update node to show current tool being executed with block context
-        setNodes(nodes => nodes.map(node => {
-          if (node.id === agent_id) {
-            const blockName = node.data.name || agent_id;
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                currentAction: `${blockName} → ${toolName}`,
-                currentActionDetail: `Tool: ${toolName}`,
-                activeTools: [...(node.data.activeTools || []), toolName]
-              }
-            };
-          }
-          return node;
-        }));
-
-        // Update agents map with tool usage
-        setAgents(prev => {
-          const updated = new Map(prev);
-          const ag = updated.get(agent_id);
-          if (ag) {
-            const tools = new Set((ag as any).tools || []);
-            tools.add(toolName);
-            (ag as any).tools = Array.from(tools);
-            updated.set(agent_id, ag);
-          }
-          return updated;
-        });
-        // Update node badges
-        setNodes(nodes => nodes.map(n => {
-          if (n.id !== agent_id) return n;
-          const current = new Set<string>(Array.isArray(n.data?.toolsUsed) ? n.data.toolsUsed : []);
-          current.add(toolName);
-          return { ...n, data: { ...n.data, toolsUsed: Array.from(current) } };
-        }));
-        break;
-      }
-        
-      case 'agent_started':
-        if (agent_id) {
-          setActivelyStreamingAgents(prev => new Set(prev).add(agent_id));
-          setCurrentExecutingNode(agent_id);
-          setIsExecuting(true);
-
-          // Increment execution order and track history
-          const newOrder = executionOrderCounter + 1;
-          setExecutionOrderCounter(newOrder);
-
-          // Auto-scroll to the executing node
-          setTimeout(() => {
-            const nodeElement = document.querySelector(`[data-id="${agent_id}"]`);
-            if (nodeElement) {
-              nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-            }
-          }, 100);
-
-          setAgents(prev => {
-            const updated = new Map(prev);
-            updated.set(agent_id, {
-              id: agent_id,
-              name: payload?.name || agent_id,
-              output: '',
-              status: 'running',
-              startTime: Date.now(),
-              parent: payload?.parent,
-              depth: payload?.depth || 0
-            });
-            return updated;
-          });
-
-          // Update node status in graph with detailed execution info
-          setNodes(nodes =>
-            nodes.map(node => {
-              if (node.id === agent_id) {
-                const blockName = node.data.name || payload?.name || agent_id;
-                const blockType = node.data.type || 'process';
-
-                // Update execution history
-                setExecutionHistory(prev => {
-                  const updated = new Map(prev);
-                  updated.set(agent_id, {
-                    order: newOrder,
-                    startTime: Date.now(),
-                    status: 'running',
-                    actions: [],
-                    tools: [],
-                    blockName,
-                    blockType
-                  });
-                  return updated;
-                });
-
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    status: 'running',
-                    isExecuting: true,
-                    executionOrder: newOrder,
-                    currentActionDetail: `Executing ${blockName} (${blockType})`,
-                    executionStartTime: Date.now()
-                  },
-                };
-              }
-              // Dim nodes that haven't been executed yet
-              const wasExecuted = executionHistory.has(node.id);
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  status: node.data.status,
-                  isDimmed: !wasExecuted && node.id !== agent_id
-                },
-              };
-            })
-          );
-          
-          // Animate edges leading to this node
-          setEdges(edges =>
-            edges.map(edge => ({
-              ...edge,
-              animated: edge.target === agent_id,
-              style: {
-                ...edge.style,
-                stroke: edge.target === agent_id ? '#facc15' : edge.style?.stroke || '#52525b',
-              },
-            }))
-          );
-          // Append to trace (de-dupe consecutive)
-          setExecutionTrace((prev: string[]) => (prev.length === 0 || prev[prev.length - 1] !== agent_id) ? [...prev, agent_id] : prev);
-          if (followActiveRef.current) {
-            pendingFocusIdRef.current = agent_id;
-            focusAttemptsRef.current = 0;
-          }
-        }
-        break;
-        
-      case 'agent_spawned':
-        if (payload?.id) {
-          setAgents(prev => {
-            const updated = new Map(prev);
-            updated.set(payload.id, {
-              id: payload.id,
-              name: payload.name || payload.id,
-              status: 'pending',
-              output: '',
-              parent: payload.parent,
-              depth: (payload.depth || 0) + 1
-            });
-            return updated;
-          });
-        }
-        break;
-        
-      case 'agent_completed':
-        if (agent_id) {
-          setActivelyStreamingAgents(prev => {
-            const updated = new Set(prev);
-            updated.delete(agent_id);
-            return updated;
-          });
-
-          // Update execution history with completion
-          setExecutionHistory(prev => {
-            const updated = new Map(prev);
-            const history = updated.get(agent_id);
-            if (history) {
-              updated.set(agent_id, {
-                ...history,
-                endTime: Date.now(),
-                status: 'completed'
-              });
-            }
-            return updated;
-          });
-
-          // Clear current executing node
-          if (currentExecutingNode === agent_id) {
-            setCurrentExecutingNode(null);
-          }
-
-          setAgents(prev => {
-            const updated = new Map(prev);
-            const agent = updated.get(agent_id);
-            if (agent) {
-              updated.set(agent_id, {
-                ...agent,
-                status: 'completed',
-                endTime: Date.now()
-              });
-            }
-            return updated;
-          });
-
-          // Update node status in graph - keep execution history visible
-          setNodes(nodes =>
-            nodes.map(node => {
-              if (node.id === agent_id) {
-                const history = executionHistory.get(agent_id);
-                const duration = history && history.startTime ? Date.now() - history.startTime : undefined;
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    status: 'completed',
-                    isExecuting: false,
-                    wasExecuted: true,
-                    executionOrder: history?.order,
-                    executionDuration: duration,
-                    executionDurationText: duration ? `${(duration / 1000).toFixed(1)}s` : undefined,
-                    executedTools: history?.tools || [],
-                    currentAction: undefined,
-                    currentActionDetail: undefined,
-                    activeTools: []
-                  },
-                };
-              }
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  // Remove dimming from other executed nodes
-                  isDimmed: !executionHistory.has(node.id) ? node.data.isDimmed : false
-                }
-              };
-            })
-          );
-          
-          // Update edges to show completion and execution path
-          setEdges(edges =>
-            edges.map(edge => {
-              // Check if both source and target have been executed
-              const sourceExecuted = executionHistory.has(edge.source);
-              const targetExecuted = executionHistory.has(edge.target);
-              const isExecutionPath = sourceExecuted && targetExecuted;
-
-              return {
-                ...edge,
-                animated: false,
-                className: isExecutionPath ? 'execution-path-edge' : '',
-                style: {
-                  ...edge.style,
-                  stroke: isExecutionPath ? '#10b981' :
-                         edge.source === agent_id ? '#22c55e' :
-                         edge.style?.stroke || '#52525b',
-                  strokeWidth: isExecutionPath ? 3 : 2,
-                },
-              };
-            })
-          );
-        }
-        break;
-        
-      case 'workflow_completed': {
-        setIsRunning(false);
-        setIsExecuting(false);
-        setCurrentExecutingNode(null);
-        setNextExecutingNode(null);
-        setActivelyStreamingAgents(new Set());
-        setExecutionActions(new Map());
+  // Update connection status handler
+  useEffect(() => {
+    const checkConnection = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
         setConnectionStatus('connected');
-
-        setNodes(nodes => nodes.map(node => ({
-          ...node,
-          data: {
-            ...node.data,
-            isExecuting: false,
-            isDimmed: false,
-            currentAction: undefined,
-            currentActionDetail: undefined,
-            activeTools: []
-          }
-        })));
-        break;
+      } else if (wsRef.current?.readyState === WebSocket.CONNECTING) {
+        setConnectionStatus('connecting');
+      } else {
+        setConnectionStatus('disconnected');
       }
+    };
 
-      case 'workflow_failed': {
-        setIsRunning(false);
-        setIsExecuting(false);
-        setCurrentExecutingNode(null);
-        setNextExecutingNode(null);
-        setActivelyStreamingAgents(new Set());
-        setExecutionActions(new Map());
-        setConnectionStatus('error');
+    const interval = setInterval(checkConnection, 1000);
+    return () => clearInterval(interval);
+  }, [wsRef]);
 
-        setNodes(nodes => nodes.map(node => ({
-          ...node,
-          data: {
-            ...node.data,
-            isExecuting: false,
-            currentAction: undefined,
-            currentActionDetail: undefined,
-            activeTools: []
-          }
-        })));
-        break;
-      }
-
-      case 'error':
-        if (agent_id) {
-          setActivelyStreamingAgents(prev => {
-            const updated = new Set(prev);
-            updated.delete(agent_id);
-            return updated;
-          });
-          setAgents(prev => {
-            const updated = new Map(prev);
-            const agent = updated.get(agent_id);
-            if (agent) {
-              updated.set(agent_id, {
-                ...agent,
-                status: 'failed',
-                error: payload?.error || 'Unknown error',
-                endTime: Date.now()
-              });
-            }
-            return updated;
-          });
-        }
-        break;
-        
-      case 'session_end':
-        setIsRunning(false);
-        setActivelyStreamingAgents(new Set());
-        break;
-    }
-  }, []);
 
   const rerunFromSelected = useCallback(async () => {
     if (!executionId || !selectedAgent) return;
@@ -4173,14 +3157,7 @@ const FlowSwarmInterface: React.FC = () => {
       }
     })));
 
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
+    disconnectWebSocket();
   };
 
   const clearExecutionHistory = () => {
@@ -4233,34 +3210,6 @@ const FlowSwarmInterface: React.FC = () => {
     setPlanned(false);
   };
   
-  const softReset = () => {
-    // Reset agents and execution state but preserve visualization structure
-    setAgents(new Map());
-    setSelectedAgent(null);
-    setActivelyStreamingAgents(new Set());
-    // Reset node statuses but keep the structure
-    setNodes(nodes => 
-      nodes.map(node => ({
-        ...node,
-        data: {
-          ...node.data,
-          status: 'pending',
-          toolsUsed: []
-        }
-      }))
-    );
-    // Reset edge animations
-    setEdges(edges =>
-      edges.map(edge => ({
-        ...edge,
-        animated: false,
-        style: {
-          ...edge.style,
-          stroke: '#52525b'
-        }
-      }))
-    );
-  };
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     event.stopPropagation();
@@ -4396,10 +3345,9 @@ const FlowSwarmInterface: React.FC = () => {
   // Cleanup
   useEffect(() => {
     return () => {
-      if (wsRef.current) wsRef.current.close();
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      disconnectWebSocket();
     };
-  }, []);
+  }, [disconnectWebSocket]);
 
   const selectedAgentData = selectedAgent ? agents.get(selectedAgent) : null;
 
