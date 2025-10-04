@@ -27,7 +27,6 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './FlowSwarmInterface.css';
-import dagre from 'dagre';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { NodeData, EdgeData } from './types/FlowTypes';
@@ -55,280 +54,15 @@ import { resolveUserInputsInParams } from '../../utils/parameterResolver';
 import { useWebSocketManager } from './websocket/useWebSocketManager';
 import { FrameHandlers, FrameHandlerContext } from './websocket/frameHandlers';
 import { ConnectionStatus } from './websocket/WebSocketManager';
+import AgentNode from './components/nodes/AgentNode';
+import AnimatedEdge from './components/edges/AnimatedEdge';
+import { getLayoutedElements } from './utils/layoutUtils';
+import { buildMachineFromGraph, rerunFromSelected as rerunFromSelectedUtil } from './utils/executionUtils';
+import ToolsHubModal from './components/modals/ToolsHubModal';
 
-// Clean Professional Node Component (v3)
-const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
-  const isDark = data.isDarkMode === true;
+// Node components moved to ./components/nodes/AgentNode.tsx
 
-  const getStatusColor = () => {
-    switch (data.status) {
-      case 'running': return '#fbbf24';
-      case 'completed': return '#10b981';
-      case 'failed': return '#ef4444';
-      default: return isDark ? '#6b7280' : '#9ca3af';
-    }
-  };
-
-  const getNodeBackground = () => {
-    if (isDark) {
-      switch (data.status) {
-        case 'running':
-          return 'linear-gradient(135deg, rgba(251, 191, 36, 0.08) 0%, rgba(30, 41, 59, 0.95) 100%)';
-        case 'completed':
-          return 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(30, 41, 59, 0.95) 100%)';
-        case 'failed':
-          return 'linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(30, 41, 59, 0.95) 100%)';
-        default:
-          return 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%)';
-      }
-    } else {
-      switch (data.status) {
-        case 'running':
-          return 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)';
-        case 'completed':
-          return 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)';
-        case 'failed':
-          return 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)';
-        default:
-          return 'linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)';
-      }
-    }
-  };
-
-  return (
-    <div
-      className={`agent-node ${data.status} ${selected ? 'selected' : ''}`}
-      style={{
-        background: getNodeBackground(),
-        border: `2px solid ${selected ? getStatusColor() : isDark ? 'rgba(71, 85, 105, 0.5)' : '#e5e7eb'}`,
-        borderRadius: '10px',
-        padding: '16px',
-        minWidth: '240px',
-        maxWidth: '280px',
-        color: isDark ? '#e5e7eb' : '#1f2937',
-        boxShadow: selected
-          ? `0 0 0 3px ${getStatusColor()}40, 0 10px 25px -5px rgba(0, 0, 0, 0.15)`
-          : isDark
-            ? '0 4px 12px rgba(0, 0, 0, 0.4)'
-            : '0 2px 8px rgba(0, 0, 0, 0.1)',
-        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-      }}
-    >
-      <Handle
-        type="target"
-        position={Position.Left}
-        style={{
-          background: getStatusColor(),
-          width: '12px',
-          height: '12px',
-          border: `3px solid ${isDark ? '#0f172a' : '#ffffff'}`,
-          boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-          left: '-6px',
-        }}
-      />
-
-      <div style={{ marginBottom: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-          <div style={{
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            background: getStatusColor(),
-            boxShadow: data.status === 'running'
-              ? `0 0 0 4px ${getStatusColor()}30`
-              : 'none',
-            animation: data.status === 'running' ? 'pulse 2s infinite' : 'none',
-          }} />
-          <span style={{
-            fontSize: '15px',
-            fontWeight: '600',
-            color: isDark ? '#f3f4f6' : '#111827',
-            letterSpacing: '-0.025em',
-          }}>
-            {data.label || data.name || 'Agent'}
-          </span>
-        </div>
-
-        {data.agentRole && (
-          <div style={{
-            fontSize: '12px',
-            color: isDark ? '#9ca3af' : '#6b7280',
-            marginLeft: '20px',
-            fontStyle: 'italic',
-          }}>
-            {data.agentRole}
-          </div>
-        )}
-      </div>
-
-      {data.description && (
-        <div style={{
-          fontSize: '12px',
-          color: isDark ? '#d1d5db' : '#4b5563',
-          lineHeight: '1.4',
-          marginBottom: '8px',
-          maxHeight: '36px',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}>
-          {data.description}
-        </div>
-      )}
-
-      {(data.tools?.length > 0 || data.toolsPlanned?.length > 0 || data.toolsUsed?.length > 0) && (
-        <div style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: '4px',
-          marginTop: '8px',
-        }}>
-          {(data.toolsUsed || data.tools || data.toolsPlanned || []).slice(0, 3).map((tool: string, i: number) => (
-            <span
-              key={i}
-              style={{
-                fontSize: '10px',
-                padding: '2px 6px',
-                borderRadius: '4px',
-                background: data.toolsUsed?.includes(tool)
-                  ? (isDark ? 'rgba(34, 197, 94, 0.2)' : '#dcfce7')
-                  : (isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)'),
-                color: data.toolsUsed?.includes(tool)
-                  ? (isDark ? '#86efac' : '#166534')
-                  : (isDark ? '#d1d5db' : '#6b7280'),
-                border: data.toolsUsed?.includes(tool)
-                  ? (isDark ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid #86efac')
-                  : (isDark ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.1)'),
-                fontWeight: data.toolsUsed?.includes(tool) ? '600' : '400',
-              }}
-            >
-              {tool}
-            </span>
-          ))}
-          {((data.toolsUsed || data.tools || data.toolsPlanned || []).length > 3) && (
-            <span
-              style={{
-                fontSize: '10px',
-                padding: '2px 6px',
-                borderRadius: '4px',
-                background: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
-                color: isDark ? '#d1d5db' : '#6b7280',
-                border: isDark ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.1)',
-              }}
-            >
-              +{(data.toolsUsed || data.tools || data.toolsPlanned || []).length - 3}
-            </span>
-          )}
-        </div>
-      )}
-
-      {data.status === 'running' && (
-        <div style={{
-          marginTop: '10px',
-          height: '2px',
-          background: isDark ? '#374151' : '#e5e7eb',
-          borderRadius: '1px',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            width: '50%',
-            height: '100%',
-            background: getStatusColor(),
-            animation: 'progress 1.5s ease-in-out infinite',
-          }} />
-        </div>
-      )}
-
-      {data.duration && (
-        <div style={{
-          marginTop: '6px',
-          fontSize: '11px',
-          color: isDark ? '#9ca3af' : '#6b7280',
-          textAlign: 'right',
-        }}>
-          {(data.duration / 1000).toFixed(1)}s
-        </div>
-      )}
-
-      <Handle
-        type="source"
-        position={Position.Right}
-        style={{
-          background: getStatusColor(),
-          width: '12px',
-          height: '12px',
-          border: `3px solid ${isDark ? '#0f172a' : '#ffffff'}`,
-          boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-          right: '-6px',
-        }}
-      />
-    </div>
-  );
-};
-
-// Clean Edge Component with smooth animations
-const AnimatedEdge: React.FC<EdgeProps> = ({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
-  data,
-  markerEnd,
-}) => {
-  const [edgePath] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
-
-  const isDark = data?.isDarkMode !== false;
-
-  const getEdgeColor = () => {
-    if (data?.isActive) return '#fbbf24';
-    if (data?.isCompleted) return '#10b981';
-    return isDark ? '#4b5563' : '#d1d5db';
-  };
-
-  return (
-    <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={{
-          stroke: getEdgeColor(),
-          strokeWidth: data?.isActive ? 3 : 2,
-          opacity: data?.dimmed ? 0.2 : 1,
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        }}
-      />
-      {data?.isActive && (
-        <>
-          <circle r="5" fill={getEdgeColor()}>
-            <animateMotion
-              dur="2s"
-              repeatCount="indefinite"
-              path={edgePath}
-            />
-          </circle>
-          <circle r="5" fill={getEdgeColor()} opacity="0.5">
-            <animateMotion
-              dur="2s"
-              begin="0.5s"
-              repeatCount="indefinite"
-              path={edgePath}
-            />
-          </circle>
-        </>
-      )}
-    </>
-  );
-};
+// Edge components moved to ./components/edges/AnimatedEdge.tsx
 
 // Types
 interface Agent {
@@ -494,57 +228,7 @@ const FlowSwarmInterface: React.FC = () => {
   }, [nodes, setCenter, followActive]);
 
   // Improved layout function with better spacing
-  const getLayoutedElements = useCallback((nodes: Node[], edges: Edge[], direction: 'TB' | 'LR' = 'LR') => {
-    if (nodes.length === 0) return { nodes, edges };
-
-    const dagreGraph = new dagre.graphlib.Graph();
-    dagreGraph.setDefaultEdgeLabel(() => ({}));
-
-    const isHorizontal = direction === 'LR';
-
-    // Increase spacing for better clarity
-    dagreGraph.setGraph({
-      rankdir: direction,
-      nodesep: isHorizontal ? 120 : 100,  // Increased horizontal spacing
-      ranksep: isHorizontal ? 200 : 150,  // Increased vertical spacing
-      marginx: 50,
-      marginy: 50,
-      align: 'UL',  // Upper-left alignment for cleaner look
-      ranker: 'tight-tree',  // Better ranking algorithm
-    });
-
-    // Set node dimensions with padding
-    nodes.forEach((node) => {
-      dagreGraph.setNode(node.id, {
-        width: 260,   // Increased width for better content fit
-        height: 120   // Increased height
-      });
-    });
-
-    edges.forEach((edge) => {
-      if (dagreGraph.node(edge.source) && dagreGraph.node(edge.target)) {
-        dagreGraph.setEdge(edge.source, edge.target, {
-          weight: 1,
-          minlen: 2,  // Minimum edge length for spacing
-        });
-      }
-    });
-
-    dagre.layout(dagreGraph);
-
-    const layoutedNodes = nodes.map((node) => {
-      const nodeWithPosition = dagreGraph.node(node.id);
-      return {
-        ...node,
-        position: nodeWithPosition ? {
-          x: nodeWithPosition.x - 130,  // Center based on new width
-          y: nodeWithPosition.y - 60,   // Center based on new height
-        } : node.position,
-      };
-    });
-
-    return { nodes: layoutedNodes, edges };
-  }, []);
+  // Layout function imported from utils/layoutUtils.ts
 
   // Node and Edge types - use professional components
   const nodeTypes = useMemo<NodeTypes>(() => ({
@@ -1044,16 +728,7 @@ const FlowSwarmInterface: React.FC = () => {
 
 
   const rerunFromSelected = useCallback(async () => {
-    if (!executionId || !selectedAgent) return;
-    try {
-      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/rerun_from`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_state_id: selectedAgent })
-      });
-    } catch (e) {
-      console.error('Failed to rerun from node', e);
-    }
+    await rerunFromSelectedUtil(executionId, selectedAgent);
   }, [executionId, selectedAgent]);
 
   const addAgentAndRerun = useCallback(async () => {
@@ -1160,7 +835,7 @@ const FlowSwarmInterface: React.FC = () => {
     try {
       if (nodes.length > 0) {
         // Execute with existing machine
-        const machine = buildMachineFromGraph();
+        const machine = buildMachine();
         const response = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1212,82 +887,9 @@ const FlowSwarmInterface: React.FC = () => {
   };
 
   // Build machine from current graph (nodes/edges)
-  const buildMachineFromGraph = useCallback(() => {
-    const states = nodes.map((n:any)=>{
-      // Handle professional and enhanced nodes
-      if (n.type === 'professional' || n.type === 'enhanced') {
-        return {
-          id: n.id,
-          name: n.data.name || n.id,
-          type: n.data.type || 'analysis',
-          description: n.data.description || '',
-          agent_role: n.data.agent_role || 'Agent',
-          tools: n.data.tools || [],
-          transitions: n.data.transitions || {},
-          enabled: n.data.enabled !== false
-        };
-      }
-      // Handle tool blocks properly (map to tool_call)
-      const data = n.data || {};
-      const rawType = data.nodeType || data.type; // prefer explicit nodeType, fallback to type
-      if (n.type === 'tool' || rawType === 'tool' || data.toolName) {
-        const tname = data.toolName || (Array.isArray(data.toolsPlanned) ? data.toolsPlanned[0] : undefined);
-        return {
-          id: n.id,
-          name: data.name || data.label || tname || n.id,
-          type: 'tool_call',
-          description: data.description || '',
-          agent_role: data.agent_role || data.agentRole || 'Executor',
-          tools: tname ? [tname] : (Array.isArray(data.toolsPlanned) ? data.toolsPlanned : []),
-          parameters: data.parameters || {},
-        };
-      }
-      // Handle regular nodes with better type fallback (include data.type)
-      const derivedType = rawType ? (rawType === 'tool' ? 'tool_call' : rawType) : 'analysis';
-      return {
-        id: n.id,
-        name: data.name || data.label || n.id,
-        type: derivedType,
-        description: data.description || '',
-        agent_role: data.agentRole || data.agent_role || '',
-        tools: Array.isArray(data.toolsPlanned) ? data.toolsPlanned : (Array.isArray(data.tools) ? data.tools : [])
-      };
-    });
-    const edgesJson = edges.map((e:any)=>({ source: e.source, target: e.target, event: (e.label && typeof e.label==='string' && e.label.length>0)? e.label : 'success' }));
-    // Determine initial state preference order:
-    // 1) Node explicitly marked isStart
-    // 2) First node with type 'input'
-    // 3) Node with no incoming edges
-    // 4) Named 'start'/'initial'
-    // 5) Fallback to first node
-    let initial: string | undefined;
-    const startMarked = nodes.find(n => !!(n.data as any)?.isStart);
-    if (startMarked) {
-      initial = startMarked.id;
-    } else {
-      const firstInput = nodes.find(n => (n.data as any)?.type === 'input' || (n.data as any)?.nodeType === 'input');
-      if (firstInput) {
-        initial = firstInput.id;
-      }
-    }
-    if (!initial) {
-      const nodesWithNoIncoming = nodes.filter(n => !edges.some(e => e.target === n.id));
-      if (nodesWithNoIncoming.length > 0) {
-        initial = nodesWithNoIncoming[0].id;
-      }
-    }
-    if (!initial) {
-      const startNode = nodes.find(n =>
-        n.data.name?.toLowerCase() === 'start' ||
-        n.data.name?.toLowerCase() === 'initial' ||
-        n.id === 'start' ||
-        n.id === 'initial'
-      );
-      if (startNode) initial = startNode.id;
-    }
-    if (!initial) initial = nodes[0]?.id || 'start';
-
-    return { name: `User Planned Workflow`, initial_state: initial, states, edges: edgesJson };
+  // Build machine from graph - using utility function
+  const buildMachine = useCallback(() => {
+    return buildMachineFromGraph(nodes, edges);
   }, [nodes, edges]);
 
   // Add professional block function
@@ -2541,7 +2143,7 @@ const FlowSwarmInterface: React.FC = () => {
   const enhanceFlow = useCallback(async (prompt: string, selectedNodeIds: string[]) => {
     try {
       // Build current state machine from graph
-      const currentMachine = buildMachineFromGraph();
+      const currentMachine = buildMachine();
 
       // If specific blocks are selected, we'll expand them into sub-workflows
       if (selectedNodeIds.length > 0) {
@@ -2661,7 +2263,7 @@ const FlowSwarmInterface: React.FC = () => {
         createLocalSubWorkflow(selectedNodeIds[0], prompt);
       }
     }
-  }, [task, selectedTools, buildMachineFromGraph, importStateMachine, nodes, expandBlockIntoSubWorkflow, createLocalSubWorkflow]);
+  }, [task, selectedTools, buildMachine, importStateMachine, nodes, expandBlockIntoSubWorkflow, createLocalSubWorkflow]);
 
   const planWorkflow = useCallback(async ()=>{
     if (!task.trim()) return;
@@ -2682,7 +2284,7 @@ const FlowSwarmInterface: React.FC = () => {
   const runPlannedWorkflow = useCallback(async ()=>{
     try{
       setStateExecutionData([]); // Clear previous execution data
-      const machine = buildMachineFromGraph();
+      const machine = buildMachine();
       const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, machine, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0 } }) });
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -2690,11 +2292,11 @@ const FlowSwarmInterface: React.FC = () => {
       setIsRunning(true);
       setTimeout(()=>connectWebSocket(data.exec_id, false), 100);
     }catch(e){ console.error('Run failed', e); }
-  }, [buildMachineFromGraph, selectedTools, task, connectWebSocket]);
+  }, [buildMachine, selectedTools, task, connectWebSocket]);
 
   // Save current workflow as template with full visual properties
   const saveAsTemplate = useCallback(() => {
-    const machine = buildMachineFromGraph();
+    const machine = buildMachine();
 
     // Save complete node and edge data including positions and styling
     const fullWorkflow = {
@@ -2759,7 +2361,7 @@ const FlowSwarmInterface: React.FC = () => {
     } catch (e) {
       console.error('Failed to save template to localStorage:', e);
     }
-  }, [buildMachineFromGraph, task, selectedTools, nodes, edges]);
+  }, [buildMachine, task, selectedTools, nodes, edges]);
 
   // Load template from file with full visual properties
   const loadTemplate = useCallback(() => {
