@@ -8,7 +8,6 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   useReactFlow,
-  ReactFlowProvider,
   ConnectionMode,
   Connection,
   ConnectionLineType,
@@ -24,6 +23,7 @@ import ReactFlow, {
   getBezierPath,
   EdgeProps,
   useUpdateNodeInternals,
+  ReactFlowProvider,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './FlowSwarmInterface.css';
@@ -59,6 +59,12 @@ import AnimatedEdge from './components/edges/AnimatedEdge';
 import { getLayoutedElements } from './utils/layoutUtils';
 import { buildMachineFromGraph, rerunFromSelected as rerunFromSelectedUtil } from './utils/executionUtils';
 import ToolsHubModal from './components/modals/ToolsHubModal';
+import { FlowControlsPanel } from './components/FlowControlsPanel';
+import { ExecutionControlBar, ExecutionMode } from './components/ExecutionControlBar';
+import { ImportStateMachineDialog } from './components/ImportStateMachineDialog';
+import { ParallelGroupOverlay } from './components/ParallelGroupOverlay';
+import { ParallelChildrenEditor } from './components/ParallelChildrenEditor';
+import { AgentConversationPanel } from './components/AgentConversationPanel';
 
 // Node components moved to ./components/nodes/AgentNode.tsx
 
@@ -186,7 +192,6 @@ const FlowSwarmInterface: React.FC = () => {
   const [paletteTab, setPaletteTab] = useState<'blocks'|'tools'>('blocks');
   const [planned, setPlanned] = useState<boolean>(false);
   const [showImportDialog, setShowImportDialog] = useState<boolean>(false);
-  const [importJsonText, setImportJsonText] = useState<string>('');
   const [showUnifiedManager, setShowUnifiedManager] = useState<boolean>(false);
   const [selectedNodeForSettings, setSelectedNodeForSettings] = useState<Node | null>(null);
 
@@ -322,8 +327,18 @@ const FlowSwarmInterface: React.FC = () => {
         redo();
       }
     };
+
+    const handleResetPanelWidth = () => {
+      setOutputPanelWidth(500); // Reset to default width
+    };
+
     window.addEventListener('keydown', handleKeydown);
-    return () => window.removeEventListener('keydown', handleKeydown);
+    window.addEventListener('resetPanelWidth', handleResetPanelWidth);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeydown);
+      window.removeEventListener('resetPanelWidth', handleResetPanelWidth);
+    };
   }, [undo, redo, setShowUnifiedManager]);
 
   const preventRerender = useRef(false);
@@ -3018,7 +3033,6 @@ const FlowSwarmInterface: React.FC = () => {
                   </button>
                 </div>
               </div>
-            </div>
             {/* Unknown selection warning inside modal */}
             {(() => {
               const unknownSel = Array.from(selectedTools).filter(s => !availableTools.includes(s));
@@ -3143,6 +3157,7 @@ const FlowSwarmInterface: React.FC = () => {
               </div>
             </div>
           </div>
+          </div>
         </div>
       )}
       {decisionPrompt && (
@@ -3252,9 +3267,11 @@ const FlowSwarmInterface: React.FC = () => {
           </div>
         )}
 
-        {/* React Flow Graph */}
-        <div className="flow-graph-panel" ref={reactFlowWrapper} onDrop={(event)=>{
-          event.preventDefault();
+        {/* Main Content Area */}
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+          {/* React Flow Graph */}
+          <div className="flow-graph-panel" ref={reactFlowWrapper} onDrop={(event)=>{
+            event.preventDefault();
           if (!editMode) return;
 
           // Get block type and optional metadata
@@ -3592,37 +3609,11 @@ const FlowSwarmInterface: React.FC = () => {
             }}
           >
             {/* Parallel Group Overlay */}
-            <div style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:0 }}>
-              {(() => {
-                const running = nodes.filter(n => (n.data as any)?.parallelRunning);
-                if (running.length === 0) return null;
-                const groups = running.map(n => {
-                  const children: string[] = (n.data as any)?.parallelChildren || [];
-                  const members = [n, ...nodes.filter(nn => children.includes(nn.id))];
-                  if (members.length === 0) return null;
-                  const minX = Math.min(...members.map(m => m.position.x)) - 20;
-                  const minY = Math.min(...members.map(m => m.position.y)) - 30;
-                  const maxX = Math.max(...members.map(m => m.position.x + ((m as any).width || 260))) + 20;
-                  const maxY = Math.max(...members.map(m => m.position.y + ((m as any).height || 120))) + 30;
-                  return { id: n.id, x: minX, y: minY, w: maxX - minX, h: maxY - minY, label: (n.data as any)?.label || n.id };
-                }).filter(Boolean) as Array<{ id:string; x:number; y:number; w:number; h:number; label:string }>;
-                if (groups.length === 0) return null;
-                const xs = groups.flatMap(g => [g.x, g.x + g.w]);
-                const ys = groups.flatMap(g => [g.y, g.y + g.h]);
-                const minX = Math.min(...xs), minY = Math.min(...ys);
-                const maxX = Math.max(...xs), maxY = Math.max(...ys);
-                return (
-                  <svg viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} style={{ width:'100%', height:'100%' }}>
-                    {groups.map(g => (
-                      <g key={g.id}>
-                        <rect x={g.x} y={g.y} rx={10} ry={10} width={g.w} height={g.h} fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.35)" strokeWidth={2} />
-                        <text x={g.x + 10} y={g.y + 18} fill="#93c5fd" fontSize={12} fontWeight={700}>Parallel Group · {g.label}</text>
-                      </g>
-                    ))}
-                  </svg>
-                );
-              })()}
-            </div>
+            <ParallelGroupOverlay
+              nodes={nodes}
+              collapsedGroups={collapsedGroups}
+              isDarkMode={isDarkMode}
+            />
             <Background
               variant={showGrid ? BackgroundVariant.Lines : BackgroundVariant.Dots}
               gap={showGrid ? 16 : 24}
@@ -3631,124 +3622,6 @@ const FlowSwarmInterface: React.FC = () => {
             />
             <Controls showInteractive={true} position="bottom-left" />
             {showMinimap && <MiniMap position="bottom-right" pannable zoomable style={{ background: isDarkMode? '#0b1220':'#f8fafc' }} />}
-            {/* Parallel Group Overlay with ribbons, summary, and tooltip */}
-            <div style={{ position:'absolute', inset:0, pointerEvents:'auto', zIndex:0 }}>
-              {(() => {
-                const running = nodes.filter(n => (n.data as any)?.parallelRunning || (n.data as any)?.parallelSummary);
-                if (running.length === 0) return null;
-                const groups = running.map(n => {
-                  const data: any = n.data || {};
-                  const children: string[] = data.parallelChildren || [];
-                  const members = [n, ...nodes.filter(nn => children.includes(nn.id))];
-                  if (members.length === 0) return null;
-                  const minX = Math.min(...members.map(m => m.position.x)) - 20;
-                  const minY = Math.min(...members.map(m => m.position.y)) - 30;
-                  const maxX = Math.max(...members.map(m => m.position.x + ((m as any).width || 260))) + 20;
-                  const maxY = Math.max(...members.map(m => m.position.y + ((m as any).height || 120))) + 30;
-                  return { id: n.id, node: n, data, x: minX, y: minY, w: maxX - minX, h: maxY - minY, label: data?.label || n.id, children };
-                }).filter(Boolean) as Array<{ id:string; node: Node; data:any; x:number; y:number; w:number; h:number; label:string; children:string[] }>;
-                if (groups.length === 0) return null;
-                const xs = groups.flatMap(g => [g.x, g.x + g.w]);
-                const ys = groups.flatMap(g => [g.y, g.y + g.h]);
-                const minX = Math.min(...xs), minY = Math.min(...ys);
-                const maxX = Math.max(...xs), maxY = Math.max(...ys);
-                return (
-                  <svg viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} style={{ width:'100%', height:'100%' }}>
-                    {groups.map(g => {
-                      const aggCenterX = g.node.position.x + (((g.node as any).width) || 260) / 2;
-                      const aggCenterY = g.node.position.y + (((g.node as any).height) || 120) / 2;
-                      const collapsed = !!collapsedGroups[g.id];
-                      return (
-                        <g key={g.id}>
-                          {/* Group box */}
-                          <rect
-                            x={g.x}
-                            y={g.y}
-                            rx={10}
-                            ry={10}
-                            width={g.w}
-                            height={g.h}
-                            fill={g.data.parallelRunning ? 'rgba(59,130,246,0.10)' : 'rgba(59,130,246,0.06)'}
-                            stroke="rgba(59,130,246,0.35)"
-                            strokeWidth={2}
-                            onMouseEnter={(e) => {
-                              const vp = getViewport();
-                              const tooltipLines: Array<{child:string; event:string; durationMs:number}> = [];
-                              const childEvents = (g.data.parallelChildEvents || {}) as Record<string, {event:string; durationMs:number}>;
-                              g.children.forEach(cid => {
-                                const ce = childEvents[cid];
-                                tooltipLines.push({ child: cid, event: ce?.event || 'pending', durationMs: ce?.durationMs || 0 });
-                              });
-                              const screenX = (aggCenterX * vp.zoom) + vp.x;
-                              const screenY = (g.y * vp.zoom) + vp.y + 24;
-                              setParallelTooltip({ id: g.id, x: screenX, y: screenY, lines: tooltipLines });
-                            }}
-                            onMouseLeave={() => setParallelTooltip(null)}
-                          />
-                          {/* Label and summary */}
-                          <text x={g.x + 12} y={g.y + 18} fill="#93c5fd" fontSize={12} fontWeight={700}>Parallel Group · {g.label}</text>
-                          {g.data.parallelCompleted ? (
-                            <text x={g.x + 12} y={g.y + 34} fill="#93c5fd" fontSize={11}>Completed: {g.data.parallelCompleted}/{g.children.length} · {g.data.parallelSummary ? `Result: ${g.data.parallelSummary}` : (g.data.parallelRunning ? 'Aggregating…' : '')}</text>
-                          ) : null}
-                          {/* Ribbons */}
-                          {g.children.map(cid => {
-                            const child = nodes.find(nn => nn.id === cid);
-                            if (!child) return null;
-                            const ccenterX = child.position.x + (((child as any).width) || 260) / 2;
-                            const ccenterY = child.position.y + (((child as any).height) || 120) / 2;
-                            const mx = (ccenterX + aggCenterX) / 2;
-                            const my = (ccenterY + aggCenterY) / 2 - 20; // upward bow
-                            const ev = (g.data.parallelChildEvents || {})[cid]?.event;
-                            const stroke = ev ? (ev === 'failure' ? '#ef4444' : '#22c55e') : '#fde047';
-                            const width = ev ? 2.5 : 2;
-                            return (
-                              <path key={`${g.id}-${cid}`} d={`M ${ccenterX} ${ccenterY} Q ${mx} ${my} ${aggCenterX} ${aggCenterY}`} fill="none" stroke={stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" opacity={collapsed ? 0.2 : 0.9} />
-                            );
-                          })}
-                        </g>
-                      );
-                    })}
-                  </svg>
-                );
-              })()}
-              {/* Tooltip overlay */}
-              {parallelTooltip && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: parallelTooltip.x,
-                    top: parallelTooltip.y,
-                    transform: 'translate(-50%, 0)',
-                    background: isDarkMode ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.98)',
-                    color: isDarkMode ? '#e2e8f0' : '#111',
-                    border: `1px solid ${isDarkMode ? '#334155' : '#cbd5e1'}`,
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    boxShadow: '0 12px 30px rgba(0,0,0,0.25)',
-                    pointerEvents: 'none',
-                    minWidth: 240,
-                    zIndex: 2
-                  }}
-                >
-                  <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12 }}>Branch Summary</div>
-                  {parallelTooltip.lines.length === 0 ? (
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>No children</div>
-                  ) : (
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap: 6 }}>
-                      {parallelTooltip.lines.map((ln) => (
-                        <>
-                          <div style={{ fontSize: 12, opacity: 0.9, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{ln.child}</div>
-                          <div style={{ fontSize: 12, textAlign:'right' }}>
-                            <span style={{ color: ln.event === 'failure' ? '#ef4444' : ln.event === 'pending' ? '#eab308' : '#22c55e', fontWeight: 700 }}>{ln.event}</span>
-                            <span style={{ opacity: 0.7 }}> · {(ln.durationMs/1000).toFixed(1)}s</span>
-                          </div>
-                        </>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
             <Controls />
           {showMinimap && (
             <MiniMap 
@@ -3765,42 +3638,16 @@ const FlowSwarmInterface: React.FC = () => {
               />
           )}
           {/* Children Editor Modal */}
-          {showChildrenEditor && (
-            <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex: 1000, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setShowChildrenEditor(null)}>
-              <div style={{ background: isDarkMode ? '#0f172a' : '#fff', color: isDarkMode ? '#e2e8f0' : '#111', width: 640, maxHeight: '80vh', borderRadius: 8, padding: 16, overflow: 'auto' }} onClick={e => e.stopPropagation()}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 12 }}>
-                  <h3 style={{ margin: 0 }}>Parallel Children for: {showChildrenEditor}</h3>
-                  <button className="panel-button" onClick={() => setShowChildrenEditor(null)}>Close</button>
-                </div>
-                <p style={{ marginTop: 0, opacity: 0.8 }}>Select the contributor nodes whose outputs should aggregate into this parallel block.</p>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8 }}>
-                  {nodes.map(n => (
-                    <label key={n.id} style={{ display:'flex', alignItems:'center', gap: 8, border:'1px solid #334155', borderRadius: 8, padding: 8 }}>
-                      <input
-                        type="checkbox"
-                        checked={(childrenOverrides[showChildrenEditor!] || []).includes(n.id)}
-                        onChange={e => {
-                          setChildrenOverrides(prev => {
-                            const cur = new Set(prev[showChildrenEditor!] || []);
-                            if (e.target.checked) cur.add(n.id); else cur.delete(n.id);
-                            return { ...prev, [showChildrenEditor!]: Array.from(cur) };
-                          });
-                        }}
-                      />
-                      <span style={{ fontWeight: 600 }}>{(n.data as any)?.label || n.id}</span>
-                      <span style={{ opacity: 0.7, fontSize: 12 }}>({n.id})</span>
-                    </label>
-                  ))}
-                </div>
-                <div style={{ marginTop: 12, display:'flex', gap: 8, justifyContent:'flex-end' }}>
-                  <button className="panel-button" onClick={() => setShowChildrenEditor(null)}>Done</button>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-                  Changes apply during this run for aggregation and are also sent with the start request for future runs.
-                </div>
-              </div>
-            </div>
-          )}
+          <ParallelChildrenEditor
+            showChildrenEditor={showChildrenEditor}
+            nodes={nodes}
+            childrenOverrides={childrenOverrides}
+            isDarkMode={isDarkMode}
+            onClose={() => setShowChildrenEditor(null)}
+            onChildrenChange={(nodeId, children) => {
+              setChildrenOverrides(prev => ({ ...prev, [nodeId]: children }));
+            }}
+          />
             {/* Professional Toolbar */}
             <WorkflowToolbar
               onAddBlock={() => setShowUnifiedManager(true)}
@@ -3836,413 +3683,111 @@ const FlowSwarmInterface: React.FC = () => {
               onToolsChange={setSelectedTools}
             />
 
-            <Panel position="top-left" style={{ top: '80px' }}>
-              <div className="panel-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                {/* Undo/Redo buttons */}
-                <button
-                  className="panel-button"
-                  onClick={undo}
-                  disabled={historyIndex <= 0}
-                  title="Undo (Ctrl/Cmd + Z)"
-                  style={{
-                    opacity: historyIndex <= 0 ? 0.5 : 1,
-                    cursor: historyIndex <= 0 ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  ↶ Undo
-                </button>
-                <button
-                  className="panel-button"
-                  onClick={redo}
-                  disabled={historyIndex >= history.length - 1}
-                  title="Redo (Ctrl/Cmd + Y)"
-                  style={{
-                    opacity: historyIndex >= history.length - 1 ? 0.5 : 1,
-                    cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  ↷ Redo
-                </button>
-                <div style={{
-                  width: '1px',
-                  height: '24px',
-                  background: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-                  margin: '0 4px'
-                }} />
-                {highlightPath && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '6px 12px',
-                    background: 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
-                    border: '1px solid #3b82f6',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: '#1e40af'
-                  }}>
-                    <span>🔍 Path Highlighted</span>
-                    <button
-                      onClick={clearPathHighlight}
-                      style={{
-                        padding: '2px 6px',
-                        background: 'white',
-                        border: '1px solid #3b82f6',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Clear (ESC)
-                    </button>
-                  </div>
-                )}
-                <button onClick={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })} className="panel-button">
-                  Fit View
-                </button>
-
-                <button onClick={() => updateGraph(true)} className="panel-button">
-                  Re-layout
-                </button>
-
-                <button onClick={() => setShowUnifiedManager(true)} className="panel-button">
-                  📦 Block Manager
-                </button>
-
-                <button
-                  className={`panel-button ${layoutDirection === 'LR' ? 'active' : ''}`}
-                  onClick={() => {
-                    setLayoutDirection(layoutDirection === 'LR' ? 'TB' : 'LR');
-                    setTimeout(() => updateGraph(true), 50);
-                  }}
-                >
-                  {layoutDirection === 'LR' ? '→ Horizontal' : '↓ Vertical'}
-                </button>
-
-                <button
-                  className={`panel-button ${showGrid ? 'active' : ''}`}
-                  onClick={() => setShowGrid(!showGrid)}
-                >
-                  Grid: {showGrid ? 'On' : 'Off'}
-                </button>
-
-                <button
-                  className={`panel-button ${showMinimap ? 'active' : ''}`}
-                  onClick={() => setShowMinimap(!showMinimap)}
-                >
-                  Minimap: {showMinimap ? 'On' : 'Off'}
-                </button>
-
-                <button
-                  className={`panel-button ${showConversationPanel ? 'active' : ''}`}
-                  onClick={() => setShowConversationPanel(!showConversationPanel)}
-                  title="Toggle conversation panel"
-                >
-                  💬 Chat: {showConversationPanel ? 'On' : 'Off'}
-                </button>
-
-                <button onClick={resetView} className="panel-button">
-                  Clear
-                </button>
-
-                <button onClick={() => setShowToolsHub(true)} className="panel-button">
-                  Tools
-                </button>
-
-                <button
-                  onClick={() => setShowRawDataViewer(!showRawDataViewer)}
-                  className={`panel-button ${showRawDataViewer ? 'active' : ''}`}
-                  title="View raw state execution data"
-                >
-                  Raw Data
-                </button>
-
-                <button
-                  className="panel-button"
-                  onClick={() => setFollowActive(prev => !prev)}
-                  title="Follow active node"
-                >
-                  Follow: {followActive ? 'On' : 'Off'}
-                </button>
-
-                {/* Replay Controls */}
-                <button
-                  className={`panel-button ${replayMode ? 'active' : ''}`}
-                  onClick={() => {
-                    setReplayMode(!replayMode);
-                    setReplayIndex((prev: number | null) => (prev == null ? 0 : prev));
-                  }}
-                  title="Toggle replay mode"
-                >
-                  Replay: {replayMode ? 'On' : 'Off'}
-                </button>
-                <button
-                  className="panel-button"
-                  onClick={() => {
-                    if (!replayMode || executionTrace.length === 0) return;
-                    setReplayIndex((i: number | null) => {
-                      const next = Math.max(0, (i ?? 0) - 1);
-                      const id = executionTrace[next];
-                      if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
-                      return next;
-                    });
-                  }}
-                  title="Previous (←)"
-                >Prev</button>
-                <button
-                  className="panel-button"
-                  onClick={() => {
-                    if (!replayMode || executionTrace.length === 0) return;
-                    setReplayIndex((i: number | null) => {
-                      const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
-                      const id = executionTrace[next];
-                      if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
-                      return next;
-                    });
-                  }}
-                  title="Next (→)"
-                >Next</button>
-
-              <button
-                className={`panel-button ${highlightPath ? 'active' : ''}`}
-                onClick={() => {
-                  preventRerender.current = true;
-                  setHighlightPath(!highlightPath);
-                  setTimeout(() => { preventRerender.current = false; }, 100);
-                }}
-                title="Highlight Active Path"
-              >
-                Path: {highlightPath ? 'On' : 'Off'}
-              </button>
-
-              {/* Rerun from selected node */}
-              <button
-                className="panel-button"
-                disabled={!selectedAgent || !executionId}
-                onClick={rerunFromSelected}
-                title="Rerun from the selected node"
-              >
-                Rerun From Here
-              </button>
-
-              {/* Add agent and connect, then rerun */}
-              <button
-                className="panel-button"
-                disabled={!selectedAgent || !executionId}
-                onClick={addAgentAndRerun}
-                title="Add an agent and connect from selected, then rerun"
-              >
-                Add Agent + Rerun
-              </button>
-
-                {/* Collapse / Expand for selected parallel */}
-                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || ['parallel','parallel_load'].includes((n.data as any)?.nodeType))) && (
-                  <button
-                    className="panel-button"
-                    onClick={() => {
-                      const id = selectedAgent!;
-                      setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }));
-                      const children = (nodes.find(n => n.id === id)?.data as any)?.parallelChildren || [];
-                      const childSet = new Set(children);
-                      // Hide/unhide child nodes
-                      setNodes(nds => nds.map(n => childSet.has(n.id) ? ({ ...n, hidden: !collapsedGroups[id] ? true : false }) : n));
-                      // Dim/undim child edges
-                      setEdges(eds => eds.map(e => childSet.has(e.source) || childSet.has(e.target) ? ({ ...e, style: { ...e.style, opacity: !collapsedGroups[id] ? 0.08 : 1 } }) : e));
-                    }}
-                    title="Collapse/Expand selected parallel group"
-                  >
-                    {collapsedGroups[selectedAgent!] ? 'Expand Group' : 'Collapse Group'}
-                  </button>
-                )}
-
-                {/* Edit Children for selected parallel */}
-                {selectedAgent && nodes.find(n => n.id === selectedAgent && ((n.data as any)?.parallelRunning || ['parallel','parallel_load'].includes((n.data as any)?.nodeType))) && (
-                  <button className="panel-button" onClick={() => setShowChildrenEditor(selectedAgent!)} title="Edit parallel children">Edit Children</button>
-                )}
-
-                {/* Show editor button if a parallel node is selected */}
-                {selectedAgent && nodes.find(n => n.id === selectedAgent && ['parallel','parallel_load'].includes((n.data as any)?.nodeType)) && (
-                  <button className="panel-button" onClick={() => setShowChildrenEditor(selectedAgent!)} title="Edit parallel children">Edit Children</button>
-                )}
-              </div>
-            </Panel>
+            <FlowControlsPanel
+              historyIndex={historyIndex}
+              historyLength={history.length}
+              highlightPath={highlightPath}
+              layoutDirection={layoutDirection}
+              showGrid={showGrid}
+              showMinimap={showMinimap}
+              showConversationPanel={showConversationPanel}
+              showRawDataViewer={showRawDataViewer}
+              followActive={followActive}
+              replayMode={replayMode}
+              executionTraceLength={executionTrace.length}
+              replayIndex={replayIndex}
+              selectedAgent={selectedAgent}
+              isDarkMode={isDarkMode}
+              onUndo={undo}
+              onRedo={redo}
+              onClearPathHighlight={clearPathHighlight}
+              onFitView={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })}
+              onRelayout={() => updateGraph(true)}
+              onOpenBlockManager={() => setShowUnifiedManager(true)}
+              onToggleLayoutDirection={() => {
+                setLayoutDirection(layoutDirection === 'LR' ? 'TB' : 'LR');
+                setTimeout(() => updateGraph(true), 50);
+              }}
+              onToggleGrid={() => setShowGrid(!showGrid)}
+              onToggleMinimap={() => setShowMinimap(!showMinimap)}
+              onToggleConversationPanel={() => setShowConversationPanel(!showConversationPanel)}
+              onResetView={resetView}
+              onOpenToolsHub={() => setShowToolsHub(true)}
+              onToggleRawDataViewer={() => setShowRawDataViewer(!showRawDataViewer)}
+              onToggleFollowActive={() => setFollowActive(prev => !prev)}
+              onToggleReplayMode={() => {
+                setReplayMode(!replayMode);
+                setReplayIndex((prev: number | null) => (prev == null ? 0 : prev));
+              }}
+              onReplayPrevious={() => {
+                if (!replayMode || executionTrace.length === 0) return;
+                setReplayIndex((i: number | null) => {
+                  const next = Math.max(0, (i ?? 0) - 1);
+                  const id = executionTrace[next];
+                  if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+                  return next;
+                });
+              }}
+              onReplayNext={() => {
+                if (!replayMode || executionTrace.length === 0) return;
+                setReplayIndex((i: number | null) => {
+                  const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
+                  const id = executionTrace[next];
+                  if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+                  return next;
+                });
+              }}
+              onToggleHighlightPath={() => {
+                preventRerender.current = true;
+                setHighlightPath(!highlightPath);
+                setTimeout(() => { preventRerender.current = false; }, 100);
+              }}
+              onRerunFromSelected={rerunFromSelected}
+              onAddAgentAndRerun={addAgentAndRerun}
+              executionId={executionId}
+              nodes={nodes}
+              collapsedGroups={collapsedGroups}
+              onToggleCollapsedGroup={(id: string) => {
+                setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }));
+                const children = (nodes.find(n => n.id === id)?.data as any)?.parallelChildren || [];
+                const childSet = new Set(children);
+                // Hide/unhide child nodes
+                setNodes(nds => nds.map(n => childSet.has(n.id) ? ({ ...n, hidden: !collapsedGroups[id] ? true : false }) : n));
+                // Dim/undim child edges
+                setEdges(eds => eds.map(e => childSet.has(e.source) || childSet.has(e.target) ? ({ ...e, style: { ...e.style, opacity: !collapsedGroups[id] ? 0.08 : 1 } }) : e));
+              }}
+              onShowChildrenEditor={(id: string) => setShowChildrenEditor(id)}
+            />
 
             {/* Import State Machine Dialog */}
-            {showImportDialog && (
-              <div style={{
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                backgroundColor: 'rgba(0,0,0,0.5)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 9999
-              }}>
-                <div style={{
-                  background: isDarkMode ? '#1e293b' : 'white',
-                  borderRadius: 12,
-                  padding: 24,
-                  width: '90%',
-                  maxWidth: 800,
-                  maxHeight: '80vh',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
-                }}>
-                  <h3 style={{
-                    margin: '0 0 16px 0',
-                    fontSize: 18,
-                    fontWeight: 600,
-                    color: isDarkMode ? '#e5e7eb' : '#111827'
-                  }}>
-                    Import State Machine
-                  </h3>
-
-                  <p style={{
-                    margin: '0 0 16px 0',
-                    fontSize: 14,
-                    color: isDarkMode ? '#9ca3af' : '#6b7280'
-                  }}>
-                    Paste your state machine JSON from the backend. The structure should include states and edges arrays.
-                  </p>
-
-                  <textarea
-                    value={importJsonText}
-                    onChange={(e) => setImportJsonText(e.target.value)}
-                    placeholder={`{
-  "name": "Dynamic Workflow",
-  "initial_state": "initialization",
-  "states": [
-    {
-      "id": "state1",
-      "name": "State Name",
-      "type": "analysis",
-      "description": "Description",
-      "agent_role": "Role",
-      "tools": ["tool1", "tool2"],
-      "transitions": {...}
-    }
-  ],
-  "edges": [
-    {
-      "source": "state1",
-      "target": "state2",
-      "event": "success"
-    }
-  ]
-}`}
-                    style={{
-                      flex: 1,
-                      width: '100%',
-                      minHeight: 300,
-                      padding: 12,
-                      borderRadius: 8,
-                      border: `1px solid ${isDarkMode ? '#475569' : '#e5e7eb'}`,
-                      background: isDarkMode ? '#0f172a' : '#f9fafb',
-                      color: isDarkMode ? '#e5e7eb' : '#111827',
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      resize: 'vertical'
-                    }}
-                  />
-
-                  <div style={{
-                    display: 'flex',
-                    gap: 8,
-                    marginTop: 16,
-                    justifyContent: 'flex-end'
-                  }}>
-                    <button
-                      onClick={() => {
-                        setShowImportDialog(false);
-                        setImportJsonText('');
-                      }}
-                      style={{
-                        padding: '8px 16px',
-                        borderRadius: 6,
-                        border: `1px solid ${isDarkMode ? '#475569' : '#e5e7eb'}`,
-                        background: 'transparent',
-                        color: isDarkMode ? '#e5e7eb' : '#374151',
-                        cursor: 'pointer',
-                        fontSize: 14
-                      }}
-                    >
-                      Cancel
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        try {
-                          const machine = JSON.parse(importJsonText);
-                          importStateMachine(machine, true);
-                          setShowImportDialog(false);
-                          setImportJsonText('');
-                        } catch (e) {
-                          alert('Invalid JSON format. Please check your input.');
-                          console.error('JSON parse error:', e);
-                        }
-                      }}
-                      disabled={!importJsonText.trim()}
-                      style={{
-                        padding: '8px 16px',
-                        borderRadius: 6,
-                        background: '#3b82f6',
-                        color: 'white',
-                        border: 'none',
-                        cursor: importJsonText.trim() ? 'pointer' : 'not-allowed',
-                        opacity: importJsonText.trim() ? 1 : 0.5,
-                        fontSize: 14
-                      }}
-                    >
-                      Import as Professional Blocks
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        try {
-                          const machine = JSON.parse(importJsonText);
-                          importStateMachine(machine, false); // Import as regular blocks
-                          setShowImportDialog(false);
-                          setImportJsonText('');
-                        } catch (e) {
-                          alert('Invalid JSON format. Please check your input.');
-                          console.error('JSON parse error:', e);
-                        }
-                      }}
-                      disabled={!importJsonText.trim()}
-                      style={{
-                        padding: '8px 16px',
-                        borderRadius: 6,
-                        background: '#10b981',
-                        color: 'white',
-                        border: 'none',
-                        cursor: importJsonText.trim() ? 'pointer' : 'not-allowed',
-                        opacity: importJsonText.trim() ? 1 : 0.5,
-                        fontSize: 14
-                      }}
-                    >
-                      Import as Simple Blocks
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            <ImportStateMachineDialog
+              isOpen={showImportDialog}
+              isDarkMode={isDarkMode}
+              onClose={() => {
+                setShowImportDialog(false);
+              }}
+              onImport={(machine, isProfessional) => {
+                importStateMachine(machine, isProfessional);
+              }}
+            />
           </ReactFlow>
-        </div>
+          </div>
 
-        {/* Resizable Divider - only show when panel is visible */}
-        {showConversationPanel && (
-          <div
-            className="resize-divider"
-            title="Drag to resize • Double-click to reset"
-            onDoubleClick={() => {
-              setOutputPanelWidth(500); // Reset to default width
-            }}
-          onMouseDown={(e) => {
+          {/* Agent Conversation Panel */}
+          <AgentConversationPanel
+          showConversationPanel={showConversationPanel}
+          outputPanelWidth={outputPanelWidth}
+          agents={stableAgents}
+          nodes={nodes}
+          edges={edges}
+          selectedAgent={selectedAgent}
+          isDarkMode={isDarkMode}
+          showRawDataViewer={showRawDataViewer}
+          executionId={executionId}
+          onAgentSelect={handleAgentSelect}
+          onNodeFocus={handleNodeFocus}
+          onCloseRawDataViewer={() => setShowRawDataViewer(false)}
+          onResizeStart={(e) => {
             e.preventDefault();
             const startX = e.clientX;
             const startWidth = outputPanelWidth;
@@ -4272,477 +3817,178 @@ const FlowSwarmInterface: React.FC = () => {
             document.body.style.userSelect = 'none';
             document.body.classList.add('resizing');
           }}
-          style={{
-            position: 'absolute',
-            right: `${outputPanelWidth}px`,
-            top: 0,
-            bottom: '70px', // Stop before the input area
-            width: '6px',
-            cursor: 'col-resize',
-            zIndex: 50, // Reduced z-index to stay below modals
-            background: isDarkMode
-              ? 'linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.5), transparent)'
-              : 'linear-gradient(90deg, transparent, rgba(203, 213, 225, 0.5), transparent)',
-            transition: 'background 0.2s ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = isDarkMode
-              ? 'linear-gradient(90deg, transparent, #3b82f6, transparent)'
-              : 'linear-gradient(90deg, transparent, #3b82f6, transparent)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = isDarkMode
-              ? 'linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.5), transparent)'
-              : 'linear-gradient(90deg, transparent, rgba(203, 213, 225, 0.5), transparent)';
-          }}
-        >
-          {/* Drag Handle Indicator */}
-          <div
-            style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: '2px',
-              height: '40px',
-              background: isDarkMode ? '#475569' : '#cbd5e1',
-              borderRadius: '2px',
-            }}
-          />
+        />
         </div>
-        )}
+        </div>
 
-        {/* Chatbot Output Panel with Toggle */}
-        <div className="flow-output-panel" style={{
-          width: showConversationPanel ? `${outputPanelWidth}px` : '0px',
-          overflow: showConversationPanel ? 'visible' : 'hidden',
-          transition: 'width 0.3s ease-in-out'
-        }}>
-          {showConversationPanel && (
-            <>
-              <ImprovedChatbotOutput
-                agents={stableAgents}
-                nodes={nodes}
-                selectedAgent={selectedAgent}
-                onAgentSelect={handleAgentSelect}
-                onNodeFocus={handleNodeFocus}
-                isDarkMode={isDarkMode}
-              />
-
-              {/* Improved Raw Data Viewer */}
-              {showRawDataViewer && executionId && (
-                <ImprovedStateDataViewer
-                  execId={executionId}
-                  isDarkMode={isDarkMode}
-                  onClose={() => setShowRawDataViewer(false)}
-                  nodes={nodes}
-                  edges={edges}
-                />
-              )}
-            </>
-          )}
-
-          {/* Add Node Modal - Replaced by Unified Block Manager */}
-          {false && showAddNode && (
-            <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setShowAddNode(false)}>
-              <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:480, margin:'10vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
-                <div style={{ fontWeight:600, marginBottom:8 }}>Add Block</div>
-                <div style={{ display:'grid', gap:8 }}>
-                  <input className="task-input" placeholder="id (slug_case)" value={nodeDraft.id} onChange={e=>setNodeDraft({...nodeDraft, id:e.target.value})} />
-                  <input className="task-input" placeholder="name" value={nodeDraft.name} onChange={e=>setNodeDraft({...nodeDraft, name:e.target.value})} />
-                  <select className="task-input" value={nodeDraft.type} onChange={e=>setNodeDraft({...nodeDraft, type: e.target.value as any})}>
-                    <option value="analysis">analysis</option>
-                    <option value="tool_call">tool_call</option>
-                    <option value="decision">decision</option>
-                    <option value="parallel">parallel</option>
-                    <option value="final">final</option>
-                  </select>
-                  <input className="task-input" placeholder="agent role (optional)" value={nodeDraft.agent_role} onChange={e=>setNodeDraft({...nodeDraft, agent_role:e.target.value})} />
-                  <textarea className="task-input" rows={3} placeholder="description/prompt" value={nodeDraft.description} onChange={e=>setNodeDraft({...nodeDraft, description:e.target.value})} />
-                  <div style={{ border:`1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding:6, borderRadius:6, maxHeight:120, overflow:'auto' }}>
-                    <div style={{ fontSize:12, marginBottom:4 }}>Tools</div>
-                    {availableTools.map(t=>{
-                      const checked = nodeDraft.tools.includes(t);
-                      return (
-                        <label key={t} style={{ display:'inline-flex', alignItems:'center', gap:4, marginRight:8, marginBottom:6 }}>
-                          <input type="checkbox" checked={checked} onChange={(e)=>{
-                            const set = new Set(nodeDraft.tools);
-                            if (e.target.checked) set.add(t); else set.delete(t);
-                            setNodeDraft({...nodeDraft, tools: Array.from(set)});
-                          }} />
-                          <span>{t}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-                    <button className="panel-button" onClick={()=>setShowAddNode(false)}>Cancel</button>
-                    <button className="panel-button" onClick={async()=>{
-                      if (!executionId) return;
-                      if (!nodeDraft.id || !nodeDraft.name) return;
-                      try {
-                        const patch: any = { states: [{ id: nodeDraft.id, name: nodeDraft.name, type: nodeDraft.type, description: nodeDraft.description, agent_role: nodeDraft.agent_role, tools: nodeDraft.tools }] };
-                        await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) });
-                        // Update UI
-                        const newNode: Node = {
-                          id: nodeDraft.id,
-                          type: 'agent',
-                          position: { x: 100, y: 100 },
-                          data: { label: nodeDraft.name, name: nodeDraft.name, status:'pending', nodeType: nodeDraft.type, task: nodeDraft.description, tools: nodeDraft.tools, toolsPlanned: nodeDraft.tools, description: nodeDraft.description, agentRole: nodeDraft.agent_role, direction: layoutDirection },
-                          targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-                          sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-                        };
-                        setNodes(prev=>[...prev, newNode]);
-                        setShowAddNode(false);
-                      } catch (e) { console.error('Failed to add block', e); }
-                    }}>Create</button>
-                  </div>
+      {/* Add Node Modal - Replaced by Unified Block Manager */}
+      {false && showAddNode && (
+          <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setShowAddNode(false)}>
+            <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:480, margin:'10vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
+              <div style={{ fontWeight:600, marginBottom:8 }}>Add Block</div>
+              <div style={{ display:'grid', gap:8 }}>
+                <input className="task-input" placeholder="id (slug_case)" value={nodeDraft.id} onChange={e=>setNodeDraft({...nodeDraft, id:e.target.value})} />
+                <input className="task-input" placeholder="name" value={nodeDraft.name} onChange={e=>setNodeDraft({...nodeDraft, name:e.target.value})} />
+                <select className="task-input" value={nodeDraft.type} onChange={e=>setNodeDraft({...nodeDraft, type: e.target.value as any})}>
+                  <option value="analysis">analysis</option>
+                  <option value="tool_call">tool_call</option>
+                  <option value="decision">decision</option>
+                  <option value="parallel">parallel</option>
+                  <option value="final">final</option>
+                </select>
+                <input className="task-input" placeholder="agent role (optional)" value={nodeDraft.agent_role} onChange={e=>setNodeDraft({...nodeDraft, agent_role:e.target.value})} />
+                <textarea className="task-input" rows={3} placeholder="description/prompt" value={nodeDraft.description} onChange={e=>setNodeDraft({...nodeDraft, description:e.target.value})} />
+                <div style={{ border:`1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding:6, borderRadius:6, maxHeight:120, overflow:'auto' }}>
+                  <div style={{ fontSize:12, marginBottom:4 }}>Tools</div>
+                  {availableTools.map(t=>{
+                    const checked = nodeDraft.tools.includes(t);
+                    return (
+                      <label key={t} style={{ display:'inline-flex', alignItems:'center', gap:4, marginRight:8, marginBottom:6 }}>
+                        <input type="checkbox" checked={checked} onChange={(e)=>{
+                          const set = new Set(nodeDraft.tools);
+                          if (e.target.checked) set.add(t); else set.delete(t);
+                          setNodeDraft({...nodeDraft, tools: Array.from(set)});
+                        }} />
+                        <span>{t}</span>
+                      </label>
+                    );
+                  })}
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* Edge Editor */}
-          {editMode && edgeEdit && (
-            <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setEdgeEdit(null)}>
-              <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:420, margin:'15vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
-                <div style={{ fontWeight:600, marginBottom:8 }}>Edit Connection</div>
-                <div style={{ fontSize:12, marginBottom:8 }}>From <b>{edgeEdit.source}</b> to <b>{edgeEdit.target}</b></div>
-                <label>
-                  <div className="label">Event</div>
-                  <input className="task-input" defaultValue={edgeEdit.event || 'success'} onBlur={(e)=>setEdgeEdit({...edgeEdit, event: e.target.value})} />
-                </label>
-                <div style={{ display:'flex', gap:8, justifyContent:'space-between', marginTop:12 }}>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button className="panel-button" onClick={()=>setShowAddNode(false)}>Cancel</button>
                   <button className="panel-button" onClick={async()=>{
                     if (!executionId) return;
+                    if (!nodeDraft.id || !nodeDraft.name) return;
                     try {
-                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
-                      setEdges(prev=>prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target && ((e as any).label || 'success')===edgeEdit.event)));
-                      setEdgeEdit(null);
-                    } catch (e) { console.error('Failed to delete edge', e); }
-                  }}>Delete</button>
-                  <span />
-                  <button className="panel-button" onClick={()=>setEdgeEdit(null)}>Cancel</button>
-                  <button className="panel-button" onClick={async()=>{
-                    if (!executionId || !edgeEdit) return;
-                    try {
-                      // Change event: remove old then add new
-                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }], edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
-                      setEdges(prev=>{
-                        const rest = prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target));
-                        const newE: Edge = { id: `${edgeEdit.source}-${edgeEdit.target}-${edgeEdit.event}`, source: edgeEdit.source, target: edgeEdit.target, type:'smoothstep', animated:false, label: edgeEdit.event && edgeEdit.event!=='success'? edgeEdit.event : '', labelStyle:{ fill:'#94a3b8', fontSize:11 }, labelBgStyle:{ fill:'#1e293b', fillOpacity:0.8 }, style:{ stroke:'#52525b', strokeWidth:1.5 }, markerEnd:{ type: MarkerType.ArrowClosed, width:20, height:20, color:'#52525b' } };
-                        return [...rest, newE];
-                      });
-                      setEdgeEdit(null);
-                    } catch (e) { console.error('Failed to update edge', e); }
-                  }}>Save</button>
+                      const patch: any = { states: [{ id: nodeDraft.id, name: nodeDraft.name, type: nodeDraft.type, description: nodeDraft.description, agent_role: nodeDraft.agent_role, tools: nodeDraft.tools }] };
+                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) });
+                      // Update UI
+                      const newNode: Node = {
+                        id: nodeDraft.id,
+                        type: 'agent',
+                        position: { x: 100, y: 100 },
+                        data: { label: nodeDraft.name, name: nodeDraft.name, status:'pending', nodeType: nodeDraft.type, task: nodeDraft.description, tools: nodeDraft.tools, toolsPlanned: nodeDraft.tools, description: nodeDraft.description, agentRole: nodeDraft.agent_role, direction: layoutDirection },
+                        targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
+                        sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
+                      };
+                      setNodes(prev=>[...prev, newNode]);
+                      setShowAddNode(false);
+                    } catch (e) { console.error('Failed to add block', e); }
+                  }}>Create</button>
                 </div>
               </div>
             </div>
-          )}
-        </div>
-      </div>
+          </div>
+      )}
 
-      {/* Original implementation kept below, commented out */}
-      {false && (
-        <>
-          <div className="output-panel-header">
-            <h2 className="panel-title">Agent Output</h2>
-            <div className="header-actions">
-              <button
-                className="panel-action-btn"
-                onClick={() => {
-                  const activeAgent = Array.from(agents.values()).find(a => a.status === 'running');
-                  if (activeAgent) {
-                    setSelectedAgent(activeAgent.id);
-                    const node = nodes.find(n => n.id === activeAgent.id);
-                    if (node) {
-                      setCenter(node.position.x + 110, node.position.y + 50, { zoom: 1.2, duration: 300 });
-                    }
-                  }
-                }}
-                title="Focus Active"
-              >
-                Focus Active
-              </button>
-              <button
-                className="panel-action-btn"
-                onClick={() => setSelectedAgent(null)}
-                disabled={!selectedAgent}
-              >
-                Clear
-              </button>
+      {/* Edge Editor */}
+      {editMode && edgeEdit && (
+          <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setEdgeEdit(null)}>
+            <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:420, margin:'15vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
+              <div style={{ fontWeight:600, marginBottom:8 }}>Edit Connection</div>
+              <div style={{ fontSize:12, marginBottom:8 }}>From <b>{edgeEdit.source}</b> to <b>{edgeEdit.target}</b></div>
+              <label>
+                <div className="label">Event</div>
+                <input className="task-input" defaultValue={edgeEdit.event || 'success'} onBlur={(e)=>setEdgeEdit({...edgeEdit, event: e.target.value})} />
+              </label>
+              <div style={{ display:'flex', gap:8, justifyContent:'space-between', marginTop:12 }}>
+                <button className="panel-button" onClick={async()=>{
+                  if (!executionId) return;
+                  try {
+                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
+                    setEdges(prev=>prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target && ((e as any).label || 'success')===edgeEdit.event)));
+                    setEdgeEdit(null);
+                  } catch (e) { console.error('Failed to delete edge', e); }
+                }}>Delete</button>
+                <span />
+                <button className="panel-button" onClick={()=>setEdgeEdit(null)}>Cancel</button>
+                <button className="panel-button" onClick={async()=>{
+                  if (!executionId || !edgeEdit) return;
+                  try {
+                    // Change event: remove old then add new
+                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }], edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
+                    setEdges(prev=>{
+                      const rest = prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target));
+                      const newE: Edge = { id: `${edgeEdit.source}-${edgeEdit.target}-${edgeEdit.event}`, source: edgeEdit.source, target: edgeEdit.target, type:'smoothstep', animated:false, label: edgeEdit.event && edgeEdit.event!=='success'? edgeEdit.event : '', labelStyle:{ fill:'#94a3b8', fontSize:11 }, labelBgStyle:{ fill:'#1e293b', fillOpacity:0.8 }, style:{ stroke:'#52525b', strokeWidth:1.5 }, markerEnd:{ type: MarkerType.ArrowClosed, width:20, height:20, color:'#52525b' } };
+                      return [...rest, newE];
+                    });
+                    setEdgeEdit(null);
+                  } catch (e) { console.error('Failed to update edge', e); }
+                }}>Save</button>
+              </div>
             </div>
           </div>
-          
-          <div className="output-scroll-container">
-            <div className="output-list">
-              {Array.from(agents.values()).map(agent => {
-                const isExpanded = selectedAgent === agent.id || (!selectedAgent && agent.status === 'running');
-                const node = nodes.find(n => n.id === agent.id);
-                const nodeData = node?.data;
-                
-                return (
-                  <div
-                    key={agent.id}
-                    className={`output-card ${agent.status} ${selectedAgent === agent.id ? 'selected' : ''} ${isExpanded ? 'expanded' : ''}`}
-                  >
-                    <div 
-                      className="card-header"
-                      onClick={() => setSelectedAgent(selectedAgent === agent.id ? null : agent.id)}
-                    >
-                      <div className="card-header-left">
-                        <span className={`status-dot ${agent.status}`} />
-                        <div className="agent-info">
-                          <span className="agent-name">{agent.name}</span>
-                          {nodeData?.agentRole && (
-                            <span className="agent-role">{nodeData.agentRole}</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="card-header-right">
-                        {agent.status === 'running' && (
-                          <span className="running-indicator">
-                            <span className="pulse-dot" />
-                            Live
-                          </span>
-                        )}
-                        {agent.status === 'completed' && (
-                          <span className="status-text success">✓ Done</span>
-                        )}
-                        {agent.status === 'failed' && (
-                          <span className="status-text error">✗ Failed</span>
-                        )}
-                        {agent.status === 'pending' && (
-                          <span className="status-text pending">⏳ Waiting</span>
-                        )}
-                        {agent.startTime && (
-                          <span className="duration">
-                            {agent.endTime ? 
-                              `${((agent.endTime - agent.startTime) / 1000).toFixed(1)}s` :
-                              `${((Date.now() - agent.startTime) / 1000).toFixed(0)}s`
-                            }
-                          </span>
-                        )}
-                        <span className="expand-icon">
-                          {isExpanded ? '▼' : '▶'}
-                        </span>
-                      </div>
-                    </div>
-                    
-                    {isExpanded && (
-                      <div className="card-body">
-                        {/* Agent metadata section */}
-                        {(nodeData?.task || nodeData?.description || (nodeData?.toolsPlanned && nodeData.toolsPlanned.length > 0)) && (
-                          <div className="agent-metadata">
-                            {nodeData?.task && (
-                              <div className="metadata-item">
-                                <span className="metadata-label">Task:</span>
-                                <span className="metadata-value">{nodeData.task}</span>
-                              </div>
-                            )}
-                            {nodeData?.description && (
-                              <div className="metadata-item">
-                                <span className="metadata-label">Description:</span>
-                                <span className="metadata-value">{nodeData.description}</span>
-                              </div>
-                            )}
-                            {nodeData?.toolsPlanned && nodeData.toolsPlanned.length > 0 && (
-                              <div className="metadata-item">
-                                <span className="metadata-label">Tools:</span>
-                                <div className="tools-list">
-                                  {nodeData.toolsPlanned.map((tool: string, idx: number) => (
-                                    <span key={idx} className="tool-badge">{tool}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {agent.parent && (
-                              <div className="metadata-item">
-                                <span className="metadata-label">Parent:</span>
-                                <span className="metadata-value">{agent.parent}</span>
-                              </div>
-                            )}
-                            {agent.depth !== undefined && agent.depth > 0 && (
-                              <div className="metadata-item">
-                                <span className="metadata-label">Depth Level:</span>
-                                <span className="metadata-value">Level {agent.depth}</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        <div className="card-content">
-                          {agent.output ? (
-                            <div className="markdown-output">
-                              <ReactMarkdown 
-                                remarkPlugins={[remarkGfm]}
-                                components={{
-                                  code: ({className, children, ...props}: any) => {
-                                    const match = /language-(\w+)/.exec(className || '');
-                                    const isInline = !match;
-                                    return !isInline ? (
-                                      <div className="code-block">
-                                        <div className="code-header">
-                                          <span className="code-lang">{match[1]}</span>
-                                        </div>
-                                        <pre className="code-content">
-                                          <code className={className} {...props}>
-                                            {children}
-                                          </code>
-                                        </pre>
-                                      </div>
-                                    ) : (
-                                      <code className={`inline-code ${className || ''}`} {...props}>
-                                        {children}
-                                      </code>
-                                    );
-                                  },
-                                  p: ({children}) => <p className="markdown-p">{children}</p>,
-                                  ul: ({children}) => <ul className="markdown-list">{children}</ul>,
-                                  ol: ({children}) => <ol className="markdown-list ordered">{children}</ol>,
-                                  li: ({children}) => <li className="markdown-li">{children}</li>,
-                                  h1: ({children}) => <h4 className="markdown-h1">{children}</h4>,
-                                  h2: ({children}) => <h5 className="markdown-h2">{children}</h5>,
-                                  h3: ({children}) => <h6 className="markdown-h3">{children}</h6>,
-                                  blockquote: ({children}) => <blockquote className="markdown-blockquote">{children}</blockquote>,
-                                  a: ({href, children}) => <a href={href} target="_blank" rel="noopener noreferrer" className="markdown-link">{children}</a>,
-                                }}
-                              >
-                                {agent.output}
-                              </ReactMarkdown>
-                            </div>
-                          ) : (
-                            <div className="no-output">
-                              {agent.status === 'running' ? (
-                                <div className="loading-dots">
-                                  <span /><span /><span />
-                                </div>
-                              ) : (
-                                <span>Waiting for output...</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        
-                        {agent.error && (
-                          <div className="card-error">
-                            <span className="error-icon">⚠</span>
-                            <span className="error-text">{agent.error}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              
-              {agents.size === 0 && (
-                <div className="empty-state">
-                  <div className="empty-icon">🤖</div>
-                  <h3>No agents yet</h3>
-                  <p>Enter a task below to start execution</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      )} {/* End of false block - old implementation */}
+      )}
 
       {/* Block Settings Panel */}
       {selectedNodeForSettings && (
-        <BlockSettingsPanel
-          node={nodes.find(n => n.id === selectedNodeForSettings.id) || selectedNodeForSettings}
-          isDarkMode={isDarkMode}
-          onClose={() => setSelectedNodeForSettings(null)}
-          onUpdate={(nodeId: string, data: any) => {
-            setNodes((nds) => {
-              // If node is marked as start, ensure uniqueness by clearing others
-              if (data && data.isStart) {
-                return nds.map(n => ({
-                  ...n,
-                  data: {
-                    ...n.data,
-                    ...(n.id === nodeId ? data : {}),
-                    isStart: n.id === nodeId
-                  }
-                }));
-              }
-              return nds.map((n) =>
-                n.id === nodeId
-                  ? { ...n, data: { ...n.data, ...data } }
-                  : n
-              );
-            });
-            // Update the selectedNodeForSettings to reflect the changes
-            setSelectedNodeForSettings(prev =>
-              prev && prev.id === nodeId
-                ? { ...prev, data: { ...prev.data, ...data } }
-                : prev
-            );
-          }}
-          onDelete={(nodeId: string) => {
-            setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-            setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
-            setSelectedNodeForSettings(null);
-            setSelectedAgent(null);
-          }}
-          onDuplicate={(nodeId: string) => {
-            const nodeToDuplicate = nodes.find((n) => n.id === nodeId);
-            if (nodeToDuplicate) {
-              const newNode = {
-                ...nodeToDuplicate,
-                id: uuidv4(),
-                position: {
-                  x: nodeToDuplicate.position.x + 50,
-                  y: nodeToDuplicate.position.y + 50
+          <BlockSettingsPanel
+            node={nodes.find(n => n.id === selectedNodeForSettings!.id) || selectedNodeForSettings}
+            isDarkMode={isDarkMode}
+            onClose={() => setSelectedNodeForSettings(null)}
+            onUpdate={(nodeId: string, data: any) => {
+              setNodes((nds) => {
+                // If node is marked as start, ensure uniqueness by clearing others
+                if (data && data.isStart) {
+                  return nds.map(n => ({
+                    ...n,
+                    data: {
+                      ...n.data,
+                      ...(n.id === nodeId ? data : {}),
+                      isStart: n.id === nodeId
+                    }
+                  }));
                 }
-              };
-              setNodes((nds) => [...nds, newNode]);
-            }
-          }}
-          availableTools={availableTools}
-        />
+                return nds.map((n) =>
+                  n.id === nodeId
+                    ? { ...n, data: { ...n.data, ...data } }
+                    : n
+                );
+              });
+              // Update the selectedNodeForSettings to reflect the changes
+              setSelectedNodeForSettings(prev =>
+                prev && prev.id === nodeId
+                  ? { ...prev, data: { ...prev.data, ...data } }
+                  : prev
+              );
+            }}
+            onDelete={(nodeId: string) => {
+              setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+              setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+              setSelectedNodeForSettings(null);
+              setSelectedAgent(null);
+            }}
+            onDuplicate={(nodeId: string) => {
+              const nodeToDuplicate = nodes.find((n) => n.id === nodeId);
+              if (nodeToDuplicate) {
+                const newNode = {
+                  ...nodeToDuplicate,
+                  id: uuidv4(),
+                  position: {
+                    x: nodeToDuplicate.position.x + 50,
+                    y: nodeToDuplicate.position.y + 50
+                  }
+                };
+                setNodes((nds) => [...nds, newNode]);
+              }
+            }}
+            availableTools={availableTools}
+          />
       )}
 
       {/* Command Bar */}
-      <div className="command-bar">
-        <select
-          className="mode-select"
-          value={executionMode}
-          onChange={(e) => setExecutionMode(e.target.value as any)}
-          disabled={isRunning}
-        >
-          <option value="dynamic">Dynamic</option>
-          <option value="neural">Neural</option>
-          <option value="parallel">Parallel</option>
-          <option value="sequential">Sequential</option>
-        </select>
-        
-        <input
-          className="task-input"
-          value={task}
-          onChange={(e) => setTask(e.target.value)}
-          placeholder="Enter your task..."
-          disabled={isRunning}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !isRunning && task.trim()) {
-              startExecution();
-            }
-          }}
-        />
-        
-        <button
-          className={`execute-btn ${isRunning ? 'stop' : ''}`}
-          onClick={isRunning ? stopExecution : startExecution}
-          disabled={!isRunning && !task.trim()}
-        >
-          {isRunning ? '⏹ Stop' : '▶ Execute'}
-        </button>
-      </div>
+      <ExecutionControlBar
+        executionMode={executionMode as ExecutionMode}
+        task={task}
+        isRunning={isRunning}
+        onExecutionModeChange={(mode) => setExecutionMode(mode)}
+        onTaskChange={setTask}
+        onStartExecution={startExecution}
+        onStopExecution={stopExecution}
+      />
     </div>
-  );
-};
-
+    );
+  };
 
 // Wrapper Component with Provider
 const FlowSwarmInterfaceWrapper: React.FC = () => {

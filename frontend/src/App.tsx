@@ -23,6 +23,7 @@ import EventDrivenSwarmInterface from './components/swarm/EventDrivenSwarmInterf
 import EfficientSwarmInterface from './components/swarm/EfficientSwarmInterface';
 import ModernFlowInterface from './components/swarm/ModernFlowInterface';
 import FlowSwarmInterface from './components/swarm/FlowSwarmInterface';
+import { ReactFlowProvider } from 'reactflow';
 import StateMachineInterface from './components/swarm/StateMachineInterface';
 import ProfessionalStateMachine from './components/swarm/ProfessionalStateMachine';
 import MessengerSwarmInterface from './components/swarm/MessengerSwarmInterface';
@@ -80,7 +81,7 @@ function App() {
             <Route path="/flow" element={<ModernFlowInterface />} />
             
             {/* React Flow Based Professional Interface */}
-            <Route path="/flow-pro" element={<FlowSwarmInterface />} />
+            <Route path="/flow-pro" element={<ReactFlowProvider><FlowSwarmInterface /></ReactFlowProvider>} />
             
             {/* State Machine Workflow Interface */}
             <Route path="/state-machine" element={<StateMachineInterface />} />
