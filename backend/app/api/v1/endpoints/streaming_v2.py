@@ -24,6 +24,7 @@ from app.services.strands_agent_runtime import (
 )
 from app.services.true_dynamic_coordinator import TrueDynamicCoordinator
 from app.services.neural_thinking_coordinator import NeuralThinkingCoordinator
+from app.services.ai_workflow_assistant import ai_workflow_assistant
 
 logger = logging.getLogger(__name__)
 
@@ -765,4 +766,109 @@ async def execute_with_machine(request: ExecuteWithMachineRequest):
         "websocket_url": f"/api/v1/ws/{exec_id}",
         "status": "running",
         "message": "Execution started with provided machine"
+    }
+
+
+# ==================== AI WORKFLOW ASSISTANT ENDPOINTS ====================
+
+class AIAssistantStartRequest(BaseModel):
+    """Request to start AI workflow assistant session"""
+    task: str = Field(..., description="The user's task description")
+    session_id: Optional[str] = Field(None, description="Optional session ID")
+    reuse_existing: bool = Field(False, description="If True, reuse existing session if it exists")
+
+
+class AIAssistantMessageRequest(BaseModel):
+    """User message to AI assistant"""
+    session_id: str = Field(..., description="Session ID")
+    message: str = Field(..., description="User's message")
+    current_canvas_state: Optional[Dict[str, Any]] = Field(None, description="Current canvas nodes and edges")
+
+
+@router.post("/ai-assistant/start")
+async def start_ai_assistant(request: AIAssistantStartRequest):
+    """
+    Start a new AI workflow assistant session.
+    AI will analyze the task and generate initial workflow nodes on canvas.
+
+    Args:
+        task: Description of workflow to build
+        session_id: Optional session ID (auto-generated if not provided)
+        reuse_existing: If True, continue existing session instead of creating new one
+    """
+    session_id = request.session_id or str(uuid.uuid4())
+
+    try:
+        result = await ai_workflow_assistant.start_session(
+            session_id=session_id,
+            task=request.task,
+            reuse_existing=request.reuse_existing
+        )
+        return {
+            "success": True,
+            **result
+        }
+    except Exception as e:
+        logger.error(f"Error starting AI assistant: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ai-assistant/message")
+async def send_ai_assistant_message(request: AIAssistantMessageRequest):
+    """
+    Send a message to AI assistant.
+    AI will respond and generate node operations to update the canvas.
+    """
+    try:
+        result = await ai_workflow_assistant.send_message(
+            session_id=request.session_id,
+            user_message=request.message,
+            current_canvas_state=request.current_canvas_state
+        )
+        return {
+            "success": True,
+            **result
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in AI assistant message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ai-assistant/{session_id}/status")
+async def get_ai_assistant_status(session_id: str):
+    """Get current status of AI assistant session"""
+    session = ai_workflow_assistant.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {
+        "session_id": session.session_id,
+        "task": session.task,
+        "message_count": len(session.messages),
+        "node_count": len(session.current_nodes),
+        "edge_count": len(session.current_edges),
+        "nodes": session.current_nodes,
+        "edges": session.current_edges
+    }
+
+
+@router.delete("/ai-assistant/{session_id}")
+async def clear_ai_assistant_session(session_id: str):
+    """Delete an AI assistant session"""
+    deleted = ai_workflow_assistant.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"success": True, "message": "Session deleted"}
+
+
+@router.get("/ai-assistant/sessions/list")
+async def list_ai_assistant_sessions():
+    """List all active AI assistant sessions"""
+    sessions = ai_workflow_assistant.list_sessions()
+    return {
+        "success": True,
+        "sessions": sessions,
+        "count": len(sessions)
     }

@@ -10,6 +10,7 @@ interface ExecutionControlBarProps {
   onTaskChange: (task: string) => void;
   onStartExecution: () => void;
   onStopExecution: () => void;
+  onToggleAIChat?: () => void;
 }
 
 export const ExecutionControlBar: React.FC<ExecutionControlBarProps> = ({
@@ -20,6 +21,7 @@ export const ExecutionControlBar: React.FC<ExecutionControlBarProps> = ({
   onTaskChange,
   onStartExecution,
   onStopExecution,
+  onToggleAIChat,
 }) => {
   return (
     <div className="command-bar">
@@ -39,7 +41,7 @@ export const ExecutionControlBar: React.FC<ExecutionControlBarProps> = ({
         className="task-input"
         value={task}
         onChange={(e) => onTaskChange(e.target.value)}
-        placeholder="Enter your task..."
+        placeholder="Enter your task or click AI Assistant..."
         disabled={isRunning}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !isRunning && task.trim()) {
@@ -47,6 +49,27 @@ export const ExecutionControlBar: React.FC<ExecutionControlBarProps> = ({
           }
         }}
       />
+
+      {onToggleAIChat && (
+        <button
+          className="ai-chat-btn"
+          onClick={onToggleAIChat}
+          title="AI Workflow Assistant"
+          style={{
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            border: 'none',
+            padding: '8px 16px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 600,
+            marginRight: '8px'
+          }}
+        >
+          🤖 AI Assistant
+        </button>
+      )}
 
       <button
         className={`execute-btn ${isRunning ? 'stop' : ''}`}

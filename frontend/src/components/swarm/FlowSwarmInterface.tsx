@@ -25,6 +25,7 @@ import { ImportStateMachineDialog } from './components/ImportStateMachineDialog'
 import { ParallelGroupOverlay } from './components/ParallelGroupOverlay';
 import { ParallelChildrenEditor } from './components/ParallelChildrenEditor';
 import { AgentConversationPanel } from './components/AgentConversationPanel';
+import { AIWorkflowChat } from './components/AIWorkflowChat';
 import { v4 as uuidv4 } from 'uuid';
 
 const FlowSwarmInterface: React.FC = () => {
@@ -56,6 +57,7 @@ const FlowSwarmInterface: React.FC = () => {
     showConversationPanel,
     highlightPath,
     showToolsHub, setShowToolsHub,
+    showAIChat, setShowAIChat,
     decisionPrompt, setDecisionPrompt,
     inputPrompt, setInputPrompt,
     inputValue, setInputValue,
@@ -1077,6 +1079,177 @@ const FlowSwarmInterface: React.FC = () => {
         onTaskChange={setTask}
         onStartExecution={startExecution}
         onStopExecution={stopExecution}
+        onToggleAIChat={() => setShowAIChat(!showAIChat)}
+      />
+
+      {/* AI Workflow Chat */}
+      <AIWorkflowChat
+        isOpen={showAIChat}
+        onToggle={() => setShowAIChat(!showAIChat)}
+        currentNodes={nodes}
+        currentEdges={edges}
+        onOperations={(operations, aiNodes, aiEdges) => {
+          console.log('🤖 AI Operations:', operations.length, 'operations');
+
+          operations.forEach((op: any, idx: number) => {
+            console.log(`  ${idx + 1}. ${op.type}:`, op);
+
+            if (op.type === 'add_node') {
+              const nodeData = op.node;
+
+              // Use the professional handler with proper position
+              const position = nodeData.position || {
+                x: 100 + (idx * 300),
+                y: 200
+              };
+
+              // Create a complete professional node using the same structure as handlers
+              const newNode = {
+                id: nodeData.id || uuidv4(),
+                type: 'professional',
+                position: position,
+                data: {
+                  type: nodeData.type || 'analysis',
+                  name: nodeData.name || 'New Node',
+                  description: nodeData.description || '',
+                  agent_role: nodeData.agent_role || 'Agent',
+                  tools: nodeData.tools || [],
+                  toolsPlanned: nodeData.tools || [],
+                  transitions: {},
+                  enabled: true,
+                  advancedMode: false,
+                  isWide: false,
+                  isDarkMode,
+                  nodeType: nodeData.type,
+                  availableTools: availableTools,
+                  isStart: nodeData.id === 'start' || nodeData.name?.toLowerCase() === 'start',
+                  onUpdate: (id: string, updates: any) => {
+                    setNodes((nds) =>
+                      nds.map((node) =>
+                        node.id === id ? { ...node, data: { ...node.data, ...updates } } : node
+                      )
+                    );
+                  },
+                  onDelete: (id: string) => {
+                    setNodes((nds) => nds.filter((n) => n.id !== id));
+                    setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
+                  },
+                  onDuplicate: (id: string) => {
+                    const nodeToDup = nodes.find((n) => n.id === id);
+                    if (nodeToDup) {
+                      const newId = uuidv4();
+                      const newNode = {
+                        ...nodeToDup,
+                        id: newId,
+                        position: {
+                          x: nodeToDup.position.x + 50,
+                          y: nodeToDup.position.y + 50,
+                        },
+                        data: {
+                          ...nodeToDup.data,
+                          name: `${nodeToDup.data.name} (Copy)`,
+                        },
+                      };
+                      setNodes((nds) => [...nds, newNode]);
+                    }
+                  },
+                },
+              };
+
+              setNodes((nds) => {
+                // If this is a start node, remove isStart from other nodes
+                if (newNode.data.isStart) {
+                  return nds
+                    .map((n) => ({ ...n, data: { ...n.data, isStart: false } }))
+                    .concat(newNode);
+                }
+                return [...nds, newNode];
+              });
+
+            } else if (op.type === 'remove_node') {
+              const nodeId = op.node_id;
+              setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+              setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+
+            } else if (op.type === 'modify_node') {
+              const nodeId = op.node_id;
+              const updates = op.updates || {};
+              setNodes((nds) =>
+                nds.map((node) =>
+                  node.id === nodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          ...updates,
+                          // Update toolsPlanned if tools are updated
+                          toolsPlanned: updates.tools || node.data.toolsPlanned,
+                        },
+                      }
+                    : node
+                )
+              );
+
+            } else if (op.type === 'connect_nodes') {
+              const edgeId = `e-${op.source}-${op.target}-${op.event || 'success'}`;
+              const newEdge = {
+                id: edgeId,
+                source: op.source,
+                target: op.target,
+                sourceHandle: op.event === 'failure' ? 'failure' : 'success',
+                targetHandle: 'target',
+                type: 'smoothstep',
+                animated: op.event !== 'failure',
+                label: op.event && op.event !== 'success' ? op.event : '',
+                style: {
+                  stroke: op.event === 'failure' ? '#ef4444' : isDarkMode ? '#10b981' : '#059669',
+                  strokeWidth: 2,
+                },
+                markerEnd: {
+                  type: MarkerType.ArrowClosed,
+                  width: 20,
+                  height: 20,
+                  color: op.event === 'failure' ? '#ef4444' : isDarkMode ? '#10b981' : '#059669',
+                },
+              };
+
+              setEdges((eds) => {
+                // Don't add duplicate edges
+                const exists = eds.some(
+                  (e) => e.source === op.source && e.target === op.target && (e.label || 'success') === (op.event || 'success')
+                );
+                return exists ? eds : [...eds, newEdge];
+              });
+
+            } else if (op.type === 'disconnect_nodes') {
+              const source = op.source;
+              const target = op.target;
+              const event = op.event;
+              setEdges((eds) =>
+                eds.filter((e) => !(
+                  e.source === source &&
+                  e.target === target &&
+                  (!event || (e.label || 'success') === event)
+                ))
+              );
+
+            } else if (op.type === 'clear_all') {
+              setNodes([]);
+              setEdges([]);
+
+            } else if (op.type === 'auto_layout') {
+              // Trigger auto-layout
+              setTimeout(() => handlers.updateGraph(true), 100);
+            }
+          });
+
+          // Auto-layout after all operations
+          setTimeout(() => {
+            handlers.updateGraph(true);
+          }, 150);
+        }}
+        isDarkMode={isDarkMode}
+        wsRef={state.wsRef}
       />
     </div>
   );
