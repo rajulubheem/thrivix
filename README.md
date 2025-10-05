@@ -7,9 +7,9 @@
 [![React](https://img.shields.io/badge/React-19.1.1-blue.svg)](https://reactjs.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
-### **Visual AI Workflow Builder**
+### **Build Visual AI Workflows with Real-Time Execution**
 
-Transform complex tasks into intelligent workflows. Watch AI agents collaborate in real-time.
+Design state machines, orchestrate agent swarms, and watch AI execute complex tasks—all in your browser.
 
 [Watch Demo](https://youtu.be/WDMEXh4r6-Q) • [GitHub](https://github.com/rajulubheem/thrivix)
 
@@ -17,85 +17,69 @@ Transform complex tasks into intelligent workflows. Watch AI agents collaborate 
 
 ---
 
-## 💡 What is Thrivix?
+## 🎯 What is Thrivix?
 
-Thrivix is a **visual AI orchestration platform** that turns your natural language descriptions into executable multi-agent workflows. Instead of managing prompts and context windows, you design workflows where specialized AI agents handle different tasks—research, coding, analysis, decision-making—and collaborate to deliver complete solutions.
+Thrivix is a **visual workflow platform** for building and executing AI-powered workflows. Create state machines with drag-and-drop blocks, orchestrate multiple AI agents, and monitor execution in real-time with interactive diagrams.
 
-### The Problem We Solve
+**Three Ways to Build:**
 
-Working with AI tools today means:
-- ⚠️ Managing long conversation threads that lose context
-- ⚠️ Repeatedly copying outputs between different AI tools
-- ⚠️ Manually coordinating research, coding, and validation steps
-- ⚠️ No visibility into what the AI is actually doing
-- ⚠️ Starting over when something breaks mid-task
-
-### How Thrivix Helps
-
-✅ **See Your Workflow** - Visual diagrams show exactly how agents collaborate
-✅ **Reusable Pipelines** - Save workflows and run them with different inputs
-✅ **Real-Time Transparency** - Watch agents work, see which tools they're using
-✅ **Resume Anywhere** - Execution failed? Resume from any step
-✅ **Specialized Agents** - Each agent has specific tools and expertise
-✅ **No Code Required** - Describe what you want, Thrivix builds the workflow
+1. **Flow Pro** - Design state machines visually with nodes and edges
+2. **Agent Swarm** - Deploy multi-agent teams that collaborate on tasks
+3. **Research Assistant** - Conversational AI with web search and citations
 
 ---
 
-## 🎯 Core Features
+## 🚀 Core Features
 
-### 1. **Flow Pro** - AI-Generated Workflows
+### 1. Flow Pro - Visual State Machine Designer
+
+Build complex workflows with a drag-and-drop interface powered by ReactFlow:
+
+- **100+ Tool Blocks** - Web search, code execution, file ops, data processing
+- **Agent Blocks** - AI-powered decision makers with specialized roles
+- **Visual Execution** - Watch state transitions and tool usage in real-time
+- **Parallel Execution** - Run multiple branches simultaneously
+- **Resume from Failures** - Restart from any state when errors occur
+
+**Use Cases:**
 ```
-You: "Design a payment processing system with security analysis"
-
-Thrivix:
-├── 🔍 Research Agent → Analyzes payment standards (PCI-DSS, OAuth)
-├── 🏗️  Architect Agent → Designs system with security layers
-├── 💻 Code Agent → Generates implementation examples
-├── 🔐 Security Agent → Reviews for vulnerabilities
-└── 📝 Documentation Agent → Creates API docs and guides
-```
-
-**What makes it unique:**
-- Automatically generates state machines from task descriptions
-- Each agent gets context from previous steps
-- Visual execution tracking with real-time updates
-- Rerun from any failed step without starting over
-
-### 2. **Visual Workflow Builder** - Drag & Drop Interface
-
-Build custom workflows with:
-- **100+ integrated tools** (web search, code execution, file operations, API calls)
-- **Tool blocks** - Individual operations you can chain together
-- **Agent blocks** - AI-powered decision makers with specific expertise
-- **Parallel execution** - Run multiple agents simultaneously
-- **Conditional routing** - Different paths based on results
-
-**Example Use Case:** Competitive Analysis Pipeline
-```
-Start → Web Search → Data Extraction → Python Analysis → Chart Generation → Report Writing → End
+Research Pipeline:  Web Search → Extract Data → Analyze → Generate Report
+Code Review Flow:   Read Files → Run Tests → Security Scan → Document
+Data Pipeline:      Fetch API → Transform → Visualize → Export
 ```
 
-### 3. **Research Assistant** - Three Intelligence Modes
+### 2. Agent Swarm - Multi-Agent Collaboration
 
-- **Fast Mode** - Quick answers from GPT-4 (< 5 seconds)
-- **Deep Mode** - Web research + synthesis (10-30 seconds)
-- **Scholar Mode** - Academic rigor with citations (30-60 seconds)
+Deploy specialized AI agents that work together:
 
-All with streaming responses and conversation memory.
+- **Specialized Roles** - Research, coding, analysis, documentation agents
+- **Context Sharing** - Agents see outputs from previous agents
+- **Real-Time Streaming** - Watch agents work with live updates
+- **Session Management** - Persistent conversations with history
 
-### 4. **Agent Swarm** - Specialized Collaboration
+**How It Works:**
+```
+User Task: "Analyze competitor pricing strategies"
 
-Watch multiple agents tackle different aspects of your task:
-- Research agents gather information
-- Coding agents write and test code
-- Review agents check quality
-- Documentation agents explain everything
+→ Research Agent: Searches web for pricing data
+→ Analysis Agent: Processes and compares data
+→ Visualization Agent: Creates charts and graphs
+→ Summary Agent: Writes executive summary
+```
 
-Real-time visualization shows who's working and what they're producing.
+### 3. Research Assistant - AI Chat with Tools
+
+Conversational interface with three research modes:
+
+- **Fast Mode** - Quick GPT-4 responses (< 5 seconds)
+- **Deep Mode** - Web research + multi-source synthesis (10-30s)
+- **Scholar Mode** - Academic rigor with citations (30-60s)
+
+Features: Web search via Tavily, streaming responses, conversation history, source tracking.
 
 ---
 
-## 🎬 Demo Videos
+## 🎬 See It In Action
 
 <div align="center">
 
@@ -106,21 +90,21 @@ Real-time visualization shows who's working and what they're producing.
   <a href="https://youtu.be/WDMEXh4r6-Q">
     <img src="https://img.youtube.com/vi/WDMEXh4r6-Q/0.jpg" alt="Flow Pro Demo" width="250"/>
   </a>
-  <br/>State machine generation from text
+  <br/>Visual workflow builder
 </td>
 <td width="33%" align="center">
   <b>Research Mode</b><br/>
   <a href="https://youtu.be/SHlG25Bw-w8">
     <img src="https://img.youtube.com/vi/SHlG25Bw-w8/0.jpg" alt="Research Demo" width="250"/>
   </a>
-  <br/>Web search and analysis
+  <br/>Web search & analysis
 </td>
 <td width="33%" align="center">
-  <b>Sequential Agents</b><br/>
+  <b>Agent Swarm</b><br/>
   <a href="https://youtu.be/bzpWFTz18do">
     <img src="https://img.youtube.com/vi/bzpWFTz18do/0.jpg" alt="Swarm Demo" width="250"/>
   </a>
-  <br/>Agent collaboration workflow
+  <br/>Multi-agent collaboration
 </td>
 </tr>
 </table>
@@ -129,272 +113,230 @@ Real-time visualization shows who's working and what they're producing.
 
 ---
 
+## 🛠️ Real-World Examples
+
+### Software Development
+**Workflow: Code Review Pipeline**
+1. File Reader Block → Reads codebase files
+2. Test Runner Block → Executes test suite
+3. Security Scan Block → Checks vulnerabilities
+4. Documentation Agent → Generates API docs
+5. Summary Agent → Creates review report
+
+### Business Analysis
+**Workflow: Market Research**
+1. Web Search Block → Gathers industry data (Tavily)
+2. Data Extraction Block → Parses key metrics
+3. Python REPL Block → Statistical analysis
+4. Visualization Block → Charts and graphs
+5. Report Writing Agent → Executive summary
+
+### Content Creation
+**Agent Swarm: Technical Documentation**
+- Research Agent → Finds latest best practices
+- Outline Agent → Structures the document
+- Writing Agent → Drafts sections
+- Code Agent → Creates examples
+- Review Agent → Checks accuracy
+
+---
+
 ## 🚀 Quick Start
 
 ### Prerequisites
-- **Python 3.11+**
-- **Node.js 18+**
-- **Redis** (required for streaming)
+- Python 3.11+
+- Node.js 18+
+- Redis (required)
 
-### Automated Setup (Recommended)
+### Installation
 
 ```bash
 # Clone repository
 git clone https://github.com/rajulubheem/thrivix.git
 cd thrivix
 
-# Install Redis (required for streaming workflows)
+# Install Redis
 # macOS:
 brew install redis && brew services start redis
-
-# Linux (Ubuntu/Debian):
+# Linux:
 # sudo apt-get install redis-server && sudo systemctl start redis
 
-# Run setup script
-./setup.sh
-
-# Configure API keys
-# Edit backend/.env and add your API keys:
-# - OPENAI_API_KEY=your_key_here
-# - TAVILY_API_KEY=your_key_here (for web search)
-
-# Start backend (Terminal 1)
-cd backend
-source venv/bin/activate
-uvicorn app.main:app --reload --port 8000
-
-# Start frontend (Terminal 2)
-cd frontend
-npm start
-```
-
-Open **http://localhost:3000** and start building workflows!
-
-### Manual Setup
-
-<details>
-<summary>Click to expand manual installation steps</summary>
-
-```bash
-# Install Redis first (required)
-# macOS:
-brew install redis && brew services start redis
-
-# Linux (Ubuntu/Debian):
-# sudo apt-get install redis-server && sudo systemctl start redis
-
-# Backend setup
+# Setup backend
 cd backend
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.template .env
-# Edit .env and add your OpenAI and Tavily API keys
 
-# Start backend
+# Add API keys to backend/.env:
+# OPENAI_API_KEY=your_key
+# TAVILY_API_KEY=your_key
+
+# Start backend (Terminal 1)
 uvicorn app.main:app --reload --port 8000
 
-# Frontend setup (new terminal)
+# Setup frontend (Terminal 2)
 cd frontend
 npm install
 npm start
 ```
-</details>
+
+Open **http://localhost:3000**
 
 ---
 
-## 🎓 Real-World Use Cases
-
-### Software Development
-**"Build a REST API for user authentication"**
-- Research agent: Current security best practices
-- Architect: Design endpoints and database schema
-- Coder: Generate implementation code
-- Reviewer: Security audit
-- Documentation: API docs with examples
-
-### Business Analysis
-**"Analyze market trends for electric vehicles"**
-- Web search: Gather latest industry reports
-- Data extraction: Pull key metrics
-- Python analysis: Statistical trends
-- Visualization: Generate charts
-- Report: Executive summary
-
-### Content Creation
-**"Create a technical blog post about microservices"**
-- Research: Latest patterns and tools
-- Outline: Structure the article
-- Writing: Draft sections
-- Code examples: Working demos
-- Review: Technical accuracy check
-
-### System Design
-**"Design a scalable video streaming platform"**
-- Requirements: Gather constraints
-- Architecture: High-level design
-- Component design: Detailed specs
-- Cost analysis: AWS/GCP pricing
-- Documentation: Architecture diagrams
-
----
-
-## 🏗️ Technical Architecture
+## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     React Frontend                       │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ Flow Builder│  │ Agent Viewer │  │ Chat Interface│  │
-│  └─────────────┘  └──────────────┘  └───────────────┘  │
-└────────────────────────┬────────────────────────────────┘
-                         │ WebSocket / REST
-┌────────────────────────▼────────────────────────────────┐
-│                   FastAPI Backend                        │
-│  ┌──────────────┐  ┌─────────────┐  ┌────────────────┐ │
-│  │ State Machine│  │ Agent Engine│  │  Tool Registry │ │
-│  │   Generator  │  │             │  │   (100+ tools) │ │
-│  └──────────────┘  └─────────────┘  └────────────────┘ │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │        Strands Agents SDK (Orchestration)        │  │
-│  └──────────────────────────────────────────────────┘  │
-└────────────────────────┬────────────────────────────────┘
-                         │
-          ┌──────────────┼──────────────┐
-          │              │              │
-    ┌─────▼─────┐  ┌────▼────┐  ┌─────▼─────┐
-    │  OpenAI   │  │  Redis  │  │  Tavily   │
-    │  GPT-4    │  │ Pub/Sub │  │  Search   │
-    └───────────┘  └─────────┘  └───────────┘
+┌─────────────────────────────────────────┐
+│         React Frontend (Port 3000)      │
+│  ┌──────────┐ ┌──────────┐ ┌─────────┐ │
+│  │Flow Pro  │ │ Research │ │  Swarm  │ │
+│  │(ReactFlow)│ │  Chat   │ │Interface│ │
+│  └──────────┘ └──────────┘ └─────────┘ │
+└──────────────────┬──────────────────────┘
+                   │ WebSocket + REST
+┌──────────────────▼──────────────────────┐
+│      FastAPI Backend (Port 8000)        │
+│  ┌──────────────────────────────────┐  │
+│  │   Strands Agents SDK             │  │
+│  │   - Agent Orchestration          │  │
+│  │   - State Machine Engine         │  │
+│  │   - Tool Registry (100+ tools)   │  │
+│  └──────────────────────────────────┘  │
+└──────────────────┬──────────────────────┘
+                   │
+        ┌──────────┼──────────┐
+        │          │          │
+   ┌────▼───┐ ┌───▼───┐ ┌───▼────┐
+   │OpenAI  │ │ Redis │ │ Tavily │
+   │ GPT-4  │ │Pub/Sub│ │ Search │
+   └────────┘ └───────┘ └────────┘
 ```
 
-### Tech Stack
-
-**Backend:**
-- **FastAPI** - High-performance async web framework
-- **Strands Agents SDK** - Multi-agent orchestration
-- **Redis** - Real-time event streaming and pub/sub
-- **WebSocket/SSE** - Live execution updates
-- **SQLite** - Session persistence
-
-**Frontend:**
-- **React 19** - Modern UI with hooks
-- **ReactFlow** - Interactive workflow diagrams
-- **Tailwind CSS** - Utility-first styling
-- **Radix UI** - Accessible component primitives
-
-**AI & Tools:**
-- **OpenAI GPT-4** - Primary language model
-- **Tavily API** - Advanced web search
-- **100+ Dynamic Tools** - Web scraping, code execution, file operations, APIs
+**Tech Stack:**
+- **Backend:** FastAPI, Strands Agents SDK, Redis, WebSocket/SSE
+- **Frontend:** React 19, ReactFlow, Tailwind CSS, Radix UI
+- **AI:** OpenAI GPT-4, Tavily Search API
+- **Tools:** 100+ dynamic tools (web, code, file, data processing)
 
 ---
 
 ## 📝 Configuration
 
-### Required API Keys
+### API Keys Required
 
 Edit `backend/.env`:
 
 ```env
-# Required
-OPENAI_API_KEY=your_openai_key_here
-TAVILY_API_KEY=your_tavily_key_here
-
-# Optional
-ANTHROPIC_API_KEY=your_anthropic_key_here
-REDIS_URL=redis://localhost:6379/0
+OPENAI_API_KEY=your_openai_key        # Required
+TAVILY_API_KEY=your_tavily_key        # Required for web search
+ANTHROPIC_API_KEY=your_key            # Optional
+REDIS_URL=redis://localhost:6379/0    # Default
 ```
 
-Get your API keys:
-- **OpenAI:** https://platform.openai.com/api-keys
-- **Tavily:** https://tavily.com (free tier: 1000 searches/month)
+**Get API Keys:**
+- OpenAI: https://platform.openai.com/api-keys
+- Tavily: https://tavily.com (free tier: 1000 searches/month)
 
 ### System Requirements
 
-- **Python 3.11+** (required for modern async features)
-- **Node.js 18+** (required for React 19)
-- **Redis** (required - handles streaming coordination)
-- **8GB RAM** (recommended for smooth multi-agent execution)
-- **2GB disk space** (dependencies + cache)
+- **Python 3.11+** (async features)
+- **Node.js 18+** (React 19 support)
+- **Redis** (required for real-time streaming)
+- **8GB RAM** (recommended)
+- **2GB disk** (dependencies)
 
 ---
 
-## 🎯 Key Differentiators
+## 🎯 What Makes Thrivix Different?
 
-### What Makes Thrivix Different?
+### Compared to AI Chat Tools (ChatGPT, Claude)
 
-| Feature | Thrivix | Traditional AI Chat | Other Workflow Tools |
-|---------|---------|---------------------|---------------------|
-| **Visual Workflows** | ✅ Real-time diagrams | ❌ Linear chat | ✅ Static diagrams |
-| **Auto-Generated Flows** | ✅ From natural language | ❌ Manual prompts | ❌ Manual building |
-| **Resume Execution** | ✅ From any step | ❌ Start over | ⚠️ Limited |
-| **Multi-Agent Collaboration** | ✅ Specialized agents | ❌ Single context | ⚠️ Sequential only |
-| **Real-Time Visualization** | ✅ Live agent activity | ❌ No visibility | ⚠️ Post-execution |
-| **Tool Transparency** | ✅ See exactly what runs | ❌ Black box | ⚠️ Logs only |
-| **Reusable Pipelines** | ✅ Save & replay | ❌ Copy-paste prompts | ✅ Templates |
-| **Parallel Execution** | ✅ Multiple agents | ❌ Sequential | ⚠️ Complex setup |
+| Feature | Thrivix | AI Chat |
+|---------|---------|---------|
+| **Visual Workflows** | ✅ Interactive diagrams | ❌ Text only |
+| **Reusable Pipelines** | ✅ Save & replay | ❌ Manual copy-paste |
+| **Execution Visibility** | ✅ Watch tools run | ❌ Black box |
+| **Multi-Agent Coordination** | ✅ Parallel agents | ❌ Single thread |
+| **Resume Failed Tasks** | ✅ From any state | ❌ Start over |
+| **Tool Integration** | ✅ 100+ built-in tools | ⚠️ Limited |
 
-### Design Philosophy
+### Compared to Workflow Tools (n8n, Zapier)
 
-**Transparency Over Magic** - See exactly what each agent does
-**Workflows Over Conversations** - Structure beats context juggling
-**Collaboration Over Isolation** - Agents work together
-**Visual Over Hidden** - Watch your AI work in real-time
+| Feature | Thrivix | Workflow Tools |
+|---------|---------|----------------|
+| **AI-Powered Nodes** | ✅ LLM agents with context | ⚠️ Simple automations |
+| **Dynamic Workflows** | ✅ Agents decide paths | ❌ Fixed routes |
+| **Real-Time Visualization** | ✅ Live execution view | ⚠️ Logs only |
+| **Natural Language** | ✅ Describe tasks | ❌ Configure manually |
+| **Agent Collaboration** | ✅ Multi-agent swarms | ❌ Sequential steps |
+
+### Key Strengths
+
+1. **Visual + Intelligent** - Workflows that think, displayed beautifully
+2. **Real-Time Transparency** - See exactly what AI is doing
+3. **Flexible Execution** - State machines, swarms, or chat—your choice
+4. **Developer-Friendly** - ReactFlow-based UI, FastAPI backend, clean architecture
+
+---
+
+## 📦 Available Routes
+
+Access different interfaces at:
+
+- **`/`** - Landing page with feature overview
+- **`/flow-pro`** - Visual state machine designer (main feature)
+- **`/swarm`** - Multi-agent collaboration interface
+- **`/conversation`** - Research assistant chat
+- **`/settings`** - Configuration panel
+- **`/orchestrator`** - Unified orchestrator (experimental)
 
 ---
 
 ## 🚧 Roadmap
 
-### In Active Development
-- [ ] **AWS Bedrock Integration** - Support for Claude, Llama, and other Bedrock models
-- [ ] **AgentCore Support** - Integration with AgentCore framework
-- [ ] **Workflow Templates Library** - Pre-built workflows for common tasks
-- [ ] **Advanced Error Recovery** - Better handling of agent failures
-- [ ] **Collaboration Features** - Share workflows with teams
+### In Development
+- [ ] AWS Bedrock integration (Claude, Llama)
+- [ ] Workflow templates library
+- [ ] Enhanced error recovery
+- [ ] Agent performance metrics
+- [ ] Workflow sharing/export
 
-### Future Considerations
-- [ ] **Local LLM Support** - Run with Ollama, LM Studio
-- [ ] **Custom Tool Builder** - Create your own tool integrations
-- [ ] **Workflow Marketplace** - Share and discover workflows
-- [ ] **Enterprise Features** - RBAC, audit logs, SSO
-- [ ] **Cloud Deployment** - Managed hosting option
+### Future Plans
+- [ ] Local LLM support (Ollama)
+- [ ] Custom tool builder
+- [ ] Team collaboration features
+- [ ] Cloud hosting option
+- [ ] Workflow marketplace
 
 ---
 
 ## 🐛 Known Limitations
 
-- **API Dependencies** - Requires OpenAI and Tavily API keys (costs apply)
-- **Performance** - Complex workflows may take 30-60 seconds
-- **Redis Required** - Must run Redis for streaming features
-- **Single User** - Currently designed for individual use
-- **Beta Features** - Some experimental interfaces may have bugs
+- Requires OpenAI + Tavily API keys (paid services)
+- Redis must be running for streaming features
+- Complex workflows can take 30-60 seconds
+- Currently single-user (no auth/multi-tenancy)
+- Some experimental interfaces may have bugs
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how you can help:
+Contributions welcome! Priority areas:
 
-### Priority Areas
-1. **Bug Fixes** - Stability and reliability improvements
-2. **Documentation** - Examples, tutorials, use cases
-3. **Tool Integrations** - New tool blocks and capabilities
-4. **UI/UX Improvements** - Better visualization and interactions
+1. **Bug Fixes** - Stability improvements
+2. **Documentation** - Tutorials, examples
+3. **Tool Integrations** - New blocks and capabilities
+4. **UI/UX** - Better visualizations
 5. **Performance** - Optimization for large workflows
-6. **AWS Bedrock & AgentCore** - Help with integrations
 
-### Getting Started
 ```bash
-# Fork the repository
-# Create a feature branch
-git checkout -b feature/your-feature-name
-
-# Make changes and commit
-git commit -m "Add: your feature description"
-
-# Push and create a pull request
-git push origin feature/your-feature-name
+# Fork and clone
+git checkout -b feature/your-feature
+git commit -m "Add: description"
+git push origin feature/your-feature
 ```
 
 ---
@@ -403,38 +345,31 @@ git push origin feature/your-feature-name
 
 Apache License 2.0 - See [LICENSE](LICENSE)
 
-You are free to:
-- ✅ Use commercially
-- ✅ Modify and distribute
-- ✅ Use privately
-- ✅ Use for patent grants
+Free to use commercially, modify, distribute, and use privately.
 
 ---
 
-## 🙏 Acknowledgments
+## 🙏 Built With
 
-Built with amazing open-source technologies:
-
-- **[Strands Agents SDK](https://github.com/strands-agents/sdk-python)** - Multi-agent orchestration framework
+- **[Strands Agents SDK](https://github.com/strands-agents/sdk-python)** - Multi-agent orchestration
 - **[OpenAI API](https://openai.com)** - GPT-4 language models
-- **[Tavily Search](https://tavily.com)** - Advanced web search API
-- **[React Flow](https://reactflow.dev)** - Interactive node-based diagrams
-- **[FastAPI](https://fastapi.tiangolo.com)** - Modern Python web framework
+- **[Tavily Search](https://tavily.com)** - Web search API
+- **[React Flow](https://reactflow.dev)** - Interactive node diagrams
+- **[FastAPI](https://fastapi.tiangolo.com)** - Python web framework
 
 ---
 
-## 📞 Support & Community
+## 📞 Support
 
-- **GitHub Issues:** [Report bugs or request features](https://github.com/rajulubheem/thrivix/issues)
-- **Discussions:** [Ask questions and share ideas](https://github.com/rajulubheem/thrivix/discussions)
-- **Email:** For private inquiries
+- **Issues:** [GitHub Issues](https://github.com/rajulubheem/thrivix/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/rajulubheem/thrivix/discussions)
 
 ---
 
 <div align="center">
 
-**Made with ❤️ for developers who want AI that shows its work**
+**Build AI workflows that you can see, understand, and control.**
 
-[⭐ Star this repo](https://github.com/rajulubheem/thrivix) if Thrivix helps you build better workflows!
+[⭐ Star this repo](https://github.com/rajulubheem/thrivix) if you find it useful!
 
 </div>
