@@ -1,2972 +1,126 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React from 'react';
 import ReactFlow, {
-  Node,
-  Edge,
   Background,
   Controls,
   MiniMap,
-  useNodesState,
-  useEdgesState,
-  useReactFlow,
   ConnectionMode,
   Connection,
   ConnectionLineType,
-  Panel,
   BackgroundVariant,
-  NodeTypes,
-  EdgeTypes,
   MarkerType,
-  Position,
-  Handle,
-  NodeProps,
-  BaseEdge,
-  getBezierPath,
-  EdgeProps,
-  useUpdateNodeInternals,
   ReactFlowProvider,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './FlowSwarmInterface.css';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { NodeData, EdgeData } from './types/FlowTypes';
-import { BlockStatus } from '../../types/workflow';
-import ProfessionalAgentNode from './components/ProfessionalAgentNode';
-import OptimizedSmoothEdge from './components/OptimizedSmoothEdge';
-import InteractiveEdge from './components/InteractiveEdge';
-import EditableInteractiveEdge from './components/EditableInteractiveEdge';
-import EnhancedEditableEdge from './components/EnhancedEditableEdge';
-import ImprovedChatbotOutput from './components/ImprovedChatbotOutput';
-import { useTheme } from '../../contexts/ThemeContext';
-import { EnhancedAgentNode } from './components/EnhancedAgentNode';
-import { ProfessionalWorkflowBlock } from './components/ProfessionalWorkflowBlock';
-import { EnhancedToolBlock } from './components/EnhancedToolBlock';
-import { ImprovedEnhancedToolBlock } from './components/ImprovedEnhancedToolBlock';
-import UnifiedBlockManager, { BlockConfig } from './components/UnifiedBlockManager';
-import BlockSettingsPanel from './components/BlockSettingsPanel';
+import { useFlowSwarmState } from './FlowSwarmState';
+import { useFlowSwarmHandlers } from './FlowSwarmHandlers';
+import { useFlowSwarmEffects } from './FlowSwarmEffects';
+import { useFlowSwarmWorkflow } from './FlowSwarmWorkflow';
 import { WorkflowToolbar } from './components/WorkflowToolbar';
-import ImprovedStateDataViewer from './components/ImprovedStateDataViewer';
-import { v4 as uuidv4 } from 'uuid';
-import { toolSchemaService, ToolSchema } from '../../services/toolSchemaService';
-import { unifiedToolService } from '../../services/unifiedToolService';
-import { stateMachineAdapter } from '../../services/stateMachineAdapter';
-import { resolveUserInputsInParams } from '../../utils/parameterResolver';
-import { useWebSocketManager } from './websocket/useWebSocketManager';
-import { FrameHandlers, FrameHandlerContext } from './websocket/frameHandlers';
-import { ConnectionStatus } from './websocket/WebSocketManager';
-import AgentNode from './components/nodes/AgentNode';
-import AnimatedEdge from './components/edges/AnimatedEdge';
-import { getLayoutedElements } from './utils/layoutUtils';
-import { buildMachineFromGraph, rerunFromSelected as rerunFromSelectedUtil } from './utils/executionUtils';
-import ToolsHubModal from './components/modals/ToolsHubModal';
+import UnifiedBlockManager from './components/UnifiedBlockManager';
+import BlockSettingsPanel from './components/BlockSettingsPanel';
 import { FlowControlsPanel } from './components/FlowControlsPanel';
-import { ExecutionControlBar, ExecutionMode } from './components/ExecutionControlBar';
+import { ExecutionControlBar } from './components/ExecutionControlBar';
 import { ImportStateMachineDialog } from './components/ImportStateMachineDialog';
 import { ParallelGroupOverlay } from './components/ParallelGroupOverlay';
 import { ParallelChildrenEditor } from './components/ParallelChildrenEditor';
 import { AgentConversationPanel } from './components/AgentConversationPanel';
+import { v4 as uuidv4 } from 'uuid';
 
-// Node components moved to ./components/nodes/AgentNode.tsx
-
-// Edge components moved to ./components/edges/AnimatedEdge.tsx
-
-// Types
-interface Agent {
-  id: string;
-  name: string;
-  status: BlockStatus;
-  output: string;
-  startTime?: number;
-  endTime?: number;
-  error?: string;
-  parent?: string;
-  depth?: number;
-}
-
-// Frame types moved to websocket/WebSocketManager.ts
-
-// Layout function has been moved to utils/layoutUtils.ts
-
-// Main Component
 const FlowSwarmInterface: React.FC = () => {
-  const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { fitView, setCenter, getViewport, project, zoomIn, zoomOut } = useReactFlow();
-  const updateNodeInternals = useUpdateNodeInternals();
+  // Initialize all state
+  const state = useFlowSwarmState();
   
-  // State
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [agents, setAgents] = useState<Map<string, Agent>>(new Map());
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-
-  // Undo/Redo History
-  const [history, setHistory] = useState<{ nodes: Node[], edges: Edge[] }[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const maxHistorySize = 50; // Maximum number of history states to keep
-
-  // Initialize history when nodes or edges are first loaded
-  useEffect(() => {
-    if (nodes.length > 0 || edges.length > 0) {
-      if (history.length === 0) {
-        setHistory([{ nodes, edges }]);
-        setHistoryIndex(0);
-      }
-    }
-  }, [nodes.length, edges.length]); // Only track length changes to avoid infinite loops
-  const [task, setTask] = useState('');
-  const [isRunning, setIsRunning] = useState(false);
-  const [executionId, setExecutionId] = useState<string | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
-  const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel' | 'dynamic' | 'neural'>('dynamic');
-  const [outputPanelWidth, setOutputPanelWidth] = useState(() => {
-    // Load saved width from localStorage or use default
-    const saved = localStorage.getItem('chatbot_panel_width');
-    const savedWidth = saved ? parseInt(saved, 10) : 400;
-    // Ensure saved width is within bounds (min: 300, max: 800)
-    return Math.min(Math.max(savedWidth, 300), 800);
-  });
-  const [activelyStreamingAgents, setActivelyStreamingAgents] = useState<Set<string>>(new Set());
-  const [currentExecutingNode, setCurrentExecutingNode] = useState<string | null>(null);
-  const [nextExecutingNode, setNextExecutingNode] = useState<string | null>(null);
-  const [executionActions, setExecutionActions] = useState<Map<string, string[]>>(new Map());
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [executionHistory, setExecutionHistory] = useState<Map<string, {
-    order: number;
-    startTime: number;
-    endTime?: number;
-    status: 'running' | 'completed' | 'failed';
-    actions: string[];
-    tools: string[];
-    blockName?: string;
-    blockType?: string;
-  }>>(new Map());
-  const [executionOrderCounter, setExecutionOrderCounter] = useState(0);
-  // Interaction flags to keep dragging/snapping smooth
-  const [isInteracting, setIsInteracting] = useState(false);
-  const pendingLayoutRef = useRef<boolean>(false);
-  // When a full state machine graph is provided by backend, keep it as source of truth
-  const [hasStateMachineStructure, setHasStateMachineStructure] = useState<boolean>(false);
-  // Human-in-the-loop decision modal
-  const [decisionPrompt, setDecisionPrompt] = useState<null | {stateId: string, name: string, description?: string, allowed: string[]}>(null);
-  // Human input modal
-  const [inputPrompt, setInputPrompt] = useState<null | { stateId: string; name: string; description?: string; allowed: string[]; schema?: any }>(null);
-  const [inputValue, setInputValue] = useState<string>("");
-  // Tools hub state
-  const [showToolsHub, setShowToolsHub] = useState(false);
-  // Get theme from context
-  const { isDark: isDarkMode } = useTheme();
-
-  // Enhanced UI states
-  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('LR');
-  const [showGrid, setShowGrid] = useState(true);
-  const [showMinimap, setShowMinimap] = useState(false);
-  const [showConversationPanel, setShowConversationPanel] = useState(true);
-  const [toolsLoading, setToolsLoading] = useState(false);
-  const [highlightPath, setHighlightPath] = useState(false);
-  const [followActive, setFollowActive] = useState<boolean>(true);
-  const followActiveRef = useRef<boolean>(true);
-  useEffect(() => { followActiveRef.current = followActive; }, [followActive]);
-  // Replay/trace controls
-  const [executionTrace, setExecutionTrace] = useState<string[]>([]);
-  const [replayMode, setReplayMode] = useState<boolean>(false);
-  const [replayIndex, setReplayIndex] = useState<number | null>(null);
-  const [showRawDataViewer, setShowRawDataViewer] = useState<boolean>(false);
-  const [stateExecutionData, setStateExecutionData] = useState<any[]>([]);
-  const [availableTools, setAvailableTools] = useState<string[]>([]);
-  const [toolDetails, setToolDetails] = useState<Record<string, { description?: string; category?: string }>>({});
-  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-  const [toolSearch, setToolSearch] = useState('');
-  const [toolPrefs, setToolPrefs] = useState<null | { unknown: string[]; effective: string[] }>(null);
-  // Parallel UI helpers
-  const [childrenOverrides, setChildrenOverrides] = useState<Record<string, string[]>>({});
-  const [showChildrenEditor, setShowChildrenEditor] = useState<string | null>(null);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [parallelTooltip, setParallelTooltip] = useState<null | { id: string; x: number; y: number; lines: Array<{ child: string; event: string; durationMs: number }> }>(null);
-  // Search overlay state
-  // Edit mode state
-  const [editMode, setEditMode] = useState<boolean>(true); // Always allow editing
-  const [showAddNode, setShowAddNode] = useState<boolean>(false);
-  const [nodeDraft, setNodeDraft] = useState<{ id: string; name: string; type: 'analysis' | 'tool_call' | 'decision' | 'parallel' | 'final'; description?: string; agent_role?: string; tools: string[] }>({ id: '', name: '', type: 'analysis', description: '', agent_role: '', tools: [] });
-  const [edgeEdit, setEdgeEdit] = useState<null | { id?: string; source: string; target: string; event?: string }>(null);
-  const [paletteOpen, setPaletteOpen] = useState<boolean>(true);
-  const [paletteTab, setPaletteTab] = useState<'blocks'|'tools'>('blocks');
-  const [planned, setPlanned] = useState<boolean>(false);
-  const [showImportDialog, setShowImportDialog] = useState<boolean>(false);
-  const [showUnifiedManager, setShowUnifiedManager] = useState<boolean>(false);
-  const [selectedNodeForSettings, setSelectedNodeForSettings] = useState<Node | null>(null);
-
-  // WebSocket state is already declared above
-  // Camera follow helpers
-  const pendingFocusIdRef = useRef<string | null>(null);
-  const focusAttemptsRef = useRef<number>(0);
-
-  // Focus loop: tries a few times until node dimensions are known
-  useEffect(() => {
-    let t: any;
-    const tick = () => {
-      const id = pendingFocusIdRef.current;
-      if (!id || !followActive) return;
-      const node = (layoutCache.current.nodes as Node[]).find(n => n.id === id) || nodes.find(n => n.id === id);
-      if (node) {
-        const width = (node as any).width || 0;
-        const height = (node as any).height || 0;
-        const cx = node.position.x + (width || 280) / 2;
-        const cy = node.position.y + (height || 140) / 2;
-        const ready = width > 0 && height > 0;
-        setCenter(cx, cy, { zoom: 0.95, duration: ready ? 320 : 200 });
-        if (ready) {
-          pendingFocusIdRef.current = null;
-          return;
-        }
-      }
-      focusAttemptsRef.current += 1;
-      if (focusAttemptsRef.current < 10) {
-        t = setTimeout(tick, 120);
-      } else {
-        pendingFocusIdRef.current = null;
-      }
-    };
-    if (pendingFocusIdRef.current) {
-      t = setTimeout(tick, 60);
-    }
-    return () => { if (t) clearTimeout(t); };
-  }, [nodes, setCenter, followActive]);
-
-  // Improved layout function with better spacing
-  // Layout function imported from utils/layoutUtils.ts
-
-  // Node and Edge types - use professional components
-  const nodeTypes = useMemo<NodeTypes>(() => ({
-    agent: AgentNode,
-    enhanced: EnhancedAgentNode,
-    professional: ProfessionalWorkflowBlock,
-    tool: ImprovedEnhancedToolBlock,
-    toolBlock: ImprovedEnhancedToolBlock  // Alias for compatibility
-  }), []);
-  const edgeTypes = useMemo<EdgeTypes>(() => ({
-    animated: EnhancedEditableEdge,
-    smoothstep: EnhancedEditableEdge,
-    default: EnhancedEditableEdge,
-    straight: EnhancedEditableEdge,
-    interactive: EnhancedEditableEdge,
-    editable: EnhancedEditableEdge,
-  }), []);
+  // Initialize all handlers
+  const handlers = useFlowSwarmHandlers(state);
   
-  // Optimized state management
-  const layoutCache = useRef<{ nodes: Node[], edges: Edge[] }>({ nodes: [], edges: [] });
-  const updateTimer = useRef<NodeJS.Timeout | null>(null);
-  const lastLayoutedAgentIds = useRef<Set<string>>(new Set());
+  // Initialize workflow operations
+  const workflow = useFlowSwarmWorkflow(state, handlers);
+  
+  // Initialize all effects
+  useFlowSwarmEffects(state, handlers);
 
-  // Undo/Redo Functions
-  const saveToHistory = useCallback((newNodes: Node[], newEdges: Edge[]) => {
-    // Don't save if we're in the middle of an undo/redo operation
-    if (historyIndex !== history.length - 1) {
-      // We're not at the end of history, so truncate future history
-      const newHistory = history.slice(0, historyIndex + 1);
-      newHistory.push({ nodes: newNodes, edges: newEdges });
-
-      // Keep history size under control
-      if (newHistory.length > maxHistorySize) {
-        newHistory.shift();
-      }
-
-      setHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
-    } else {
-      // We're at the end of history, just append
-      const newHistory = [...history, { nodes: newNodes, edges: newEdges }];
-
-      // Keep history size under control
-      if (newHistory.length > maxHistorySize) {
-        newHistory.shift();
-      } else {
-        setHistoryIndex(historyIndex + 1);
-      }
-
-      setHistory(newHistory);
-    }
-  }, [history, historyIndex]);
-
-  const undo = useCallback(() => {
-    if (historyIndex > 0) {
-      const previousState = history[historyIndex - 1];
-      setNodes(previousState.nodes);
-      setEdges(previousState.edges);
-      setHistoryIndex(historyIndex - 1);
-    }
-  }, [history, historyIndex, setNodes, setEdges]);
-
-  const redo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const nextState = history[historyIndex + 1];
-      setNodes(nextState.nodes);
-      setEdges(nextState.edges);
-      setHistoryIndex(historyIndex + 1);
-    }
-  }, [history, historyIndex, setNodes, setEdges]);
-
-  // Keyboard shortcuts for undo/redo and block manager
-  useEffect(() => {
-    const handleKeydown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + B to open Block Manager
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
-        e.preventDefault();
-        setShowUnifiedManager(true);
-      }
-
-      // Cmd/Ctrl + Z for undo
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      }
-
-      // Cmd/Ctrl + Shift + Z or Cmd/Ctrl + Y for redo
-      if (((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') ||
-          ((e.metaKey || e.ctrlKey) && e.key === 'y')) {
-        e.preventDefault();
-        redo();
-      }
-    };
-
-    const handleResetPanelWidth = () => {
-      setOutputPanelWidth(500); // Reset to default width
-    };
-
-    window.addEventListener('keydown', handleKeydown);
-    window.addEventListener('resetPanelWidth', handleResetPanelWidth);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeydown);
-      window.removeEventListener('resetPanelWidth', handleResetPanelWidth);
-    };
-  }, [undo, redo, setShowUnifiedManager]);
-
-  const preventRerender = useRef(false);
-
-  // Optimized graph update with better performance
-  const updateGraph = useCallback((forceLayout: boolean = false) => {
-    // Don't clear nodes if we have agents
-    if (agents.size === 0) {
-      return;
-    }
-
-    // If we already have a full state-machine structure rendered,
-    // avoid rebuilding the graph from the (partial) agents map.
-    if (hasStateMachineStructure) {
-      // Only update node statuses/durations and edge animations in-place
-      setNodes(prevNodes => prevNodes.map(node => {
-        const agent = agents.get(node.id);
-        if (!agent) return node;
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            status: agent.status,
-            duration: agent.endTime && agent.startTime ? agent.endTime - agent.startTime : (node.data?.duration as any),
-          },
-        };
-      }));
-
-      setEdges(prevEdges => prevEdges.map(edge => {
-        const sourceAgent = agents.get(edge.source);
-        const targetAgent = agents.get(edge.target);
-        if (!sourceAgent || !targetAgent) return edge;
-        return {
-          ...edge,
-          animated: targetAgent.status === 'running',
-          style: {
-            ...edge.style,
-            stroke: targetAgent.status === 'running' ? '#facc15' : targetAgent.status === 'completed' ? '#22c55e' : (edge.style?.stroke || '#52525b'),
-          },
-        };
-      }));
-
-      return;
-    }
-
-    // Check if we need to recalculate layout (new agents added)
-    const currentAgentIds = new Set(agents.keys());
-    const needsLayout = forceLayout || Array.from(currentAgentIds).some(id => !lastLayoutedAgentIds.current.has(id));
-
-    // If user is interacting (dragging/panning), defer heavy updates to avoid jitter
-    if (isInteracting) {
-      if (needsLayout) pendingLayoutRef.current = true;
-      return;
-    }
-
-    // Always do layout when needed, regardless of streaming state
-    if (needsLayout) {
-      // Build all nodes
-      const newNodes: Node[] = Array.from(agents.values()).map(agent => ({
-        id: agent.id,
-        type: 'agent',
-        data: {
-          label: agent.name,
-          name: agent.name,
-          status: agent.status,
-          duration: agent.endTime && agent.startTime ? agent.endTime - agent.startTime : undefined,
-          direction: layoutDirection,
-          isDarkMode,
-        },
-        // default position; will be set by layout
-        position: { x: 0, y: 0 },
-        // help edge routing by setting handle sides based on layout direction
-        targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-        sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-      }));
-
-      // Build all edges
-      const newEdges: Edge[] = [];
-      agents.forEach(agent => {
-        if (agent.parent && agents.has(agent.parent)) {
-          const parentAgent = agents.get(agent.parent);
-          newEdges.push({
-            id: `${agent.parent}-${agent.id}`,
-            source: agent.parent,
-            target: agent.id,
-            type: 'editable',
-            animated: agent.status === 'running',
-            data: {
-              isActive: parentAgent?.status === 'completed' && agent.status === 'running',
-              isCompleted: parentAgent?.status === 'completed' && agent.status === 'completed',
-              isDarkMode,
-            },
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-              width: 18,
-              height: 18,
-              color: agent.status === 'running' ? '#fbbf24' : agent.status === 'completed' ? '#10b981' : isDarkMode ? '#4b5563' : '#d1d5db',
-            },
-            style: {
-              strokeWidth: agent.status === 'running' ? 2.5 : 2,
-            },
-          });
-        }
-      });
-
-      // Apply simple dagre layout
-      const layouted = getLayoutedElements(newNodes, newEdges, layoutDirection);
-
-      layoutCache.current = layouted;
-      lastLayoutedAgentIds.current = currentAgentIds;
-
-      setNodes(layouted.nodes);
-      setEdges(layouted.edges);
-
-      // Fit view with proper padding
-      if (layouted.nodes.length > 0 && !preventRerender.current) {
-        requestAnimationFrame(() => {
-          fitView({
-            padding: 0.25,
-            duration: 300,
-            maxZoom: 1.0,
-            minZoom: 0.2
-          });
-        });
-      }
-    } else {
-      // Just update node data without changing layout
-      const updatedNodes = layoutCache.current.nodes.map(node => {
-        const agent = agents.get(node.id);
-        if (!agent) return node;
-        const nextDuration = agent.endTime && agent.startTime ? agent.endTime - agent.startTime : undefined;
-        if (node.data?.status === agent.status && (node.data as any)?.duration === nextDuration) {
-          return node; // avoid unnecessary re-renders while idle
-        }
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            status: agent.status,
-            duration: nextDuration,
-          },
-        };
-      });
-
-      // Update edge animations
-      const updatedEdges = layoutCache.current.edges.map(edge => {
-        const sourceAgent = agents.get(edge.source);
-        const targetAgent = agents.get(edge.target);
-        if (!sourceAgent || !targetAgent) return edge;
-        
-        return {
-          ...edge,
-          animated: targetAgent.status === 'running',
-          data: {
-            isActive: sourceAgent.status === 'completed' && targetAgent.status === 'running',
-            isCompleted: sourceAgent.status === 'completed' && targetAgent.status === 'completed',
-            isDarkMode,
-          },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 18,
-            height: 18,
-            color: targetAgent.status === 'running' ? '#fbbf24' :
-                   targetAgent.status === 'completed' ? '#10b981' : isDarkMode ? '#4b5563' : '#d1d5db',
-          },
-        };
-      });
-
-      setNodes(updatedNodes);
-      setEdges(updatedEdges);
-    }
-  }, [agents, setNodes, setEdges, fitView, layoutDirection, getLayoutedElements, isInteracting]);
-
-  // Debounced graph updates
-  useEffect(() => {
-    if (updateTimer.current) clearTimeout(updateTimer.current);
-
-    updateTimer.current = setTimeout(() => {
-      if (!preventRerender.current && !isInteracting) {
-        updateGraph();
-      }
-    }, 150);
-
-    return () => {
-      if (updateTimer.current) clearTimeout(updateTimer.current);
-    };
-  }, [agents, updateGraph, isInteracting]);
-
-  // Force update all nodes when theme changes
-  useEffect(() => {
-    setNodes(prev => prev.map(node => ({
-      ...node,
-      data: {
-        ...node.data,
-        isDarkMode,
-        _themeUpdate: Date.now(), // Force re-render
-      },
-    })));
-    setEdges(prev => prev.map(edge => ({
-      ...edge,
-      data: {
-        ...edge.data,
-        isDarkMode,
-      },
-    })));
-  }, [isDarkMode, setNodes, setEdges]);
-
-  // Load tools (once)
-  useEffect(() => {
-    (async () => {
-      try {
-        setToolsLoading(true);
-        const res = await fetch(`${window.location.origin}/api/v1/dynamic-tools/available`);
-        if (res.ok) {
-          const data = await res.json();
-          const names: string[] = (data.tools || []).map((t: any) => t.name);
-          const details: Record<string, { description?: string; category?: string }> = {};
-          (data.tools || []).forEach((t: any) => {
-            details[t.name] = { description: t.description, category: (t.capabilities || [])[0] };
-          });
-          setAvailableTools(names);
-          setToolDetails(details);
-          // Restore
-          try {
-            const rawSel = localStorage.getItem('flowswarm_selected_tools');
-            if (rawSel) setSelectedTools(new Set(JSON.parse(rawSel)));
-            // Removed restrictToSelected - no longer needed
-          } catch {}
-        }
-      } finally {
-        setToolsLoading(false);
-      }
-    })();
-  }, []);
-
-  // Keyboard shortcuts for replay navigation and panel resizing
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Panel resize shortcuts
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === '[') {
-          e.preventDefault();
-          setOutputPanelWidth(prev => Math.max(300, prev - 50)); // Decrease width (min: 300px)
-        } else if (e.key === ']') {
-          e.preventDefault();
-          setOutputPanelWidth(prev => Math.min(800, prev + 50)); // Increase width (max: 800px)
-        } else if (e.key === '\\') {
-          e.preventDefault();
-          setOutputPanelWidth(prev => prev <= 350 ? 500 : 300); // Toggle between collapsed and default
-        } else if (e.key === '/') {
-          e.preventDefault();
-          setShowConversationPanel(prev => !prev); // Toggle conversation panel visibility
-        }
-      }
-
-      // Replay navigation
-      if (!replayMode) return;
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        if (executionTrace.length === 0) return;
-        setReplayIndex((i: number | null) => {
-          const next = Math.max(0, (i ?? 0) - 1);
-          const id = executionTrace[next];
-          if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
-          return next;
-        });
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        if (executionTrace.length === 0) return;
-        setReplayIndex((i: number | null) => {
-          const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
-          const id = executionTrace[next];
-          if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
-          return next;
-        });
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [replayMode, executionTrace]);
-
-  // Persist tool prefs
-  useEffect(() => {
-    try { localStorage.setItem('flowswarm_selected_tools', JSON.stringify(Array.from(selectedTools))); } catch {}
-  }, [selectedTools]);
-
-  // Persist chatbot panel width
-  useEffect(() => {
-    try { localStorage.setItem('chatbot_panel_width', outputPanelWidth.toString()); } catch {}
-  }, [outputPanelWidth]);
-
-  // Load saved parallel children overrides once
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('flowswarm_parallel_children');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') setChildrenOverrides(parsed);
-      }
-    } catch {}
-  }, []);
-  // Persist overrides on change
-  useEffect(() => {
-    try { localStorage.setItem('flowswarm_parallel_children', JSON.stringify(childrenOverrides)); } catch {}
-  }, [childrenOverrides]);
-
-  const softReset = () => {
-    // Reset agents and execution state but preserve visualization structure
-    setAgents(new Map());
-    setSelectedAgent(null);
-    setActivelyStreamingAgents(new Set());
-    // Reset node statuses but keep the structure
-    setNodes(nodes =>
-      nodes.map(node => ({
-        ...node,
-        data: {
-          ...node.data,
-          status: 'pending',
-          toolsUsed: []
-        }
-      }))
-    );
-    // Reset edge animations
-    setEdges(edges =>
-      edges.map(edge => ({
-        ...edge,
-        animated: false,
-        style: {
-          ...edge.style,
-          stroke: '#52525b'
-        }
-      }))
-    );
-  };
-
-  // Create frame handler context
-  const frameHandlerContext: FrameHandlerContext = {
-    setNodes,
-    setEdges,
-    setAgents,
-    setActivelyStreamingAgents,
-    setIsRunning,
-    setHasStateMachineStructure,
-    setExecutionTrace,
-    setStateExecutionData,
-    setExecutionHistory,
-    setCurrentExecutingNode,
-    setIsExecuting,
-    setExecutionOrderCounter,
-    setNextExecutingNode,
-    setDecisionPrompt,
-    setInputPrompt,
-    setInputValue,
-    setToolPrefs,
-    setPlanned,
-    setSelectedAgent,
-    setCenter,
-    fitView,
+  // Destructure what we need for JSX
+  const {
+    nodes, setNodes, onNodesChange,
+    edges, setEdges, onEdgesChange,
+    task, setTask,
+    isRunning,
+    executionId,
+    connectionStatus,
+    executionMode, setExecutionMode,
+    outputPanelWidth,
     layoutDirection,
-    isDarkMode,
-    nodes,
+    showGrid,
+    showMinimap,
+    showConversationPanel,
+    highlightPath,
+    showToolsHub, setShowToolsHub,
+    decisionPrompt, setDecisionPrompt,
+    inputPrompt, setInputPrompt,
+    inputValue, setInputValue,
+    showAddNode, setShowAddNode,
+    showImportDialog, setShowImportDialog,
+    showUnifiedManager, setShowUnifiedManager,
+    selectedNodeForSettings, setSelectedNodeForSettings,
+    showChildrenEditor, setShowChildrenEditor,
+    editMode,
+    nodeDraft, setNodeDraft,
+    edgeEdit, setEdgeEdit,
     executionHistory,
-    executionOrderCounter,
+    history,
+    historyIndex,
+    executionTrace,
+    replayMode, setReplayMode,
+    replayIndex, setReplayIndex,
+    showRawDataViewer, setShowRawDataViewer,
+    availableTools,
+    selectedTools, setSelectedTools,
+    toolSearch, setToolSearch,
+    toolDetails,
+    toolsLoading,
+    toolPrefs,
+    childrenOverrides, setChildrenOverrides,
+    collapsedGroups, setCollapsedGroups,
+    selectedAgent, setSelectedAgent,
+    reactFlowWrapper,
     pendingFocusIdRef,
     focusAttemptsRef,
-    followActiveRef,
-    layoutCache,
-    lastLayoutedAgentIds,
-    softReset,
-    getLayoutedElements,
-  };
-
-  const frameHandlersRef = useRef<FrameHandlers>(new FrameHandlers(frameHandlerContext));
-
-  // Update frame handlers when context changes
-  useEffect(() => {
-    frameHandlersRef.current = new FrameHandlers(frameHandlerContext);
-  }, [nodes, executionHistory, executionOrderCounter, layoutDirection, isDarkMode]);
-
-  // WebSocket handlers
-  const { connectWebSocket, disconnectWebSocket, wsRef, agentSequences } = useWebSocketManager({
-    onTokenFrame: (frame) => frameHandlersRef.current.handleTokenFrame(frame),
-    onControlFrame: (frame) => frameHandlersRef.current.handleControlFrame(frame),
-    isRunning
-  });
-
-  // Update connection status handler
-  useEffect(() => {
-    const checkConnection = () => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        setConnectionStatus('connected');
-      } else if (wsRef.current?.readyState === WebSocket.CONNECTING) {
-        setConnectionStatus('connecting');
-      } else {
-        setConnectionStatus('disconnected');
-      }
-    };
-
-    const interval = setInterval(checkConnection, 1000);
-    return () => clearInterval(interval);
-  }, [wsRef]);
-
-
-  const rerunFromSelected = useCallback(async () => {
-    await rerunFromSelectedUtil(executionId, selectedAgent);
-  }, [executionId, selectedAgent]);
-
-  const addAgentAndRerun = useCallback(async () => {
-    if (!executionId || !selectedAgent) return;
-    try {
-      const newId = window.prompt('New agent id (slug_case):');
-      if (!newId) return;
-      const newName = window.prompt('Display name:', newId.replace(/_/g, ' '));
-      if (!newName) return;
-      const type = window.prompt('Type (analysis|tool_call|decision|parallel|final):', 'analysis') || 'analysis';
-      const desc = window.prompt('Short description of this agent/task:', '') || '';
-      const event = window.prompt(`Event from ${selectedAgent} to ${newId} (e.g., success|failure|custom):`, 'success') || 'success';
-
-      const patch = {
-        states: [
-          {
-            id: newId,
-            name: newName,
-            type,
-            task: desc || newName,
-            description: desc,
-            agent_role: 'Custom Agent'
-          }
-        ],
-        edges: [
-          { source: selectedAgent, target: newId, event }
-        ]
-      };
-
-      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/rerun_from`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_state_id: selectedAgent, graph_patch: patch })
-      });
-    } catch (e) {
-      console.error('Failed to add agent and rerun', e);
-    }
-  }, [executionId, selectedAgent]);
-
-  const startExecution = async () => {
-    if (!task.trim() || isRunning) return;
-
-    setIsRunning(true);
-    setStateExecutionData([]); // Clear previous execution data
-
-    // If there are no nodes, first plan the workflow
-    if (nodes.length === 0 && executionMode === 'dynamic') {
-      try {
-        // Step 1: Plan the workflow
-        const planRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            task,
-            tool_preferences: {
-              selected_tools: Array.from(selectedTools),
-              restrict_to_selected: selectedTools.size > 0,
-              use_enhanced_blocks: true
-            }
-          })
-        });
-
-        if (!planRes.ok) throw new Error(`Plan HTTP error! status: ${planRes.status}`);
-
-        const planData = await planRes.json();
-
-        if (!planData.machine) {
-          console.warn('Plan response did not include a machine definition.');
-          setIsRunning(false);
-          return;
-        }
-
-        // Import the generated workflow
-        await importStateMachine(planData.machine, true, false);
-
-        // Wait a bit for the UI to update
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Keep UI interactive after planning; execution can be triggered explicitly once blocks are reviewed
-        setIsRunning(false);
-        setConnectionStatus('disconnected');
-        setExecutionId(null);
-      } catch (error) {
-        console.error('Workflow planning failed:', error);
-        setIsRunning(false);
-        setConnectionStatus('error');
-      }
-      return;
-    }
-
-    // If nodes exist or not dynamic mode, execute directly
-    // ⚠️ PRESERVE USER BLOCKS: Only clear if there are absolutely no nodes
-    // This prevents accidental clearing of manually created blocks
-    if (nodes.length > 0) {
-      // Always prefer soft reset to preserve user's work
-      softReset();
-    } else {
-      // Only do full reset if canvas is completely empty
-      resetView();
-    }
-    setIsRunning(true);
-    agentSequences.current.clear();
-
-    try {
-      if (nodes.length > 0) {
-        // Execute with existing machine
-        const machine = buildMachine();
-        const response = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            task,
-            machine,
-            tool_preferences: {
-              selected_tools: Array.from(selectedTools),
-              restrict_to_selected: selectedTools.size > 0
-            }
-          })
-        });
-
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-        const data = await response.json();
-        setExecutionId(data.exec_id);
-        setTimeout(() => connectWebSocket(data.exec_id, false), 100);
-      } else {
-        // Non-dynamic mode without nodes
-        const requestBody = {
-          task,
-          execution_mode: executionMode,
-          use_mock: false,
-          max_parallel: 5,
-          tool_preferences: {
-            selected_tools: Array.from(selectedTools),
-            restrict_to_selected: selectedTools.size > 0,
-          }
-        };
-
-        const response = await fetch(`${window.location.origin}/api/v1/streaming/stream/v2`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(requestBody)
-        });
-
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-        const data = await response.json();
-        setExecutionId(data.exec_id);
-        setTimeout(() => connectWebSocket(data.exec_id, false), 100);
-      }
-    } catch (error) {
-      console.error('Failed:', error);
-      setIsRunning(false);
-      setConnectionStatus('error');
-    }
-  };
-
-  // Build machine from current graph (nodes/edges)
-  // Build machine from graph - using utility function
-  const buildMachine = useCallback(() => {
-    return buildMachineFromGraph(nodes, edges);
-  }, [nodes, edges]);
-
-  // Add professional block function
-  // Add tool block to canvas - now unified with backend Strands tools
-  const addToolBlock = useCallback(async (toolName: string, schema?: ToolSchema, position?: { x: number; y: number }) => {
-    // Get schema from unified service if not provided
-    const toolSchema = schema || await unifiedToolService.getToolSchema(toolName);
-
-    if (!toolSchema) {
-      console.warn(`Tool schema not found for ${toolName}`);
-      return;
-    }
-
-    // Check if tool is available in UI
-    if (toolSchema.available_in_ui === false) {
-      console.warn(`Tool ${toolName} is not available for UI usage`);
-      return;
-    }
-
-    const nodePosition = position || {
-      x: Math.random() * 400 + 200,
-      y: Math.random() * 300 + 100
-    };
-
-    const newNode: Node = {
-      id: uuidv4(),
-      type: 'tool',
-      position: nodePosition,
-      data: {
-        type: 'tool',
-        name: toolSchema.display_name || toolName.replace(/_/g, ' '),
-        toolName: toolName,
-        toolSchema: toolSchema,
-        parameters: {},
-        category: toolSchema.category,
-        icon: toolSchema.icon,
-        color: toolSchema.color,
-        available_in_agents: toolSchema.available_in_agents,
-        enabled: true,
-        advancedMode: false,
-        isWide: false,
-        onUpdate: (id: string, updates: any) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, ...updates } }
-                : node
-            )
-          );
-        },
-        onToggleEnabled: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
-                : node
-            )
-          );
-        },
-        onToggleAdvanced: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
-                : node
-            )
-          );
-        },
-        onToggleWide: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
-                : node
-            )
-          );
-        },
-        onOpenSettings: (id: string) => {
-          const node = nodes.find(n => n.id === id);
-          if (node) {
-            setSelectedNodeForSettings(node);
-          }
-        },
-        onDelete: (id: string) => {
-          setNodes((nds) => nds.filter((node) => node.id !== id));
-          setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
-        },
-        onDuplicate: (id: string) => {
-          const nodeToDuplicate = nodes.find((node) => node.id === id);
-          if (nodeToDuplicate) {
-            const duplicatedNode = {
-              ...nodeToDuplicate,
-              id: uuidv4(),
-              position: {
-                x: nodeToDuplicate.position.x + 50,
-                y: nodeToDuplicate.position.y + 50
-              }
-            };
-            setNodes((nds) => [...nds, duplicatedNode]);
-          }
-        },
-        onExecuteTool: async (id: string, toolName: string, parameters: any) => {
-          // Execute tool through unified backend endpoint for Strands compatibility
-          try {
-            // Resolve placeholders (DRY utility)
-            const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
-            if (!ok || !resolvedParams) {
-              setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, status: 'needs_input', executionError: resolveError || 'Input required' } } : n));
-              throw new Error(resolveError || 'Input required');
-            }
-
-            // Persist resolved params back to node
-            setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, parameters: resolvedParams } } : n));
-
-            // Validate parameters before execution
-            const precheck = await stateMachineAdapter.validateParameters(toolName, resolvedParams);
-            if (!precheck.valid) {
-              setNodes((nds) =>
-                nds.map((node) =>
-                  node.id === id
-                    ? { ...node, data: { ...node.data, status: 'needs_input', executionError: precheck.message } }
-                    : node
-                )
-              );
-              throw new Error(precheck.message || 'Missing required parameters');
-            }
-            // Update status to running
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === id
-                  ? { ...node, data: { ...node.data, status: 'running', isExecuting: true } }
-                  : node
-              )
-            );
-
-            // Create workflow request for unified execution
-            const workflowRequest = {
-              workflow_id: `tool-exec-${id}`,
-              blocks: [{
-                id: id,
-                type: 'tool',
-                tool_name: toolName,
-                parameters: resolvedParams,
-                position: { x: 0, y: 0 },
-                connections: []
-              }],
-              edges: [],
-              context: {},
-              use_agents: false // Direct tool execution
-            };
-
-            const response = await fetch(`http://localhost:8000/api/v1/unified/execute-workflow`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-              },
-              body: JSON.stringify(workflowRequest)
-            });
-
-            const data = await response.json();
-
-            if (response.ok && data.success) {
-              console.log('Tool execution result:', data);
-
-              // Get the actual result from the correct location
-              const blockResult = data.results?.[id] || data.result;
-
-              // Update node with success status and result
-              setNodes((nds) =>
-                nds.map((node) =>
-                  node.id === id
-                    ? {
-                        ...node,
-                        data: {
-                          ...node.data,
-                          status: 'completed',
-                          isCompleted: true,
-                          isExecuting: false,
-                          executionResult: blockResult,
-                          executionError: blockResult?.error || undefined
-                        }
-                      }
-                    : node
-                )
-              );
-
-              // Prefill dependent nodes if any
-              try {
-                const outgoingTargets = edges.filter(e => e.source === id).map(e => e.target);
-                setNodes(nds => nds.map(node => {
-                  if (outgoingTargets.includes(node.id) && (node.type === 'toolBlock' || node.data?.type === 'tool')) {
-                    const tname = node.data?.toolName;
-                    if (tname === 'python_repl') {
-                      const params = { ...(node.data?.parameters || {}) };
-                      if (!params.code) {
-                        params.code = (stateMachineAdapter as any).generateCodeFromResults ? (stateMachineAdapter as any).generateCodeFromResults(data.result) : '';
-                        return { ...node, data: { ...node.data, parameters: params } };
-                      }
-                    }
-                  }
-                  return node;
-                }));
-              } catch {}
-
-              // Return the result for the component to display
-              return data.result;
-            } else {
-              // Handle error
-              const errorMessage = data.error || data.detail || 'Execution failed';
-
-              setNodes((nds) =>
-                nds.map((node) =>
-                  node.id === id
-                    ? {
-                        ...node,
-                        data: {
-                          ...node.data,
-                          status: 'failed',
-                          isError: true,
-                          isExecuting: false,
-                          executionError: errorMessage,
-                          executionResult: undefined
-                        }
-                      }
-                    : node
-                )
-              );
-
-              throw new Error(errorMessage);
-            }
-          } catch (error: any) {
-            console.error('Failed to execute tool:', error);
-
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === id
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        status: node.data?.status === 'needs_input' ? 'needs_input' : 'failed',
-                        isError: true,
-                        isExecuting: false,
-                        executionError: error.message || 'Failed to execute tool',
-                        executionResult: undefined
-                      }
-                    }
-                  : node
-              )
-            );
-
-            throw error;
-          }
-        }
-      }
-    };
-
-    setNodes((nds) => [...nds, newNode]);
-  }, [nodes, setNodes, setEdges]);
-
-  // Unified block addition handler
-  const addUnifiedBlock = useCallback((blockConfig: BlockConfig, position?: { x: number; y: number }) => {
-    const nodePosition = position || {
-      x: Math.random() * 400 + 200,
-      y: Math.random() * 300 + 100
-    };
-
-    if (blockConfig.type === 'tool' && blockConfig.toolSchema) {
-      // Add tool block
-      addToolBlock(blockConfig.toolName!, blockConfig.toolSchema, nodePosition);
-    } else {
-      // Add professional/workflow block
-      const toolsList = blockConfig.tools || [];
-      const newNode: Node = {
-        id: uuidv4(),
-        type: 'professional',
-        position: nodePosition,
-        data: {
-          type: blockConfig.subType,
-          name: blockConfig.name || `${blockConfig.subType.charAt(0).toUpperCase() + blockConfig.subType.slice(1)} ${nodes.length + 1}`,
-          description: blockConfig.description || '',
-          agent_role: blockConfig.agent_role || 'Agent',
-          tools: toolsList,  // Modern field name
-          toolsPlanned: toolsList,  // Legacy compatibility
-          transitions: {},
-          enabled: true,
-          advancedMode: false,
-          isWide: false,
-          isDarkMode,
-          nodeType: blockConfig.subType as any,
-          icon: blockConfig.icon,
-          color: blockConfig.color,
-          category: blockConfig.category,
-          // If user adds a Start block, mark it as the start
-          isStart: blockConfig.name?.toLowerCase() === 'start'
-        }
-      };
-      setNodes((nds) => {
-        if ((newNode.data as any).isStart) {
-          // Ensure uniqueness: clear isStart on others
-          return nds.map(n => ({ ...n, data: { ...n.data, isStart: false } })).concat(newNode);
-        }
-        return [...nds, newNode];
-      });
-    }
-  }, [nodes.length, setNodes, isDarkMode, addToolBlock]);
-
-  // Legacy wrapper for compatibility
-  const addProfessionalBlock = useCallback((type: string = 'analysis', position?: { x: number; y: number }) => {
-    const nodePosition = position || {
-      x: Math.random() * 400 + 200,
-      y: Math.random() * 300 + 100
-    };
-
-    const newNode: Node = {
-      id: uuidv4(),
-      type: 'professional',
-      position: nodePosition,
-      data: {
-        type: type,
-        name: `${type.charAt(0).toUpperCase() + type.slice(1)} ${nodes.length + 1}`,
-        description: '',
-        agent_role: type === 'analysis' ? 'Analyst' : type === 'tool_call' ? 'Executor' : 'Agent',
-        tools: type === 'tool_call' ? Array.from(selectedTools).slice(0, 3) : [],
-        transitions: {
-          success: null,
-          failure: null
-        },
-        enabled: true,
-        advancedMode: false,
-        isWide: false,
-        availableTools: availableTools,
-        onToggleEnabled: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
-                : node
-            )
-          );
-        },
-        onToggleAdvanced: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
-                : node
-            )
-          );
-        },
-        onToggleWide: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
-                : node
-            )
-          );
-        },
-        onOpenSettings: (id: string) => {
-          const node = nodes.find(n => n.id === id);
-          if (node) {
-            setSelectedNodeForSettings(node);
-          }
-        },
-        onDelete: (id: string) => {
-          setNodes((nds) => nds.filter((node) => node.id !== id));
-          setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
-        },
-        onDuplicate: (id: string) => {
-          const nodeToDuplicate = nodes.find((n) => n.id === id);
-          if (nodeToDuplicate) {
-            const newId = uuidv4();
-            const duplicatedNode = {
-              ...nodeToDuplicate,
-              id: newId,
-              position: {
-                x: nodeToDuplicate.position.x + 50,
-                y: nodeToDuplicate.position.y + 50
-              },
-              data: {
-                ...nodeToDuplicate.data,
-                name: `${nodeToDuplicate.data.name} (Copy)`
-              }
-            };
-            setNodes((nds) => [...nds, duplicatedNode]);
-          }
-        }
-      }
-    };
-
-    setNodes((nds) => [...nds, newNode]);
-
-    // Auto-connect to last node if exists
-    if (nodes.length > 0) {
-      const lastNode = nodes[nodes.length - 1];
-      const newEdge: Edge = {
-        id: uuidv4(),
-        source: lastNode.id,
-        target: newNode.id,
-        type: 'animated',
-        animated: true
-      };
-      setEdges((eds) => [...eds, newEdge]);
-    }
-
-    return newNode.id;
-  }, [nodes, setNodes, setEdges, selectedTools, availableTools]);
-
-  // Expand a single block into a sub-workflow
-  const expandBlockIntoSubWorkflow = useCallback((blockId: string, subMachine: any) => {
-    const blockToExpand = nodes.find(n => n.id === blockId);
-    if (!blockToExpand) return;
-
-    // Get incoming and outgoing edges for the block
-    const incomingEdges = edges.filter(e => e.target === blockId);
-    const outgoingEdges = edges.filter(e => e.source === blockId);
-
-    // Position for the sub-workflow (offset from original block)
-    const basePosition = blockToExpand.position;
-    const offsetX = 50;
-    const offsetY = 100;
-
-    // Create nodes for the sub-workflow states
-    const subNodes: Node[] = [];
-    const subEdges: Edge[] = [];
-    const stateIdMap = new Map<string, string>();
-
-    // Generate sub-nodes
-    Object.entries(subMachine.states || {}).forEach(([stateName, stateData]: [string, any], idx) => {
-      const nodeId = `${blockId}_sub_${stateName}`;
-      stateIdMap.set(stateName, nodeId);
-
-      // Calculate position in a grid layout
-      const col = idx % 3;
-      const row = Math.floor(idx / 3);
-
-      const newNode: Node = {
-        id: nodeId,
-        type: 'professionalBlock',
-        position: {
-          x: basePosition.x + offsetX + col * 250,
-          y: basePosition.y + offsetY + row * 200
-        },
-        data: {
-          type: stateData.type || 'analysis',
-          name: `${blockToExpand.data.name} - ${stateName}`,
-          description: stateData.description || stateData.prompt || '',
-          agent_role: stateData.agent_role || blockToExpand.data.agent_role,
-          tools: stateData.tools || blockToExpand.data.tools || [],
-          transitions: {},
-          enabled: true,
-          advancedMode: false,
-          availableTools: availableTools,
-          onUpdate: (id: string, updates: any) => {
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === id ? { ...node, data: { ...node.data, ...updates } } : node
-              )
-            );
-          },
-          onDelete: (id: string) => {
-            setNodes((nds) => nds.filter((node) => node.id !== id));
-            setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
-          },
-          onDuplicate: (id: string) => {
-            const nodeToDuplicate = nodes.find(n => n.id === id);
-            if (nodeToDuplicate) {
-              const newId = `${id}_copy_${Date.now()}`;
-              const duplicatedNode: Node = {
-                ...nodeToDuplicate,
-                id: newId,
-                position: {
-                  x: nodeToDuplicate.position.x + 100,
-                  y: nodeToDuplicate.position.y + 100
-                },
-                data: {
-                  ...nodeToDuplicate.data,
-                  name: `${nodeToDuplicate.data.name} (Copy)`
-                }
-              };
-              setNodes((nds) => [...nds, duplicatedNode]);
-            }
-          },
-          onToggleEnabled: (id: string) => {
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === id
-                  ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
-                  : node
-              )
-            );
-          },
-          onToggleAdvanced: (id: string) => {
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === id
-                  ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
-                  : node
-              )
-            );
-          },
-          onToggleWide: (id: string) => {
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === id
-                  ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
-                  : node
-              )
-            );
-          },
-          onOpenSettings: (id: string) => {
-            const node = nodes.find(n => n.id === id);
-            if (node) {
-              setSelectedNodeForSettings(node);
-            }
-          },
-          isDarkMode
-        }
-      };
-
-      subNodes.push(newNode);
-    });
-
-    // Generate sub-edges from transitions
-    Object.entries(subMachine.states || {}).forEach(([stateName, stateData]: [string, any]) => {
-      const sourceId = stateIdMap.get(stateName);
-      if (!sourceId) return;
-
-      Object.entries(stateData.transitions || {}).forEach(([event, targetState]) => {
-        const targetId = stateIdMap.get(targetState as string);
-        if (targetId) {
-          const edgeId = `${sourceId}_${event}_${targetId}`;
-          subEdges.push({
-            id: edgeId,
-            source: sourceId,
-            target: targetId,
-            sourceHandle: event === 'failure' || event === 'false' ? 'failure' : 'source',
-            targetHandle: 'target',
-            type: 'editable',
-            animated: true,
-            style: { stroke: '#94A3B8', strokeWidth: 2 },
-            data: { event, isDarkMode }
-          });
-        }
-      });
-    });
-
-    // Connect incoming edges to first sub-node
-    const firstSubNodeId = subNodes[0]?.id;
-    if (firstSubNodeId) {
-      incomingEdges.forEach(edge => {
-        const newEdge: Edge = {
-          ...edge,
-          id: `${edge.id}_to_sub`,
-          target: firstSubNodeId
-        };
-        subEdges.push(newEdge);
-      });
-    }
-
-    // Connect last sub-node to outgoing edges
-    const lastSubNodeId = subNodes[subNodes.length - 1]?.id;
-    if (lastSubNodeId) {
-      outgoingEdges.forEach(edge => {
-        const newEdge: Edge = {
-          ...edge,
-          id: `${edge.id}_from_sub`,
-          source: lastSubNodeId
-        };
-        subEdges.push(newEdge);
-      });
-    }
-
-    // Remove the original block and its edges
-    setNodes((nds) => [...nds.filter(n => n.id !== blockId), ...subNodes]);
-    setEdges((eds) => [
-      ...eds.filter(e => e.source !== blockId && e.target !== blockId),
-      ...subEdges
-    ]);
-
-    // Apply layout after a short delay
-    setTimeout(() => {
-      updateGraph(true);
-    }, 100);
-  }, [nodes, edges, availableTools, isDarkMode, setNodes, setEdges, updateGraph]);
-
-  // Create a local sub-workflow when backend is unavailable
-  const createLocalSubWorkflow = useCallback((blockId: string, prompt: string) => {
-    const blockToExpand = nodes.find(n => n.id === blockId);
-    if (!blockToExpand) return;
-
-    // Create a simple sub-workflow based on the block type and prompt
-    const blockType = blockToExpand.data.type;
-    const subWorkflow: any = { states: {} };
-
-    // Check for complex workflows mentioned in prompt
-    const promptLower = prompt.toLowerCase();
-    if (promptLower.includes('satellite') || promptLower.includes('mission') || promptLower.includes('complex')) {
-      // Create a complex nested workflow for satellite mission or similar complex scenarios
-      subWorkflow.states = {
-        'mission_init': {
-          type: 'analysis',
-          description: `Initialize mission parameters for ${blockToExpand.data.name}`,
-          transitions: { success: 'pre_flight_check' }
-        },
-        'pre_flight_check': {
-          type: 'validation',
-          description: `Validate all systems operational`,
-          transitions: { validated: 'telemetry_setup', invalid: 'abort_sequence' }
-        },
-        'telemetry_setup': {
-          type: 'tool_call',
-          description: `Configure telemetry and communication systems`,
-          tools: ['telemetry_config', 'comm_setup'],
-          transitions: { success: 'launch_sequence' }
-        },
-        'launch_sequence': {
-          type: 'parallel',
-          description: `Execute parallel launch operations`,
-          transitions: { success: 'orbit_insertion' }
-        },
-        'orbit_insertion': {
-          type: 'decision',
-          description: `Monitor and adjust orbital parameters`,
-          transitions: { success: 'mission_operations', failure: 'contingency_maneuver' }
-        },
-        'mission_operations': {
-          type: 'loop',
-          description: `Execute primary mission objectives`,
-          transitions: { success: 'data_collection', failure: 'error_recovery' }
-        },
-        'data_collection': {
-          type: 'aggregation',
-          description: `Collect and aggregate mission data`,
-          tools: ['data_collector', 'data_analyzer'],
-          transitions: { success: 'transmission' }
-        },
-        'transmission': {
-          type: 'tool_call',
-          description: `Transmit collected data to ground station`,
-          tools: ['data_transmitter'],
-          transitions: { success: 'mission_complete', failure: 'retry_transmission' }
-        },
-        'retry_transmission': {
-          type: 'loop',
-          description: `Retry data transmission with error correction`,
-          transitions: { success: 'mission_complete', failure: 'store_for_later' }
-        },
-        'contingency_maneuver': {
-          type: 'analysis',
-          description: `Calculate corrective maneuvers`,
-          transitions: { success: 'orbit_insertion' }
-        },
-        'error_recovery': {
-          type: 'analysis',
-          description: `Diagnose and recover from errors`,
-          transitions: { success: 'mission_operations' }
-        },
-        'store_for_later': {
-          type: 'transformation',
-          description: `Store data for later transmission`,
-          transitions: { success: 'mission_complete' }
-        },
-        'abort_sequence': {
-          type: 'final',
-          description: `Safely abort mission`
-        },
-        'mission_complete': {
-          type: 'final',
-          description: `Mission successfully completed`
-        }
-      };
-    } else if (blockType === 'analysis') {
-      subWorkflow.states = {
-        'gather_data': {
-          type: 'tool_call',
-          description: `Gather data for ${blockToExpand.data.name}`,
-          tools: blockToExpand.data.tools || [],
-          transitions: { success: 'analyze_data' }
-        },
-        'analyze_data': {
-          type: 'analysis',
-          description: `Analyze gathered data`,
-          transitions: { success: 'validate_results' }
-        },
-        'validate_results': {
-          type: 'validation',
-          description: `Validate analysis results`,
-          transitions: { success: 'complete', failure: 'gather_data' }
-        },
-        'complete': {
-          type: 'final',
-          description: `Complete ${blockToExpand.data.name}`
-        }
-      };
-    } else if (blockType === 'tool_call') {
-      subWorkflow.states = {
-        'prepare_input': {
-          type: 'transformation',
-          description: `Prepare input for tool execution`,
-          transitions: { success: 'execute_tool' }
-        },
-        'execute_tool': {
-          type: 'tool_call',
-          description: blockToExpand.data.description || `Execute tools`,
-          tools: blockToExpand.data.tools || [],
-          transitions: { success: 'process_output', failure: 'handle_error' }
-        },
-        'process_output': {
-          type: 'transformation',
-          description: `Process tool output`,
-          transitions: { success: 'complete' }
-        },
-        'handle_error': {
-          type: 'analysis',
-          description: `Handle execution error`,
-          transitions: { success: 'execute_tool' }
-        },
-        'complete': {
-          type: 'final',
-          description: `Complete tool execution`
-        }
-      };
-    } else if (blockType === 'decision') {
-      subWorkflow.states = {
-        'evaluate_conditions': {
-          type: 'analysis',
-          description: `Evaluate decision conditions`,
-          transitions: { success: 'check_criteria' }
-        },
-        'check_criteria': {
-          type: 'validation',
-          description: `Check decision criteria`,
-          transitions: { validated: 'positive_path', invalid: 'negative_path' }
-        },
-        'positive_path': {
-          type: 'transformation',
-          description: `Process positive decision path`,
-          transitions: { success: 'complete' }
-        },
-        'negative_path': {
-          type: 'transformation',
-          description: `Process negative decision path`,
-          transitions: { success: 'complete' }
-        },
-        'complete': {
-          type: 'final',
-          description: `Decision complete`
-        }
-      };
-    } else {
-      // Default sub-workflow structure
-      subWorkflow.states = {
-        'initialize': {
-          type: 'analysis',
-          description: `Initialize ${blockToExpand.data.name}`,
-          transitions: { success: 'process' }
-        },
-        'process': {
-          type: blockType,
-          description: blockToExpand.data.description || `Process ${blockToExpand.data.name}`,
-          tools: blockToExpand.data.tools || [],
-          transitions: { success: 'finalize' }
-        },
-        'finalize': {
-          type: 'final',
-          description: `Complete ${blockToExpand.data.name}`
-        }
-      };
-    }
-
-    // Apply the expansion
-    expandBlockIntoSubWorkflow(blockId, subWorkflow);
-  }, [nodes, expandBlockIntoSubWorkflow]);
-
-  // Import state machine from backend and convert to enhanced blocks
-  const importStateMachine = useCallback(async (machine: any, useProfessionalBlocks: boolean = true, preserveExisting: boolean = false) => {
-    if (!machine || (!machine.states && !machine.enhanced_blocks)) {
-      console.error('Invalid state machine format');
-      return;
-    }
-
-    let existingNodes: Node[] = [];
-    let existingEdges: Edge[] = [];
-
-    if (preserveExisting) {
-      // Preserve existing blocks and connections
-      existingNodes = [...nodes];
-      existingEdges = [...edges];
-    } else {
-      // Clear existing graph (only when explicitly importing new workflow)
-      setNodes([]);
-      setEdges([]);
-    }
-
-    // Check if machine has enhanced blocks from backend
-    if (machine.enhanced && machine.enhanced_blocks) {
-      // Use enhanced blocks directly from backend
-      const enhancedNodes = machine.enhanced_blocks.map((block: any) => {
-        // Ensure tool blocks have execution handler
-        if (block.type === 'toolBlock' || block.data?.type === 'tool') {
-          return {
-            ...block,
-            data: {
-              ...block.data,
-              onExecuteTool: async (id: string, toolName: string, parameters: any) => {
-                // Resolve placeholders using shared utility
-                const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
-                if (!ok || !resolvedParams) {
-                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: resolveError || 'Input required' } } : node));
-                  throw new Error(resolveError || 'Input required');
-                }
-
-                // Validate before execution
-                const precheck = await stateMachineAdapter.validateParameters(toolName, resolvedParams);
-                if (!precheck.valid) {
-                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: precheck.message } } : node));
-                  throw new Error(precheck.message || 'Missing required parameters');
-                }
-                // Use existing tool execution logic
-                const workflowRequest = {
-                  workflow_id: `tool-exec-${id}`,
-                  blocks: [{
-                    id: id,
-                    type: 'tool',
-                    tool_name: toolName,
-                    parameters: resolvedParams,
-                    position: { x: 0, y: 0 },
-                    connections: []
-                  }],
-                  edges: [],
-                  context: {},
-                  use_agents: false
-                };
-
-                const response = await fetch(`${window.location.origin}/api/v1/unified/execute-workflow`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-                  },
-                  body: JSON.stringify(workflowRequest)
-                });
-
-                const data = await response.json();
-                const blockResult = data.results?.[id] || data.result;
-
-                // Update node with result
-                setNodes(nds =>
-                  nds.map(node => {
-                    if (node.id === id) {
-                      return {
-                        ...node,
-                        data: {
-                          ...node.data,
-                          status: data.success ? 'completed' : 'failed',
-                          executionResult: blockResult,
-                          executionError: data.error
-                        }
-                      };
-                    }
-                    return node;
-                  })
-                );
-
-                // Prefill dependent nodes if any
-                try {
-                  const outgoingTargets = enhancedEdges.filter((e:any) => e.source === id).map((e:any) => e.target);
-                  setNodes(nds => nds.map(node => {
-                    if (outgoingTargets.includes(node.id) && (node.type === 'toolBlock' || node.data?.type === 'tool')) {
-                      const tname = node.data?.toolName;
-                      if (tname === 'python_repl') {
-                        const params = { ...(node.data?.parameters || {}) };
-                        if (!params.code) {
-                          params.code = (stateMachineAdapter as any).generateCodeFromResults ? (stateMachineAdapter as any).generateCodeFromResults(blockResult) : '';
-                          return { ...node, data: { ...node.data, parameters: params } };
-                        }
-                      }
-                    }
-                    return node;
-                  }));
-                } catch {}
-
-                return blockResult;
-              },
-              isDarkMode: isDarkMode
-            }
-          };
-        }
-        return {
-          ...block,
-          data: {
-            ...block.data,
-            isDarkMode: isDarkMode
-          }
-        };
-      });
-
-      const enhancedEdges = machine.enhanced_edges || [];
-
-      // Propagate any known context into blocks (scaffold for runtime passing)
-      stateMachineAdapter.propagateContext(
-        enhancedNodes,
-        enhancedEdges,
-        { previousOutputs: new Map(), globalContext: {}, userInputs: {} }
-      );
-
-      // Calculate positions if needed
-      const positionedNodes = stateMachineAdapter.calculateNodePositions(enhancedNodes, enhancedEdges);
-
-      setNodes([...existingNodes, ...positionedNodes]);
-      setEdges([...existingEdges, ...enhancedEdges]);
-
-      // Validate workflow
-      const validation = await stateMachineAdapter.validateWorkflow(positionedNodes);
-      if (!validation.valid) {
-        console.warn('Workflow validation issues:', validation.issues);
-      }
-
-      return;
-    }
-
-    // Otherwise, convert states to enhanced blocks using adapter
-    if (machine.states) {
-      const { nodes: enhancedNodes, edges: enhancedEdges } = await stateMachineAdapter.convertToEnhancedWorkflow(machine);
-
-      // Add execution handlers and dark mode - FORCE PROFESSIONAL BLOCKS
-      const processedNodes = enhancedNodes.map(node => {
-        // Force professional block type for proper styling
-        const forceProfessional = {
-          ...node,
-          type: 'professional', // Always use professional blocks
-          data: {
-            ...node.data,
-            type: node.data?.type || node.data?.nodeType || 'analysis', // Ensure subType is set
-          }
-        };
-
-        if (forceProfessional.data?.type === 'tool_call' || forceProfessional.data?.toolName) {
-          // For tool blocks, keep them as tool type but with professional styling
-          return {
-            ...forceProfessional,
-            type: 'tool', // Tool blocks use the tool type for execution
-            data: {
-              ...forceProfessional.data,
-              onUpdate: (id: string, updates: any) => {
-                setNodes((nds) =>
-                  nds.map((node) =>
-                    node.id === id
-                      ? { ...node, data: { ...node.data, ...updates } }
-                      : node
-                  )
-                );
-              },
-              onExecuteTool: async (id: string, toolName: string, parameters: any) => {
-                // Resolve placeholders using shared utility
-                const { ok, params: resolvedParams, error: resolveError } = await resolveUserInputsInParams(parameters);
-                if (!ok || !resolvedParams) {
-                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: resolveError || 'Input required' } } : node));
-                  throw new Error(resolveError || 'Input required');
-                }
-                const precheck = await stateMachineAdapter.validateParameters(toolName, resolvedParams);
-                if (!precheck.valid) {
-                  setNodes(nds => nds.map(node => node.id === id ? { ...node, data: { ...node.data, status: 'needs_input', executionError: precheck.message } } : node));
-                  throw new Error(precheck.message || 'Missing required parameters');
-                }
-                // Use existing tool execution logic
-                const workflowRequest = {
-                  workflow_id: `tool-exec-${id}`,
-                  blocks: [{
-                    id: id,
-                    type: 'tool',
-                    tool_name: toolName,
-                    parameters: resolvedParams,
-                    position: { x: 0, y: 0 },
-                    connections: []
-                  }],
-                  edges: [],
-                  context: {},
-                  use_agents: false
-                };
-
-                const response = await fetch(`${window.location.origin}/api/v1/unified/execute-workflow`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-                  },
-                  body: JSON.stringify(workflowRequest)
-                });
-
-                const data = await response.json();
-                const blockResult = data.results?.[id] || data.result;
-
-                // Update node with result
-                setNodes(nds =>
-                  nds.map(node => {
-                    if (node.id === id) {
-                      return {
-                        ...node,
-                        data: {
-                          ...node.data,
-                          status: data.success ? 'completed' : 'failed',
-                          executionResult: blockResult,
-                          executionError: data.error
-                        }
-                      };
-                    }
-                    return node;
-                  })
-                );
-
-                // Prefill dependent nodes if any
-                try {
-                  const outgoingTargets = enhancedEdges.filter((e:any) => e.source === id).map((e:any) => e.target);
-                  setNodes(nds => nds.map(node => {
-                    if (outgoingTargets.includes(node.id) && (node.type === 'toolBlock' || node.data?.type === 'tool')) {
-                      const tname = node.data?.toolName;
-                      if (tname === 'python_repl') {
-                        const params = { ...(node.data?.parameters || {}) };
-                        if (!params.code) {
-                          params.code = (stateMachineAdapter as any).generateCodeFromResults ? (stateMachineAdapter as any).generateCodeFromResults(blockResult) : '';
-                          return { ...node, data: { ...node.data, parameters: params } };
-                        }
-                      }
-                    }
-                    return node;
-                  }));
-                } catch {}
-
-                return blockResult;
-              },
-              isDarkMode: isDarkMode
-            }
-          };
-        }
-
-        // For non-tool blocks, use professional type
-        return {
-          ...forceProfessional,
-          data: {
-            ...forceProfessional.data,
-            isDarkMode: isDarkMode
-          }
-        };
-      });
-
-      // Propagate any known context into blocks (scaffold for runtime passing)
-      stateMachineAdapter.propagateContext(
-        processedNodes,
-        enhancedEdges,
-        { previousOutputs: new Map(), globalContext: {}, userInputs: {} }
-      );
-
-      // Calculate positions
-      const positionedNodes = stateMachineAdapter.calculateNodePositions(processedNodes, enhancedEdges);
-
-      setNodes([...existingNodes, ...positionedNodes]);
-      setEdges([...existingEdges, ...enhancedEdges]);
-
-      // Validate workflow
-      const validation = await stateMachineAdapter.validateWorkflow(positionedNodes);
-      if (!validation.valid) {
-        console.warn('Workflow validation issues:', validation.issues);
-      }
-
-      return;
-    }
-
-    // Fallback to original implementation if no enhanced support
-    const newNodes: Node[] = machine.states.map((state: any, index: number) => {
-      // Use professional block type for better editing experience
-      const nodeType = useProfessionalBlocks ? 'professional' : 'agent';
-
-      // Map transitions from edges
-      const stateTransitions: Record<string, string> = {};
-      machine.edges.forEach((edge: any) => {
-        if (edge.source === state.id) {
-          stateTransitions[edge.event] = edge.target;
-        }
-      });
-
-      // Determine block type - preserve special initial/start blocks
-      let blockType = state.type || 'analysis';
-      if (state.id === 'start' || state.id === 'initial' ||
-          state.name?.toLowerCase() === 'start' ||
-          state.name?.toLowerCase() === 'initial' ||
-          state.id === machine.initial_state) {
-        // Keep as analysis type for starting blocks
-        blockType = 'analysis';
-      }
-
-      const nodeData: any = {
-        type: blockType,
-        name: state.name || state.id,
-        description: state.description || '',
-        agent_role: state.agent_role || 'Agent',
-        tools: state.tools || [],
-        transitions: stateTransitions,
-        retry_count: state.retry_count || 0,
-        timeout: state.timeout || 60,
-        enabled: true,
-        advancedMode: false,
-        isWide: false,
-        isDarkMode,
-        availableTools,
-        // Professional block callbacks
-        onUpdate: (id: string, updates: any) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, ...updates } }
-                : node
-            )
-          );
-        },
-        onDelete: (id: string) => {
-          setNodes((nds) => nds.filter((node) => node.id !== id));
-          setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
-        },
-        onDuplicate: (id: string) => {
-          const nodeToDuplicate = nodes.find((n) => n.id === id);
-          if (nodeToDuplicate) {
-            const newId = uuidv4();
-            const duplicatedNode = {
-              ...nodeToDuplicate,
-              id: newId,
-              position: {
-                x: nodeToDuplicate.position.x + 50,
-                y: nodeToDuplicate.position.y + 50
-              },
-              data: {
-                ...nodeToDuplicate.data,
-                name: `${nodeToDuplicate.data.name} (Copy)`
-              }
-            };
-            setNodes((nds) => [...nds, duplicatedNode]);
-          }
-        },
-        onToggleEnabled: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, enabled: !node.data.enabled } }
-                : node
-            )
-          );
-        },
-        onToggleAdvanced: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, advancedMode: !node.data.advancedMode } }
-                : node
-            )
-          );
-        },
-        onToggleWide: (id: string) => {
-          setNodes((nds) =>
-            nds.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, isWide: !node.data.isWide } }
-                : node
-            )
-          );
-        }
-      };
-
-      // For non-professional nodes, use simpler data
-      if (!useProfessionalBlocks) {
-        return {
-          id: state.id,
-          type: nodeType,
-          position: { x: 0, y: 0 }, // Will be laid out
-          data: {
-            label: state.name,
-            name: state.name,
-            status: 'pending',
-            nodeType: state.type,
-            task: state.task,
-            tools: state.tools,
-            toolsPlanned: Array.isArray(state.tools) ? state.tools : [],
-            description: state.description,
-            agentRole: state.agent_role,
-            direction: layoutDirection,
-            isDarkMode
-          },
-          targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-          sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-        };
-      }
-
-      return {
-        id: state.id,
-        type: nodeType,
-        position: { x: 0, y: 0 }, // Will be laid out
-        data: nodeData,
-        targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-        sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-      };
-    });
-
-    // Create edges from transitions
-    const newEdges: Edge[] = machine.edges.map((edge: any) => ({
-      id: `${edge.source}-${edge.target}-${edge.event}`,
-      source: edge.source,
-      target: edge.target,
-      type: 'smoothstep',
-      animated: edge.event === 'success',
-      label: edge.event !== 'success' ? edge.event : '',
-      labelStyle: { fill: '#94a3b8', fontSize: 11 },
-      labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
-      style: {
-        stroke: edge.event === 'failure' ? '#ef4444' :
-               edge.event === 'retry' ? '#f59e0b' :
-               edge.event === 'success' ? '#10b981' : '#52525b',
-        strokeWidth: 2
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: 20,
-        height: 20,
-        color: edge.event === 'failure' ? '#ef4444' :
-               edge.event === 'retry' ? '#f59e0b' :
-               edge.event === 'success' ? '#10b981' : '#52525b'
-      },
-    }));
-
-    // Merge with existing nodes if preserving
-    const finalNodes = preserveExisting ? [...existingNodes, ...newNodes] : newNodes;
-    const finalEdges = preserveExisting ? [...existingEdges, ...newEdges] : newEdges;
-
-    // Apply layout
-    const layouted = getLayoutedElements(finalNodes, finalEdges, layoutDirection);
-    layoutCache.current = layouted;
-    setNodes(layouted.nodes);
-    setEdges(layouted.edges);
-    setHasStateMachineStructure(true);
-    setPlanned(true);
-
-    // Fit view to show all nodes
-    setTimeout(() => fitView({ padding: 0.2, duration: 400, maxZoom: 1 }), 100);
-
-    // Show success message (you can add a toast notification here)
-    console.log(`Imported state machine with ${newNodes.length} states and ${newEdges.length} transitions`);
-  }, [layoutDirection, isDarkMode, availableTools, getLayoutedElements, fitView, setNodes, setEdges]);
-
-  // Enhance flow with AI - expand selected blocks or entire workflow
-  const enhanceFlow = useCallback(async (prompt: string, selectedNodeIds: string[]) => {
-    try {
-      // Build current state machine from graph
-      const currentMachine = buildMachine();
-
-      // If specific blocks are selected, we'll expand them into sub-workflows
-      if (selectedNodeIds.length > 0) {
-        // For each selected block, create an expansion request
-        const selectedNodes = nodes.filter(n => selectedNodeIds.includes(n.id));
-
-        // Prepare detailed context for expansion
-        const expansionContext = selectedNodes.map(node => ({
-          id: node.id,
-          type: node.data.type,
-          name: node.data.name,
-          description: node.data.description,
-          tools: node.data.tools,
-          agent_role: node.data.agent_role
-        }));
-
-        // Create enhanced request that focuses on expanding these specific blocks
-        const enhancementRequest = {
-          task: task || "Enhance workflow",
-          prompt: `Expand the following blocks into detailed sub-workflows: ${expansionContext.map(c => c.name).join(', ')}. ${prompt}`,
-          current_machine: currentMachine,
-          selected_states: selectedNodeIds,
-          expansion_context: expansionContext,
-          tool_preferences: {
-            selected_tools: Array.from(selectedTools),
-            restrict_to_selected: selectedTools.size > 0
-          }
-        };
-
-        // Call backend to enhance the workflow
-        const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/enhance`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(enhancementRequest)
-        });
-
-        if (!res.ok) {
-          // If enhance endpoint doesn't exist, use plan endpoint with expanded context
-          const planRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              task: `Expand ${selectedNodes[0]?.data.name || 'block'} into sub-workflow: ${prompt}`,
-              tool_preferences: { ...enhancementRequest.tool_preferences, use_enhanced_blocks: true }
-            })
-          });
-
-          if (planRes.ok) {
-            const data = await planRes.json();
-            if (data.machine) {
-              // Create sub-workflow from the enhanced machine
-              expandBlockIntoSubWorkflow(selectedNodeIds[0], data.machine);
-            }
-          }
-          return;
-        }
-
-        const data = await res.json();
-        const enhancedMachine = data.machine;
-
-        if (enhancedMachine) {
-          // Expand selected blocks into sub-workflows
-          if (selectedNodeIds.length === 1) {
-            expandBlockIntoSubWorkflow(selectedNodeIds[0], enhancedMachine);
-          } else {
-            // Replace entire workflow if multiple blocks selected
-            importStateMachine(enhancedMachine, true, true); // Preserve existing blocks during enhancement
-          }
-        }
-      } else {
-        // Enhance entire workflow
-        const enhancementRequest = {
-          task: task || "Enhance workflow",
-          prompt: prompt,
-          current_machine: currentMachine,
-          tool_preferences: {
-            selected_tools: Array.from(selectedTools),
-            restrict_to_selected: selectedTools.size > 0
-          }
-        };
-
-        const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/enhance`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(enhancementRequest)
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.machine) {
-            importStateMachine(data.machine, true, true); // Preserve existing blocks during enhancement
-          }
-        } else {
-          // Fallback to plan
-          const planRes = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              task: `${task || 'Workflow'}: ${prompt}`,
-              tool_preferences: { ...enhancementRequest.tool_preferences, use_enhanced_blocks: true }
-            })
-          });
-          if (planRes.ok) {
-            const data = await planRes.json();
-            if (data.machine) {
-              importStateMachine(data.machine, true, true); // Preserve existing blocks during enhancement
-            }
-          }
-        }
-      }
-
-      console.log(`Successfully enhanced workflow`);
-    } catch (e) {
-      console.error('Enhancement failed', e);
-      // Create a local expansion if backend fails
-      if (selectedNodeIds.length === 1) {
-        createLocalSubWorkflow(selectedNodeIds[0], prompt);
-      }
-    }
-  }, [task, selectedTools, buildMachine, importStateMachine, nodes, expandBlockIntoSubWorkflow, createLocalSubWorkflow]);
-
-  const planWorkflow = useCallback(async ()=>{
-    if (!task.trim()) return;
-    try{
-      setPlanned(false);
-      const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/plan`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0, use_enhanced_blocks: true } }) });
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const machine = data.machine;
-      if(machine){
-        // Clear existing if empty, preserve if not
-        const shouldPreserve = nodes.length > 0;
-        importStateMachine(machine, true, shouldPreserve);
-      }
-    }catch(e){ console.error('Plan failed', e); }
-  }, [task, selectedTools, importStateMachine, nodes.length]);
-
-  const runPlannedWorkflow = useCallback(async ()=>{
-    try{
-      setStateExecutionData([]); // Clear previous execution data
-      const machine = buildMachine();
-      const res = await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/execute`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task, machine, tool_preferences: { selected_tools: Array.from(selectedTools), restrict_to_selected: selectedTools.size>0 } }) });
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setExecutionId(data.exec_id);
-      setIsRunning(true);
-      setTimeout(()=>connectWebSocket(data.exec_id, false), 100);
-    }catch(e){ console.error('Run failed', e); }
-  }, [buildMachine, selectedTools, task, connectWebSocket]);
-
-  // Save current workflow as template with full visual properties
-  const saveAsTemplate = useCallback(() => {
-    const machine = buildMachine();
-
-    // Save complete node and edge data including positions and styling
-    const fullWorkflow = {
-      nodes: nodes.map(node => ({
-        id: node.id,
-        type: node.type,
-        position: node.position,
-        data: node.data,
-        width: node.width,
-        height: node.height,
-        selected: false,
-        style: node.style
-      })),
-      edges: edges.map(edge => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        sourceHandle: edge.sourceHandle,  // Preserve source handle ID
-        targetHandle: edge.targetHandle,  // Preserve target handle ID
-        type: edge.type,
-        label: edge.label,
-        data: edge.data,
-        style: edge.style,
-        animated: edge.animated,
-        markerEnd: edge.markerEnd
-      }))
-    };
-
-    const template = {
-      name: `Workflow_${new Date().toISOString().split('T')[0]}`,
-      description: task || 'Custom workflow template',
-      machine, // Keep for backward compatibility
-      fullWorkflow, // New: complete visual workflow
-      category: 'custom',
-      difficulty: 'medium',
-      tools: Array.from(selectedTools),
-      created: new Date().toISOString(),
-      version: '2.1.0' // Updated version with handle preservation
-    };
-
-    // Convert to JSON and trigger download
-    const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `workflow_template_${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    // Also save to localStorage for quick access
-    try {
-      const savedTemplates = JSON.parse(localStorage.getItem('custom_workflow_templates') || '[]');
-      savedTemplates.push(template);
-      // Keep only last 10 templates
-      if (savedTemplates.length > 10) {
-        savedTemplates.shift();
-      }
-      localStorage.setItem('custom_workflow_templates', JSON.stringify(savedTemplates));
-      alert('Template saved successfully!');
-    } catch (e) {
-      console.error('Failed to save template to localStorage:', e);
-    }
-  }, [buildMachine, task, selectedTools, nodes, edges]);
-
-  // Load template from file with full visual properties
-  const loadTemplate = useCallback(() => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async (e: any) => {
-      const file = e.target.files[0];
-      if (file) {
-        try {
-          const text = await file.text();
-          const template = JSON.parse(text);
-
-          // Check if this is a new format template with fullWorkflow
-          if (template.fullWorkflow) {
-            // Clear existing workflow first
-            setNodes([]);
-            setEdges([]);
-
-            // Small timeout to ensure React Flow is ready
-            setTimeout(() => {
-              // Restore nodes with all their properties and professional block features
-              const restoredNodes = template.fullWorkflow.nodes.map((node: any) => {
-                // Ensure node has proper type for professional blocks
-                const nodeType = node.type || (node.data?.type === 'tool' ? 'toolBlock' : 'professional');
-
-                // Prepare base node data
-                const baseNodeData = {
-                  ...node.data,
-                  isDarkMode,
-                  availableTools,
-                  status: node.data?.status || 'pending',
-                  // Restore callbacks for professional blocks
-                  onUpdate: (id: string, updates: any) => {
-                    setNodes((nds) =>
-                      nds.map((n) =>
-                        n.id === id ? { ...n, data: { ...n.data, ...updates } } : n
-                      )
-                    );
-                  },
-                  onDelete: (id: string) => {
-                    setNodes((nds) => nds.filter((n) => n.id !== id));
-                    setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
-                  },
-                  onDuplicate: (id: string) => {
-                    setNodes((currentNodes) => {
-                      const nodeToDuplicate = currentNodes.find((n: any) => n.id === id);
-                      if (nodeToDuplicate) {
-                        const newId = uuidv4();
-                        const duplicatedNode = {
-                          ...nodeToDuplicate,
-                          id: newId,
-                          position: {
-                            x: nodeToDuplicate.position.x + 50,
-                            y: nodeToDuplicate.position.y + 50
-                          },
-                          data: {
-                            ...nodeToDuplicate.data,
-                            label: `${nodeToDuplicate.data.label || nodeToDuplicate.id}_copy`
-                          }
-                        };
-                        return [...currentNodes, duplicatedNode];
-                      }
-                      return currentNodes;
-                    });
-                  }
-                };
-
-                // Add tool execution callback for tool blocks
-                if (nodeType === 'toolBlock' || node.data?.type === 'tool') {
-                  baseNodeData.onExecuteTool = async (id: string, toolName: string, parameters: any) => {
-                    // Tool execution logic here (simplified for template restoration)
-                    console.log(`Executing tool ${toolName} for block ${id}`);
-                    // You can add the full tool execution logic here
-                  };
-                }
-
-                // Restore node with all callbacks
-                const restoredNode = {
-                  ...node,
-                  type: nodeType,
-                  data: baseNodeData
-                };
-
-                return restoredNode;
-              });
-
-              // Restore edges with their visual properties
-              const restoredEdges = template.fullWorkflow.edges.map((edge: any) => {
-                // For v2.1.0+ files, handles should already be present
-                let sourceHandle = edge.sourceHandle;
-                let targetHandle = edge.targetHandle;
-
-                // Backward compatibility: only infer if truly missing (v2.0.0 or older)
-                if (!sourceHandle || !targetHandle) {
-                  // Infer source handle based on edge label/event
-                  const edgeLabel = edge.label || edge.data?.label || edge.data?.event || 'success';
-
-                  // Only set if not already present
-                  if (!sourceHandle) {
-                    if (edgeLabel === 'success' || edgeLabel === '') {
-                      sourceHandle = 'source';
-                    } else if (edgeLabel === 'failure' || edgeLabel === 'error') {
-                      sourceHandle = 'failure';
-                    } else if (edgeLabel === 'retry') {
-                      sourceHandle = 'retry';
-                    } else if (edgeLabel === 'timeout') {
-                      sourceHandle = 'timeout';
-                    } else {
-                      sourceHandle = 'source';
-                    }
-                  }
-
-                  // Only set target if not already present
-                  if (!targetHandle) {
-                    targetHandle = 'target';
-                  }
-
-                  // Special handling for parallel_load and join nodes
-                  const sourceNode = restoredNodes.find((n: any) => n.id === edge.source);
-                  const targetNode = restoredNodes.find((n: any) => n.id === edge.target);
-
-                  if (!sourceHandle && (sourceNode?.data?.type === 'parallel_load' || sourceNode?.data?.nodeType === 'parallel_load')) {
-                    sourceHandle = 'source';
-                  }
-
-                  if (!targetHandle && (targetNode?.data?.type === 'join' || targetNode?.data?.nodeType === 'join')) {
-                    targetHandle = 'target';
-                  }
-                }
-
-                // Map edge types - convert 'bezier' to 'default'
-                let edgeType = edge.type;
-                if (edgeType === 'bezier') {
-                  edgeType = 'default';
-                } else if (!edgeType || edgeType === '') {
-                  edgeType = 'editable';
-                }
-
-                return {
-                  ...edge,
-                  id: edge.id || `${edge.source}-${edge.target}-${sourceHandle}`,  // Ensure unique ID
-                  sourceHandle,
-                  targetHandle,
-                  type: edgeType,
-                  style: {
-                    ...edge.style,
-                    stroke: edge.style?.stroke || (isDarkMode ? '#475569' : '#cbd5e1'),
-                    strokeWidth: edge.style?.strokeWidth || 2
-                  },
-                  markerEnd: edge.markerEnd || {
-                    type: MarkerType.ArrowClosed,
-                    width: 20,
-                    height: 20,
-                    color: isDarkMode ? '#475569' : '#cbd5e1',
-                    orient: 'auto'
-                  }
-                };
-              });
-
-              // Apply nodes and edges
-              setNodes(restoredNodes);
-
-              // Short delay to let nodes render, then update internals and add edges
-              setTimeout(() => {
-                // Update node internals to register handles
-                restoredNodes.forEach((node: any) => {
-                  if (node.id) {
-                    updateNodeInternals(node.id);
-                  }
-                });
-
-                // Set edges immediately after updating internals
-                setEdges(restoredEdges);
-
-                // Fit view after everything is loaded
-                setTimeout(() => {
-                  fitView({ padding: 0.2, duration: 400 });
-                }, 50);
-              }, 50);
-            }, 10);
-          } else if (template.machine) {
-            // Fallback for old format templates
-            importStateMachine(template.machine, true);
-          }
-
-          // Restore tools and task
-          if (template.tools) {
-            setSelectedTools(new Set(template.tools));
-          }
-          if (template.description) {
-            setTask(template.description);
-          }
-
-          alert('Template loaded successfully!');
-        } catch (err) {
-          console.error('Failed to load template:', err);
-          alert('Failed to load template. Please check the file format.');
-        }
-      }
-    };
-    input.click();
-  }, [importStateMachine, setSelectedTools, setTask, setNodes, setEdges, isDarkMode, availableTools, fitView, nodes]);
-
-  // Memoized callbacks for ChatbotOutput to prevent re-renders
-  const handleAgentSelect = useCallback((agentId: string | null) => {
-    setSelectedAgent(agentId);
-    if (agentId) {
-      // Highlight the corresponding node when an agent is selected
-      setNodes((nds) =>
-        nds.map((node) => ({
-          ...node,
-          selected: node.id === agentId,
-        }))
-      );
-      // Optionally bring selected into view
-      const node = nodes.find(n => n.id === agentId);
-      if (node) {
-        setCenter(node.position.x + (((node as any).width) || 280) / 2, node.position.y + (((node as any).height) || 140) / 2, { zoom: 1.0, duration: 300 });
-      }
-    }
-  }, [setNodes]);
-
-  const handleNodeFocus = useCallback((agentId: string) => {
-    const node = nodes.find(n => n.id === agentId);
-    if (node) {
-      setCenter(node.position.x + 110, node.position.y + 50, { zoom: 1.2, duration: 300 });
-    }
-  }, [nodes, setCenter]);
-
-  // Handle edge click to highlight path
-  const handleEdgePathHighlight = useCallback((edgeId: string, sourceId: string, targetId: string) => {
-    // Find all nodes in the path
-    const pathNodes = new Set<string>();
-    const pathEdges = new Set<string>();
-
-    // Add source and target to path
-    pathNodes.add(sourceId);
-    pathNodes.add(targetId);
-    pathEdges.add(edgeId);
-
-    // Find all downstream nodes from target
-    const findDownstream = (nodeId: string) => {
-      const outgoingEdges = edges.filter(e => e.source === nodeId);
-      outgoingEdges.forEach(edge => {
-        if (!pathEdges.has(edge.id)) {
-          pathEdges.add(edge.id);
-          pathNodes.add(edge.target);
-          findDownstream(edge.target);
-        }
-      });
-    };
-
-    // Find all upstream nodes from source
-    const findUpstream = (nodeId: string) => {
-      const incomingEdges = edges.filter(e => e.target === nodeId);
-      incomingEdges.forEach(edge => {
-        if (!pathEdges.has(edge.id)) {
-          pathEdges.add(edge.id);
-          pathNodes.add(edge.source);
-          findUpstream(edge.source);
-        }
-      });
-    };
-
-    findDownstream(targetId);
-    findUpstream(sourceId);
-
-    // Update nodes to highlight path
-    setNodes(nds => nds.map(node => {
-      const inPath = pathNodes.has(node.id);
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          highlighted: inPath,
-        },
-        style: {
-          ...node.style,
-          opacity: inPath ? 1 : 0.3,
-          boxShadow: inPath && (node.id === sourceId || node.id === targetId)
-            ? '0 0 20px rgba(59, 130, 246, 0.5)'
-            : node.style?.boxShadow,
-        }
-      };
-    }));
-
-    // Update edges to highlight path
-    setEdges(eds => eds.map(edge => {
-      const inPath = pathEdges.has(edge.id);
-      return {
-        ...edge,
-        animated: inPath,
-        style: {
-          ...edge.style,
-          stroke: inPath ? '#3b82f6' : '#94a3b8',
-          strokeWidth: inPath ? 3 : 2,
-          opacity: inPath ? 1 : 0.3,
-        },
-        data: {
-          ...edge.data,
-          highlighted: inPath,
-        }
-      };
-    }));
-
-    // Set highlight path flag
-    setHighlightPath(true);
-  }, [edges, setNodes, setEdges]);
-
-  // Clear path highlighting
-  const clearPathHighlight = useCallback(() => {
-    setNodes(nds => nds.map(node => ({
-      ...node,
-      data: {
-        ...node.data,
-        highlighted: false,
-      },
-      style: {
-        ...node.style,
-        opacity: 1,
-        boxShadow: undefined,
-      }
-    })));
-
-    setEdges(eds => eds.map(edge => ({
-      ...edge,
-      animated: false,
-      style: {
-        ...edge.style,
-        stroke: edge.data?.isActive ? '#fbbf24' : edge.data?.isCompleted ? '#22c55e' : '#94a3b8',
-        strokeWidth: 2,
-        opacity: 1,
-      },
-      data: {
-        ...edge.data,
-        highlighted: false,
-      }
-    })));
-
-    setHighlightPath(false);
-  }, [setNodes, setEdges]);
-
-  // Keyboard shortcut for clearing path highlight
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && highlightPath) {
-        e.preventDefault();
-        clearPathHighlight();
-      }
-    };
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [highlightPath, clearPathHighlight]);
-
-  // Create a stable agents reference to prevent ChatbotOutput re-renders
-  const stableAgents = useMemo(() => {
-    // Only recreate Map when content actually changes
-    return agents;
-  }, [
-    // Create a stable dependency based on actual content
-    Array.from(agents.entries())
-      .map(([k, v]) => `${k}:${v.status}:${v.output?.length || 0}:${v.startTime}:${v.endTime}`)
-      .join(',')
-  ]);
-
-  const stopExecution = () => {
-    setIsRunning(false);
-    setActivelyStreamingAgents(new Set());
-    setCurrentExecutingNode(null);
-    setNextExecutingNode(null);
-    setExecutionActions(new Map());
-    setIsExecuting(false);
-    // ⚠️ DON'T clear hasStateMachineStructure - preserve user's blocks!
-    // setHasStateMachineStructure(false);  // ❌ This was causing blocks to be cleared
-
-    // Clear active execution status but KEEP execution history
-    setNodes(nodes => nodes.map(node => ({
-      ...node,
-      data: {
-        ...node.data,
-        // Change running to failed (stopped), keep completed as is
-        status: node.data.status === 'running' ? 'failed' : node.data.status,
-        isExecuting: false,
-        isDimmed: false,
-        currentAction: undefined,
-        currentActionDetail: undefined,
-        activeTools: [],
-        // Keep execution history markers!
-        wasExecuted: node.data.wasExecuted,
-        executionOrder: node.data.executionOrder,
-        executionDuration: node.data.executionDuration,
-        executionDurationText: node.data.executionDurationText,
-        executedTools: node.data.executedTools
-      }
-    })));
-
-    disconnectWebSocket();
-  };
-
-  const clearExecutionHistory = () => {
-    // Clear execution history but keep the blocks
-    setExecutionHistory(new Map());
-    setExecutionOrderCounter(0);
-    setExecutionActions(new Map());
-
-    // Reset node execution states but keep the blocks
-    setNodes(nodes => nodes.map(node => ({
-      ...node,
-      data: {
-        ...node.data,
-        status: 'pending',
-        wasExecuted: false,
-        executionOrder: undefined,
-        executionDuration: undefined,
-        executionDurationText: undefined,
-        executedTools: undefined,
-        currentAction: undefined,
-        currentActionDetail: undefined,
-        activeTools: [],
-        isDimmed: false
-      }
-    })));
-
-    // Reset edge styles
-    setEdges(edges => edges.map(edge => ({
-      ...edge,
-      animated: false,
-      className: '',
-      style: {
-        ...edge.style,
-        stroke: '#52525b',
-        strokeWidth: 2,
-      }
-    })));
-  };
-
-  const resetView = () => {
-    // Clear everything and reset
-    setAgents(new Map());
-    setNodes([]);
-    setEdges([]);
-    setSelectedAgent(null);
-    layoutCache.current = { nodes: [], edges: [] };
-    lastLayoutedAgentIds.current.clear();
-    setActivelyStreamingAgents(new Set());
-    setHasStateMachineStructure(false);
-    setPlanned(false);
-  };
-  
-
-  const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-    event.stopPropagation();
-    preventRerender.current = true;
-
-    // Single click only selects the node, doesn't open settings
-    setSelectedAgent(prev => prev === node.id ? null : node.id);
-
-    // Open settings panel only on double-click
-    if (event.detail === 2) {
-      setSelectedNodeForSettings(node);
-    }
-
-    // Reset highlight path if selecting a new node
-    if (highlightPath && selectedAgent !== node.id) {
-      setHighlightPath(false);
-    }
-    setTimeout(() => { preventRerender.current = false; }, 100);
-  }, [highlightPath, selectedAgent]);
-
-  // Add context menu handler for node settings
-  const onNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setSelectedNodeForSettings(node);
-  }, []);
-
-  // Enhanced path highlighting for state machine visualization
-  useEffect(() => {
-    // Prevent updates during interaction
-    if (preventRerender.current) return;
-
-    if (!highlightPath || !selectedAgent) {
-      // Reset dimming if highlighting is off
-      if (!highlightPath) {
-        setEdges(prev => prev.map(e => {
-          if (!e.data?.dimmed) return e;
-          return {
-            ...e,
-            data: { ...e.data, dimmed: false },
-          };
-        }));
-        setNodes(prev => prev.map(n => {
-          if (n.style?.opacity === 1) return n;
-          return {
-            ...n,
-            style: { ...n.style, opacity: 1 },
-          };
-        }));
-      }
-      return;
-    }
-
-    // Debounce to prevent rapid updates
-    const timeoutId = setTimeout(() => {
-      // Use layout cache for edge information to avoid dependency
-      const edgeSnapshot = layoutCache.current.edges.map(e => ({
-        id: e.id,
-        source: e.source,
-        target: e.target
-      }));
-
-      // Find all connected paths from selected node
-      const connectedNodes = new Set<string>([selectedAgent]);
-      const connectedEdges = new Set<string>();
-
-      // Find downstream nodes
-      let changed = true;
-      let iterations = 0;
-      while (changed && iterations < 100) {
-        changed = false;
-        iterations++;
-        edgeSnapshot.forEach(edge => {
-          if (connectedNodes.has(edge.source) && !connectedNodes.has(edge.target)) {
-            connectedNodes.add(edge.target);
-            connectedEdges.add(edge.id);
-            changed = true;
-          }
-        });
-      }
-
-      // Find upstream nodes
-      changed = true;
-      iterations = 0;
-      while (changed && iterations < 100) {
-        changed = false;
-        iterations++;
-        edgeSnapshot.forEach(edge => {
-          if (connectedNodes.has(edge.target) && !connectedNodes.has(edge.source)) {
-            connectedNodes.add(edge.source);
-            connectedEdges.add(edge.id);
-            changed = true;
-          }
-        });
-      }
-
-      // Batch updates
-      preventRerender.current = true;
-
-      setEdges(prev => prev.map(e => {
-        const shouldDim = !connectedEdges.has(e.id) && !(e.source === selectedAgent || e.target === selectedAgent);
-        if (e.data?.dimmed === shouldDim) return e;
-        return {
-          ...e,
-          data: {
-            ...e.data,
-            dimmed: shouldDim,
-          },
-        };
-      }));
-
-      setNodes(prev => prev.map(n => {
-        const targetOpacity = connectedNodes.has(n.id) ? 1 : 0.4;
-        if (n.style?.opacity === targetOpacity) return n;
-        return {
-          ...n,
-          style: {
-            ...n.style,
-            opacity: targetOpacity,
-          },
-        };
-      }));
-
-      setTimeout(() => {
-        preventRerender.current = false;
-      }, 50);
-    }, 100);
-
-    return () => clearTimeout(timeoutId);
-  }, [highlightPath, selectedAgent, setEdges, setNodes]);
-
-
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      disconnectWebSocket();
-    };
-  }, [disconnectWebSocket]);
-
-  const selectedAgentData = selectedAgent ? agents.get(selectedAgent) : null;
+    isDarkMode,
+    project,
+    zoomIn, zoomOut,
+    fitView,
+    isExecuting,
+  } = state;
+
+  const {
+    nodeTypes,
+    edgeTypes,
+    saveToHistory,
+    undo,
+    redo,
+    updateGraph,
+    onNodeClick,
+    onNodeContextMenu,
+    handleEdgePathHighlight,
+    clearPathHighlight,
+    handleAgentSelect,
+    handleNodeFocus,
+    stableAgents,
+    stopExecution,
+    rerunFromSelected,
+    addAgentAndRerun,
+    addUnifiedBlock,
+  } = handlers;
+
+  const {
+    startExecution,
+    importStateMachine,
+    enhanceFlow,
+    saveAsTemplate,
+    loadTemplate,
+    runPlannedWorkflow,
+  } = workflow;
 
   return (
     <div className={`flow-swarm-container ${isDarkMode ? 'dark-mode' : 'light-mode'} ${isExecuting ? 'execution-mode' : ''}`}>
@@ -3033,7 +187,6 @@ const FlowSwarmInterface: React.FC = () => {
                   </button>
                 </div>
               </div>
-            {/* Unknown selection warning inside modal */}
             {(() => {
               const unknownSel = Array.from(selectedTools).filter(s => !availableTools.includes(s));
               if (unknownSel.length === 0) return null;
@@ -3108,7 +261,6 @@ const FlowSwarmInterface: React.FC = () => {
                         }
                       }}
                     >
-                      {/* Checkbox */}
                       <div style={{
                         width: 20,
                         height: 20,
@@ -3127,7 +279,6 @@ const FlowSwarmInterface: React.FC = () => {
                           </svg>
                         )}
                       </div>
-                      {/* Tool info */}
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{
                           fontWeight: 600,
@@ -3160,6 +311,8 @@ const FlowSwarmInterface: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Decision Prompt Modal */}
       {decisionPrompt && (
         <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
           <div style={{ background: '#0f172a', color: '#e2e8f0', padding: 20, borderRadius: 8, width: 420 }}>
@@ -3191,6 +344,8 @@ const FlowSwarmInterface: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Input Prompt Modal */}
       {inputPrompt && (
         <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
           <div style={{ background: '#0f172a', color: '#e2e8f0', padding: 20, borderRadius: 8, width: 520 }}>
@@ -3234,6 +389,7 @@ const FlowSwarmInterface: React.FC = () => {
           </div>
         </div>
       )}
+
       {/* Header */}
       <header className="flow-header">
         <div className="header-brand">
@@ -3248,7 +404,7 @@ const FlowSwarmInterface: React.FC = () => {
 
       {/* Main Content */}
       <div className="flow-content">
-        {/* Tool preferences banner - compact */}
+        {/* Tool preferences banner */}
         {toolPrefs && (toolPrefs.unknown.length > 0) && (
           <div style={{
             margin: '4px 12px',
@@ -3272,713 +428,649 @@ const FlowSwarmInterface: React.FC = () => {
           {/* React Flow Graph */}
           <div className="flow-graph-panel" ref={reactFlowWrapper} onDrop={(event)=>{
             event.preventDefault();
-          if (!editMode) return;
+            if (!editMode) return;
 
-          // Get block type and optional metadata
-          const blockData = event.dataTransfer.getData('application/reactflow');
-          const jsonData = event.dataTransfer.getData('application/json');
+            const blockData = event.dataTransfer.getData('application/reactflow');
+            const jsonData = event.dataTransfer.getData('application/json');
 
-          if (!blockData) return;
+            if (!blockData) return;
 
-          const bounds = reactFlowWrapper.current?.getBoundingClientRect();
-          const pos = project({ x: event.clientX - (bounds?.left || 0), y: event.clientY - (bounds?.top || 0) });
+            const bounds = reactFlowWrapper.current?.getBoundingClientRect();
+            const pos = project({ x: event.clientX - (bounds?.left || 0), y: event.clientY - (bounds?.top || 0) });
 
-          // Parse the drag data
-          let parsedData: any = {};
-          try {
-            parsedData = JSON.parse(blockData);
-          } catch (e) {
-            // If not JSON, treat as simple block type string
-            parsedData = { type: blockData };
-          }
-
-          if (parsedData?.source === 'unified-block-manager' && parsedData.block) {
-            addUnifiedBlock(parsedData.block as BlockConfig, pos);
-            return;
-          }
-
-          // Check if additional JSON data exists
-          if (jsonData) {
+            let parsedData: any = {};
             try {
-              const additionalData = JSON.parse(jsonData);
-              parsedData = { ...parsedData, ...additionalData };
+              parsedData = JSON.parse(blockData);
             } catch (e) {
-              // Ignore parse errors
+              parsedData = { type: blockData };
             }
-          }
 
-          // Handle tool drops from ToolPalette
-          if (parsedData.type === 'tool' && parsedData.toolName) {
-            // Schema can be passed or fetched from unified service
-            addToolBlock(parsedData.toolName, parsedData.schema, pos);
-          }
-          // Use professional block if from new toolbar
-          else if (parsedData.useEnhanced || jsonData) {
-            addProfessionalBlock(parsedData.type || blockData, pos);
-          } else {
-            // Legacy block creation
-            const blockType = parsedData.type || blockData;
-            const id = `node_${Math.random().toString(36).slice(2,8)}`;
-            const newNode: Node = {
-              id,
-              type: 'agent',
-              position: pos,
-              data: { label: blockType, name: blockType, status:'pending', nodeType: blockType as any, direction: layoutDirection, toolsPlanned: [], isDarkMode },
-              targetPosition: layoutDirection==='LR'? Position.Left: Position.Top,
-              sourcePosition: layoutDirection==='LR'? Position.Right: Position.Bottom,
-            };
-            setNodes(nds=>nds.concat(newNode));
-          }
-        }} onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}>
-          <ReactFlow
-            style={{ background: isDarkMode ? '#0a0f1a' : '#ffffff' }}
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={async (connection: Connection) => {
-              if (!connection.source || !connection.target) return;
+            if (parsedData?.source === 'unified-block-manager' && parsedData.block) {
+              addUnifiedBlock(parsedData.block, pos);
+              return;
+            }
 
-              // Determine event type based on source handle
-              let ev = 'success';
-              if (connection.sourceHandle === 'failure' || connection.sourceHandle === 'false') {
-                ev = 'failure';
-              } else if (connection.sourceHandle === 'retry') {
-                ev = 'retry';
-              } else if (connection.sourceHandle === 'timeout') {
-                ev = 'timeout';
-              } else if (connection.sourceHandle && connection.sourceHandle !== 'source' && connection.sourceHandle !== 'true') {
-                ev = connection.sourceHandle;
-              }
+            if (jsonData) {
+              try {
+                const additionalData = JSON.parse(jsonData);
+                parsedData = { ...parsedData, ...additionalData };
+              } catch (e) {}
+            }
 
-              // Allow custom label through a prompt (optional)
-              if (editMode) {
-                const customLabel = window.prompt('Enter connection label (e.g., success, failure, retry, timeout, or custom):', ev);
-                if (customLabel !== null) {
-                  ev = customLabel || ev;
+            if (parsedData.type === 'tool' && parsedData.toolName) {
+              handlers.addToolBlock(parsedData.toolName, parsedData.schema, pos);
+            } else if (parsedData.useEnhanced || jsonData) {
+              handlers.addProfessionalBlock(parsedData.type || blockData, pos);
+            } else {
+              const blockType = parsedData.type || blockData;
+              const id = `node_${Math.random().toString(36).slice(2,8)}`;
+              const newNode: any = {
+                id,
+                type: 'agent',
+                position: pos,
+                data: { label: blockType, name: blockType, status:'pending', nodeType: blockType, direction: state.layoutDirection, toolsPlanned: [], isDarkMode },
+                targetPosition: state.layoutDirection==='LR'? 'left': 'top',
+                sourcePosition: state.layoutDirection==='LR'? 'right': 'bottom',
+              };
+              setNodes(nds=>nds.concat(newNode));
+            }
+          }} onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}>
+            <ReactFlow
+              style={{ background: isDarkMode ? '#0a0f1a' : '#ffffff' }}
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={async (connection: Connection) => {
+                if (!connection.source || !connection.target) return;
+
+                let ev = 'success';
+                if (connection.sourceHandle === 'failure' || connection.sourceHandle === 'false') {
+                  ev = 'failure';
+                } else if (connection.sourceHandle === 'retry') {
+                  ev = 'retry';
+                } else if (connection.sourceHandle === 'timeout') {
+                  ev = 'timeout';
+                } else if (connection.sourceHandle && connection.sourceHandle !== 'source' && connection.sourceHandle !== 'true') {
+                  ev = connection.sourceHandle;
                 }
-              }
 
-              // Check for duplicate edges
-              const existingEdge = edges.find(
-                e => e.source === connection.source &&
-                     e.target === connection.target &&
-                     (e as any).label === ev
-              );
-              if (existingEdge) {
-                console.warn('Edge already exists');
-                return;
-              }
+                if (editMode) {
+                  const customLabel = window.prompt('Enter connection label (e.g., success, failure, retry, timeout, or custom):', ev);
+                  if (customLabel !== null) {
+                    ev = customLabel || ev;
+                  }
+                }
 
-              // Create new edge
-              const newEdge: Edge = {
-                id: `${connection.source}-${connection.target}-${ev}`,
-                source: connection.source,
-                target: connection.target,
-                sourceHandle: connection.sourceHandle,
-                targetHandle: connection.targetHandle,
-                type: 'editable',
-                animated: ev === 'success',
-                label: ev !== 'success' ? ev : '',
-                labelStyle: { fill: '#94a3b8', fontSize: 11 },
-                labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+                const existingEdge = edges.find(
+                  e => e.source === connection.source &&
+                       e.target === connection.target &&
+                       (e as any).label === ev
+                );
+                if (existingEdge) {
+                  console.warn('Edge already exists');
+                  return;
+                }
+
+                const newEdge: any = {
+                  id: `${connection.source}-${connection.target}-${ev}`,
+                  source: connection.source,
+                  target: connection.target,
+                  sourceHandle: connection.sourceHandle,
+                  targetHandle: connection.targetHandle,
+                  type: 'editable',
+                  animated: ev === 'success',
+                  label: ev !== 'success' ? ev : '',
+                  labelStyle: { fill: '#94a3b8', fontSize: 11 },
+                  labelBgStyle: { fill: '#1e293b', fillOpacity: 0.8 },
+                  style: {
+                    stroke: ev === 'failure' ? '#ef4444' : ev === 'retry' ? '#f59e0b' : '#10b981',
+                    strokeWidth: 2
+                  },
+                  markerEnd: {
+                    type: MarkerType.ArrowClosed,
+                    width: 20,
+                    height: 20,
+                    color: ev === 'failure' ? '#ef4444' : ev === 'retry' ? '#f59e0b' : '#10b981'
+                  },
+                };
+
+                setEdges(eds => [...eds, newEdge]);
+
+                if (executionId) {
+                  try {
+                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ edges: [{ source: connection.source, target: connection.target, event: ev }] })
+                    });
+                  } catch (e) {
+                    console.error('Failed to update backend graph', e);
+                  }
+                }
+              }}
+              onEdgeClick={(e, edge) => {
+                e.stopPropagation();
+                if (editMode && e.shiftKey) {
+                  setEdgeEdit({ id: edge.id, source: edge.source, target: edge.target, event: (edge as any).label || 'success' });
+                } else {
+                  handleEdgePathHighlight(edge.id, edge.source, edge.target);
+                }
+              }}
+              onNodeClick={onNodeClick}
+              onNodeContextMenu={onNodeContextMenu}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              connectionMode={ConnectionMode.Loose}
+              fitView={false}
+              attributionPosition="bottom-left"
+              minZoom={0.2}
+              maxZoom={1.5}
+              nodesDraggable={true}
+              nodesConnectable={editMode}
+              elementsSelectable={true}
+              panOnScroll={true}
+              panOnDrag={true}
+              elevateNodesOnSelect={false}
+              snapToGrid={true}
+              snapGrid={[15, 15]}
+              proOptions={{ hideAttribution: true }}
+              deleteKeyCode={['Delete','Backspace']}
+              onEdgeUpdate={async (oldEdge, newCon)=>{
+                if (!editMode) return false;
+
+                const ev = (oldEdge as any).label || 'success';
+
+                setEdges(prev=>prev.filter(e=>e.id!==oldEdge.id).concat([{
+                  ...oldEdge,
+                  id: `${newCon.source}-${newCon.target}-${ev}`,
+                  source: newCon.source!,
+                  target: newCon.target!,
+                  label: ev,
+                  type: 'editable',
+                  style: { ...oldEdge.style },
+                  animated: false
+                }] as any));
+
+                if (executionId){
+                  try{
+                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                      method:'POST',
+                      headers:{'Content-Type':'application/json'},
+                      body: JSON.stringify({
+                        remove_edges:[{ source: oldEdge.source, target: oldEdge.target, event: ev }],
+                        edges:[{ source: newCon.source, target: newCon.target, event: ev }]
+                      })
+                    });
+                  }catch(e){ console.error('Edge update failed', e); }
+                }
+                return true;
+              }}
+              onNodeDragStart={() => {
+                state.preventRerender.current = true;
+                state.setIsInteracting(true);
+              }}
+              onNodeDragStop={() => {
+                state.setIsInteracting(false);
+                setTimeout(() => { state.preventRerender.current = false; }, 100);
+              }}
+              onMoveStart={() => {
+                state.preventRerender.current = true;
+                state.setIsInteracting(true);
+              }}
+              onMoveEnd={() => {
+                state.setIsInteracting(false);
+                setTimeout(() => { state.preventRerender.current = false; }, 100);
+              }}
+              defaultViewport={{ x: 0, y: 0, zoom: 0.75 }}
+              onlyRenderVisibleElements
+              edgeUpdaterRadius={10}
+              edgesUpdatable={editMode}
+              onNodesDelete={async (nds) => {
+                if (!nds || !Array.isArray(nds) || nds.length === 0) return;
+
+                try {
+                  saveToHistory(nodes, edges);
+
+                  const nodeIds = nds.map(n => n.id);
+
+                  setNodes((currentNodes) => {
+                    if (!currentNodes || !Array.isArray(currentNodes)) return [];
+                    return currentNodes.filter(node => !nodeIds.includes(node.id));
+                  });
+
+                  setEdges((currentEdges) => {
+                    if (!currentEdges || !Array.isArray(currentEdges)) return [];
+                    return currentEdges.filter(edge =>
+                      !nodeIds.includes(edge.source) && !nodeIds.includes(edge.target)
+                    );
+                  });
+
+                  setSelectedAgent(null);
+                  setSelectedNodeForSettings(null);
+
+                  if (executionId) {
+                    fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                      method:'POST',
+                      headers:{'Content-Type':'application/json'},
+                      body: JSON.stringify({ remove_states: nodeIds })
+                    }).catch(e => {
+                      console.error('Remove states from backend failed', e);
+                    });
+                  }
+                } catch (error) {
+                  console.error('Error during node deletion:', error);
+                  state.setEditMode(true);
+                }
+              }}
+              onEdgesDelete={async (eds) => {
+                if (!eds || !Array.isArray(eds) || eds.length === 0) return;
+
+                try {
+                  saveToHistory(nodes, edges);
+
+                  const edgeIds = eds.map(e => e.id);
+
+                  setEdges((currentEdges) => {
+                    if (!currentEdges || !Array.isArray(currentEdges)) return [];
+                    return currentEdges.filter(edge => !edgeIds.includes(edge.id));
+                  });
+
+                  if (executionId) {
+                    const payload = {
+                      remove_edges: eds.map((e:any) => ({
+                        source: e.source,
+                        target: e.target,
+                        event: (e.label && typeof e.label === 'string' && e.label.length > 0) ? e.label : 'success'
+                      }))
+                    };
+
+                    fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
+                      method:'POST',
+                      headers:{'Content-Type':'application/json'},
+                      body: JSON.stringify(payload)
+                    }).catch(e => {
+                      console.error('Remove edges from backend failed', e);
+                    });
+                  }
+                } catch (error) {
+                  console.error('Error during edge deletion:', error);
+                  state.setEditMode(true);
+                }
+              }}
+              noDragClassName="nodrag"
+              noPanClassName="nopan"
+              defaultEdgeOptions={{
+                type: 'animated',
+                animated: false,
                 style: {
-                  stroke: ev === 'failure' ? '#ef4444' :
-                         ev === 'retry' ? '#f59e0b' :
-                         '#10b981',
-                  strokeWidth: 2
+                  stroke: isDarkMode ? '#475569' : '#cbd5e1',
+                  strokeWidth: 2,
                 },
                 markerEnd: {
                   type: MarkerType.ArrowClosed,
                   width: 20,
                   height: 20,
-                  color: ev === 'failure' ? '#ef4444' :
-                         ev === 'retry' ? '#f59e0b' :
-                         '#10b981'
+                  color: isDarkMode ? '#475569' : '#cbd5e1',
+                  orient: 'auto',
                 },
-              };
-
-              // Update edges locally first
-              setEdges(eds => [...eds, newEdge]);
-
-              // Update backend if execution is running
-              if (executionId) {
-                try {
-                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ edges: [{ source: connection.source, target: connection.target, event: ev }] })
-                  });
-                } catch (e) {
-                  console.error('Failed to update backend graph', e);
-                }
-              }
-            }}
-            onEdgeClick={(e, edge) => {
-              e.stopPropagation();
-              if (editMode && e.shiftKey) {
-                // Shift+click to edit edge
-                setEdgeEdit({ id: edge.id, source: edge.source, target: edge.target, event: (edge as any).label || 'success' });
-              } else {
-                // Regular click to highlight path
-                handleEdgePathHighlight(edge.id, edge.source, edge.target);
-              }
-            }}
-            onNodeClick={onNodeClick}
-            onNodeContextMenu={onNodeContextMenu}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            connectionMode={ConnectionMode.Loose}
-            fitView={false}
-            attributionPosition="bottom-left"
-            minZoom={0.2}
-            maxZoom={1.5}
-            nodesDraggable={true}
-            nodesConnectable={editMode}
-            elementsSelectable={true}
-            panOnScroll={true}
-            panOnDrag={true}
-            elevateNodesOnSelect={false}
-            snapToGrid={true}
-            snapGrid={[15, 15]}
-            proOptions={{ hideAttribution: true }}
-            deleteKeyCode={['Delete','Backspace']}
-            onEdgeUpdate={async (oldEdge, newCon)=>{
-              if (!editMode) return false;
-
-              // Preserve the existing label - don't prompt for change during drag
-              const ev = (oldEdge as any).label || 'success';
-
-              setEdges(prev=>prev.filter(e=>e.id!==oldEdge.id).concat([{
-                ...oldEdge,
-                id: `${newCon.source}-${newCon.target}-${ev}`,
-                source: newCon.source!,
-                target: newCon.target!,
-                label: ev,
-                type: 'editable',
-                style: { ...oldEdge.style },
-                animated: false
-              }] as any));
-
-              if (executionId){
-                try{
-                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body: JSON.stringify({
-                      remove_edges:[{ source: oldEdge.source, target: oldEdge.target, event: ev }],
-                      edges:[{ source: newCon.source, target: newCon.target, event: ev }]
-                    })
-                  });
-                }catch(e){ console.error('Edge update failed', e); }
-              }
-              return true;
-            }}
-            onNodeDragStart={() => {
-              preventRerender.current = true;
-              setIsInteracting(true);
-            }}
-            onNodeDragStop={() => {
-              setIsInteracting(false);
-              setTimeout(() => { preventRerender.current = false; }, 100);
-            }}
-            onMoveStart={() => {
-              preventRerender.current = true;
-              setIsInteracting(true);
-            }}
-            onMoveEnd={() => {
-              setIsInteracting(false);
-              setTimeout(() => { preventRerender.current = false; }, 100);
-            }}
-            defaultViewport={{ x: 0, y: 0, zoom: 0.75 }}
-            onlyRenderVisibleElements
-            edgeUpdaterRadius={10}
-            edgesUpdatable={editMode}
-            onNodesDelete={async (nds) => {
-              // Don't process if nodes array is invalid
-              if (!nds || !Array.isArray(nds) || nds.length === 0) return;
-
-              try {
-                // Save current state to history before deletion
-                saveToHistory(nodes, edges);
-
-                // Update local state first
-                const nodeIds = nds.map(n => n.id);
-
-                // Use callback pattern to ensure we're working with latest state
-                setNodes((currentNodes) => {
-                  if (!currentNodes || !Array.isArray(currentNodes)) return [];
-                  return currentNodes.filter(node => !nodeIds.includes(node.id));
-                });
-
-                setEdges((currentEdges) => {
-                  if (!currentEdges || !Array.isArray(currentEdges)) return [];
-                  return currentEdges.filter(edge =>
-                    !nodeIds.includes(edge.source) && !nodeIds.includes(edge.target)
-                  );
-                });
-
-                // Clear any selected state
-                setSelectedAgent(null);
-                setSelectedNodeForSettings(null);
-
-                // Then update backend if execution exists
-                if (executionId) {
-                  fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body: JSON.stringify({ remove_states: nodeIds })
-                  }).catch(e => {
-                    console.error('Remove states from backend failed', e);
-                  });
-                }
-              } catch (error) {
-                console.error('Error during node deletion:', error);
-                // Restore edit mode if something went wrong
-                setEditMode(true);
-              }
-            }}
-            onEdgesDelete={async (eds) => {
-              // Don't process if edges array is invalid
-              if (!eds || !Array.isArray(eds) || eds.length === 0) return;
-
-              try {
-                // Save current state to history before deletion
-                saveToHistory(nodes, edges);
-
-                // Update local state first
-                const edgeIds = eds.map(e => e.id);
-
-                // Use callback pattern to ensure we're working with latest state
-                setEdges((currentEdges) => {
-                  if (!currentEdges || !Array.isArray(currentEdges)) return [];
-                  return currentEdges.filter(edge => !edgeIds.includes(edge.id));
-                });
-
-                // Then update backend if execution exists
-                if (executionId) {
-                  const payload = {
-                    remove_edges: eds.map((e:any) => ({
-                      source: e.source,
-                      target: e.target,
-                      event: (e.label && typeof e.label === 'string' && e.label.length > 0) ? e.label : 'success'
-                    }))
-                  };
-
-                  fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body: JSON.stringify(payload)
-                  }).catch(e => {
-                    console.error('Remove edges from backend failed', e);
-                  });
-                }
-              } catch (error) {
-                console.error('Error during edge deletion:', error);
-                // Restore edit mode if something went wrong
-                setEditMode(true);
-              }
-            }}
-            noDragClassName="nodrag"
-            noPanClassName="nopan"
-            defaultEdgeOptions={{
-              type: 'animated',
-              animated: false,
-              style: {
-                stroke: isDarkMode ? '#475569' : '#cbd5e1',
+              }}
+              fitViewOptions={{
+                padding: 0.3,
+                maxZoom: 1.0,
+                minZoom: 0.2,
+                includeHiddenNodes: false,
+              }}
+              connectionLineType={ConnectionLineType.Bezier}
+              connectionLineStyle={{
+                stroke: isDarkMode ? '#4b5563' : '#d1d5db',
                 strokeWidth: 2,
-              },
-              markerEnd: {
-                type: MarkerType.ArrowClosed,
-                width: 20,
-                height: 20,
-                color: isDarkMode ? '#475569' : '#cbd5e1',
-                orient: 'auto',
-              },
-            }}
-            fitViewOptions={{
-              padding: 0.3,
-              maxZoom: 1.0,
-              minZoom: 0.2,
-              includeHiddenNodes: false,
-            }}
-            connectionLineType={ConnectionLineType.Bezier}
-            connectionLineStyle={{
-              stroke: isDarkMode ? '#4b5563' : '#d1d5db',
-              strokeWidth: 2,
-            }}
-          >
-            {/* Parallel Group Overlay */}
-            <ParallelGroupOverlay
-              nodes={nodes}
-              collapsedGroups={collapsedGroups}
-              isDarkMode={isDarkMode}
-            />
-            <Background
-              variant={showGrid ? BackgroundVariant.Lines : BackgroundVariant.Dots}
-              gap={showGrid ? 16 : 24}
-              size={showGrid ? 1.25 : 1.5}
-              color={isDarkMode ? '#334155' : '#e5e7eb'}
-            />
-            <Controls showInteractive={true} position="bottom-left" />
-            {showMinimap && <MiniMap position="bottom-right" pannable zoomable style={{ background: isDarkMode? '#0b1220':'#f8fafc' }} />}
-            <Controls />
-          {showMinimap && (
-            <MiniMap 
-              nodeColor={node => {
-                switch (node.data?.status) {
-                  case 'running': return '#facc15';
-                  case 'completed': return '#22c55e';
-                  case 'failed': return '#ef4444';
-                  default: return '#71717a';
-                }
               }}
-              pannable
-              zoomable
+            >
+              <ParallelGroupOverlay
+                nodes={nodes}
+                collapsedGroups={collapsedGroups}
+                isDarkMode={isDarkMode}
               />
-          )}
-          {/* Children Editor Modal */}
-          <ParallelChildrenEditor
-            showChildrenEditor={showChildrenEditor}
-            nodes={nodes}
-            childrenOverrides={childrenOverrides}
-            isDarkMode={isDarkMode}
-            onClose={() => setShowChildrenEditor(null)}
-            onChildrenChange={(nodeId, children) => {
-              setChildrenOverrides(prev => ({ ...prev, [nodeId]: children }));
-            }}
-          />
-            {/* Professional Toolbar */}
-            <WorkflowToolbar
-              onAddBlock={() => setShowUnifiedManager(true)}
-              onArrangeBlocks={() => updateGraph(true)}
-              onRunWorkflow={runPlannedWorkflow}
-              onStopWorkflow={() => setIsRunning(false)}
-              onClearHistory={clearExecutionHistory}
-              onExportWorkflow={saveAsTemplate}
-              onImportWorkflow={loadTemplate}
-              onZoomIn={() => zoomIn()}
-              onZoomOut={() => zoomOut()}
-              onFitView={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })}
-              isRunning={isRunning}
-              hasExecutionHistory={executionHistory.size > 0}
-              availableTools={availableTools}
-              selectedTools={selectedTools}
-              onToolsChange={setSelectedTools}
-              onEnhanceFlow={enhanceFlow}
-              selectedNodes={nodes.filter(n => n.selected)}
-              onImportTemplate={(template) => {
-                // Import the template's state machine
-                importStateMachine(template.machine, true);
-              }}
-            />
+              <Background
+                variant={showGrid ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+                gap={showGrid ? 16 : 24}
+                size={showGrid ? 1.25 : 1.5}
+                color={isDarkMode ? '#334155' : '#e5e7eb'}
+              />
+              <Controls showInteractive={true} position="bottom-left" />
+              {showMinimap && <MiniMap position="bottom-right" pannable zoomable style={{ background: isDarkMode? '#0b1220':'#f8fafc' }} />}
 
-            {/* Unified Block Manager */}
-            <UnifiedBlockManager
-              isOpen={showUnifiedManager}
-              onClose={() => setShowUnifiedManager(false)}
-              onAddBlock={addUnifiedBlock}
-              isDarkMode={isDarkMode}
-              selectedTools={selectedTools}
-              onToolsChange={setSelectedTools}
-            />
+              <ParallelChildrenEditor
+                showChildrenEditor={showChildrenEditor}
+                nodes={nodes}
+                childrenOverrides={childrenOverrides}
+                isDarkMode={isDarkMode}
+                onClose={() => setShowChildrenEditor(null)}
+                onChildrenChange={(nodeId, children) => {
+                  setChildrenOverrides(prev => ({ ...prev, [nodeId]: children }));
+                }}
+              />
 
-            <FlowControlsPanel
-              historyIndex={historyIndex}
-              historyLength={history.length}
-              highlightPath={highlightPath}
-              layoutDirection={layoutDirection}
-              showGrid={showGrid}
-              showMinimap={showMinimap}
-              showConversationPanel={showConversationPanel}
-              showRawDataViewer={showRawDataViewer}
-              followActive={followActive}
-              replayMode={replayMode}
-              executionTraceLength={executionTrace.length}
-              replayIndex={replayIndex}
-              selectedAgent={selectedAgent}
-              isDarkMode={isDarkMode}
-              onUndo={undo}
-              onRedo={redo}
-              onClearPathHighlight={clearPathHighlight}
-              onFitView={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })}
-              onRelayout={() => updateGraph(true)}
-              onOpenBlockManager={() => setShowUnifiedManager(true)}
-              onToggleLayoutDirection={() => {
-                setLayoutDirection(layoutDirection === 'LR' ? 'TB' : 'LR');
-                setTimeout(() => updateGraph(true), 50);
-              }}
-              onToggleGrid={() => setShowGrid(!showGrid)}
-              onToggleMinimap={() => setShowMinimap(!showMinimap)}
-              onToggleConversationPanel={() => setShowConversationPanel(!showConversationPanel)}
-              onResetView={resetView}
-              onOpenToolsHub={() => setShowToolsHub(true)}
-              onToggleRawDataViewer={() => setShowRawDataViewer(!showRawDataViewer)}
-              onToggleFollowActive={() => setFollowActive(prev => !prev)}
-              onToggleReplayMode={() => {
-                setReplayMode(!replayMode);
-                setReplayIndex((prev: number | null) => (prev == null ? 0 : prev));
-              }}
-              onReplayPrevious={() => {
-                if (!replayMode || executionTrace.length === 0) return;
-                setReplayIndex((i: number | null) => {
-                  const next = Math.max(0, (i ?? 0) - 1);
-                  const id = executionTrace[next];
-                  if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
-                  return next;
-                });
-              }}
-              onReplayNext={() => {
-                if (!replayMode || executionTrace.length === 0) return;
-                setReplayIndex((i: number | null) => {
-                  const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
-                  const id = executionTrace[next];
-                  if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
-                  return next;
-                });
-              }}
-              onToggleHighlightPath={() => {
-                preventRerender.current = true;
-                setHighlightPath(!highlightPath);
-                setTimeout(() => { preventRerender.current = false; }, 100);
-              }}
-              onRerunFromSelected={rerunFromSelected}
-              onAddAgentAndRerun={addAgentAndRerun}
-              executionId={executionId}
-              nodes={nodes}
-              collapsedGroups={collapsedGroups}
-              onToggleCollapsedGroup={(id: string) => {
-                setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }));
-                const children = (nodes.find(n => n.id === id)?.data as any)?.parallelChildren || [];
-                const childSet = new Set(children);
-                // Hide/unhide child nodes
-                setNodes(nds => nds.map(n => childSet.has(n.id) ? ({ ...n, hidden: !collapsedGroups[id] ? true : false }) : n));
-                // Dim/undim child edges
-                setEdges(eds => eds.map(e => childSet.has(e.source) || childSet.has(e.target) ? ({ ...e, style: { ...e.style, opacity: !collapsedGroups[id] ? 0.08 : 1 } }) : e));
-              }}
-              onShowChildrenEditor={(id: string) => setShowChildrenEditor(id)}
-            />
+              <WorkflowToolbar
+                onAddBlock={() => setShowUnifiedManager(true)}
+                onArrangeBlocks={() => updateGraph(true)}
+                onRunWorkflow={runPlannedWorkflow}
+                onStopWorkflow={stopExecution}
+                onClearHistory={handlers.clearExecutionHistory}
+                onExportWorkflow={saveAsTemplate}
+                onImportWorkflow={loadTemplate}
+                onZoomIn={() => zoomIn()}
+                onZoomOut={() => zoomOut()}
+                onFitView={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })}
+                isRunning={isRunning}
+                hasExecutionHistory={executionHistory.size > 0}
+                availableTools={availableTools}
+                selectedTools={selectedTools}
+                onToolsChange={setSelectedTools}
+                onEnhanceFlow={enhanceFlow}
+                selectedNodes={nodes.filter(n => n.selected)}
+                onImportTemplate={(template) => {
+                  importStateMachine(template.machine, true);
+                }}
+              />
 
-            {/* Import State Machine Dialog */}
-            <ImportStateMachineDialog
-              isOpen={showImportDialog}
-              isDarkMode={isDarkMode}
-              onClose={() => {
-                setShowImportDialog(false);
-              }}
-              onImport={(machine, isProfessional) => {
-                importStateMachine(machine, isProfessional);
-              }}
-            />
-          </ReactFlow>
+              <UnifiedBlockManager
+                isOpen={showUnifiedManager}
+                onClose={() => setShowUnifiedManager(false)}
+                onAddBlock={addUnifiedBlock}
+                isDarkMode={isDarkMode}
+                selectedTools={selectedTools}
+                onToolsChange={setSelectedTools}
+              />
+
+              <FlowControlsPanel
+                historyIndex={historyIndex}
+                historyLength={history.length}
+                highlightPath={highlightPath}
+                layoutDirection={layoutDirection}
+                showGrid={showGrid}
+                showMinimap={showMinimap}
+                showConversationPanel={showConversationPanel}
+                showRawDataViewer={showRawDataViewer}
+                followActive={state.followActive}
+                replayMode={replayMode}
+                executionTraceLength={executionTrace.length}
+                replayIndex={replayIndex}
+                selectedAgent={selectedAgent}
+                isDarkMode={isDarkMode}
+                onUndo={undo}
+                onRedo={redo}
+                onClearPathHighlight={clearPathHighlight}
+                onFitView={() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.0 })}
+                onRelayout={() => updateGraph(true)}
+                onOpenBlockManager={() => setShowUnifiedManager(true)}
+                onToggleLayoutDirection={() => {
+                  state.setLayoutDirection(layoutDirection === 'LR' ? 'TB' : 'LR');
+                  setTimeout(() => updateGraph(true), 50);
+                }}
+                onToggleGrid={() => state.setShowGrid(!showGrid)}
+                onToggleMinimap={() => state.setShowMinimap(!showMinimap)}
+                onToggleConversationPanel={() => state.setShowConversationPanel(!showConversationPanel)}
+                onResetView={handlers.resetView}
+                onOpenToolsHub={() => setShowToolsHub(true)}
+                onToggleRawDataViewer={() => setShowRawDataViewer(!showRawDataViewer)}
+                onToggleFollowActive={() => state.setFollowActive(prev => !prev)}
+                onToggleReplayMode={() => {
+                  setReplayMode(!replayMode);
+                  setReplayIndex((prev: number | null) => (prev == null ? 0 : prev));
+                }}
+                onReplayPrevious={() => {
+                  if (!replayMode || executionTrace.length === 0) return;
+                  setReplayIndex((i: number | null) => {
+                    const next = Math.max(0, (i ?? 0) - 1);
+                    const id = executionTrace[next];
+                    if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+                    return next;
+                  });
+                }}
+                onReplayNext={() => {
+                  if (!replayMode || executionTrace.length === 0) return;
+                  setReplayIndex((i: number | null) => {
+                    const next = Math.min(executionTrace.length - 1, (i ?? 0) + 1);
+                    const id = executionTrace[next];
+                    if (id) { setSelectedAgent(id); pendingFocusIdRef.current = id; focusAttemptsRef.current = 0; }
+                    return next;
+                  });
+                }}
+                onToggleHighlightPath={() => {
+                  state.preventRerender.current = true;
+                  state.setHighlightPath(!highlightPath);
+                  setTimeout(() => { state.preventRerender.current = false; }, 100);
+                }}
+                onRerunFromSelected={rerunFromSelected}
+                onAddAgentAndRerun={addAgentAndRerun}
+                executionId={executionId}
+                nodes={nodes}
+                collapsedGroups={collapsedGroups}
+                onToggleCollapsedGroup={(id: string) => {
+                  setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }));
+                  const children = (nodes.find(n => n.id === id)?.data as any)?.parallelChildren || [];
+                  const childSet = new Set(children);
+                  setNodes(nds => nds.map(n => childSet.has(n.id) ? ({ ...n, hidden: !collapsedGroups[id] ? true : false }) : n));
+                  setEdges(eds => eds.map(e => childSet.has(e.source) || childSet.has(e.target) ? ({ ...e, style: { ...e.style, opacity: !collapsedGroups[id] ? 0.08 : 1 } }) : e));
+                }}
+                onShowChildrenEditor={(id: string) => setShowChildrenEditor(id)}
+              />
+
+              <ImportStateMachineDialog
+                isOpen={showImportDialog}
+                isDarkMode={isDarkMode}
+                onClose={() => {
+                  setShowImportDialog(false);
+                }}
+                onImport={(machine, isProfessional) => {
+                  importStateMachine(machine, isProfessional);
+                }}
+              />
+            </ReactFlow>
           </div>
 
-          {/* Agent Conversation Panel */}
           <AgentConversationPanel
-          showConversationPanel={showConversationPanel}
-          outputPanelWidth={outputPanelWidth}
-          agents={stableAgents}
-          nodes={nodes}
-          edges={edges}
-          selectedAgent={selectedAgent}
-          isDarkMode={isDarkMode}
-          showRawDataViewer={showRawDataViewer}
-          executionId={executionId}
-          onAgentSelect={handleAgentSelect}
-          onNodeFocus={handleNodeFocus}
-          onCloseRawDataViewer={() => setShowRawDataViewer(false)}
-          onResizeStart={(e) => {
-            e.preventDefault();
-            const startX = e.clientX;
-            const startWidth = outputPanelWidth;
+            showConversationPanel={showConversationPanel}
+            outputPanelWidth={outputPanelWidth}
+            agents={stableAgents}
+            nodes={nodes}
+            edges={edges}
+            selectedAgent={selectedAgent}
+            isDarkMode={isDarkMode}
+            showRawDataViewer={showRawDataViewer}
+            executionId={executionId}
+            onAgentSelect={handleAgentSelect}
+            onNodeFocus={handleNodeFocus}
+            onCloseRawDataViewer={() => setShowRawDataViewer(false)}
+            onResizeStart={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startWidth = outputPanelWidth;
 
-            const handleMouseMove = (e: MouseEvent) => {
-              const deltaX = startX - e.clientX;
-              const newWidth = Math.min(
-                Math.max(startWidth + deltaX, 300), // Minimum width: 300px
-                Math.min(800, window.innerWidth - 500) // Maximum width: 800px or window width - 500px for flow canvas
-              );
-              setOutputPanelWidth(newWidth);
-              // Save to localStorage immediately for persistence
-              localStorage.setItem('chatbot_panel_width', newWidth.toString());
-            };
+              const handleMouseMove = (e: MouseEvent) => {
+                const deltaX = startX - e.clientX;
+                const newWidth = Math.min(
+                  Math.max(startWidth + deltaX, 300),
+                  Math.min(800, window.innerWidth - 500)
+                );
+                state.setOutputPanelWidth(newWidth);
+                localStorage.setItem('chatbot_panel_width', newWidth.toString());
+              };
 
-            const handleMouseUp = () => {
-              document.removeEventListener('mousemove', handleMouseMove);
-              document.removeEventListener('mouseup', handleMouseUp);
-              document.body.style.cursor = '';
-              document.body.style.userSelect = '';
-              document.body.classList.remove('resizing');
-            };
+              const handleMouseUp = () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                document.body.classList.remove('resizing');
+              };
 
-            document.addEventListener('mousemove', handleMouseMove);
-            document.addEventListener('mouseup', handleMouseUp);
-            document.body.style.cursor = 'col-resize';
-            document.body.style.userSelect = 'none';
-            document.body.classList.add('resizing');
-          }}
-        />
+              document.addEventListener('mousemove', handleMouseMove);
+              document.addEventListener('mouseup', handleMouseUp);
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+              document.body.classList.add('resizing');
+            }}
+          />
         </div>
-        </div>
+      </div>
 
-      {/* Add Node Modal - Replaced by Unified Block Manager */}
+      {/* Add Node Modal */}
       {false && showAddNode && (
-          <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setShowAddNode(false)}>
-            <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:480, margin:'10vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
-              <div style={{ fontWeight:600, marginBottom:8 }}>Add Block</div>
-              <div style={{ display:'grid', gap:8 }}>
-                <input className="task-input" placeholder="id (slug_case)" value={nodeDraft.id} onChange={e=>setNodeDraft({...nodeDraft, id:e.target.value})} />
-                <input className="task-input" placeholder="name" value={nodeDraft.name} onChange={e=>setNodeDraft({...nodeDraft, name:e.target.value})} />
-                <select className="task-input" value={nodeDraft.type} onChange={e=>setNodeDraft({...nodeDraft, type: e.target.value as any})}>
-                  <option value="analysis">analysis</option>
-                  <option value="tool_call">tool_call</option>
-                  <option value="decision">decision</option>
-                  <option value="parallel">parallel</option>
-                  <option value="final">final</option>
-                </select>
-                <input className="task-input" placeholder="agent role (optional)" value={nodeDraft.agent_role} onChange={e=>setNodeDraft({...nodeDraft, agent_role:e.target.value})} />
-                <textarea className="task-input" rows={3} placeholder="description/prompt" value={nodeDraft.description} onChange={e=>setNodeDraft({...nodeDraft, description:e.target.value})} />
-                <div style={{ border:`1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding:6, borderRadius:6, maxHeight:120, overflow:'auto' }}>
-                  <div style={{ fontSize:12, marginBottom:4 }}>Tools</div>
-                  {availableTools.map(t=>{
-                    const checked = nodeDraft.tools.includes(t);
-                    return (
-                      <label key={t} style={{ display:'inline-flex', alignItems:'center', gap:4, marginRight:8, marginBottom:6 }}>
-                        <input type="checkbox" checked={checked} onChange={(e)=>{
-                          const set = new Set(nodeDraft.tools);
-                          if (e.target.checked) set.add(t); else set.delete(t);
-                          setNodeDraft({...nodeDraft, tools: Array.from(set)});
-                        }} />
-                        <span>{t}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-                  <button className="panel-button" onClick={()=>setShowAddNode(false)}>Cancel</button>
-                  <button className="panel-button" onClick={async()=>{
-                    if (!executionId) return;
-                    if (!nodeDraft.id || !nodeDraft.name) return;
-                    try {
-                      const patch: any = { states: [{ id: nodeDraft.id, name: nodeDraft.name, type: nodeDraft.type, description: nodeDraft.description, agent_role: nodeDraft.agent_role, tools: nodeDraft.tools }] };
-                      await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) });
-                      // Update UI
-                      const newNode: Node = {
-                        id: nodeDraft.id,
-                        type: 'agent',
-                        position: { x: 100, y: 100 },
-                        data: { label: nodeDraft.name, name: nodeDraft.name, status:'pending', nodeType: nodeDraft.type, task: nodeDraft.description, tools: nodeDraft.tools, toolsPlanned: nodeDraft.tools, description: nodeDraft.description, agentRole: nodeDraft.agent_role, direction: layoutDirection },
-                        targetPosition: layoutDirection === 'LR' ? Position.Left : Position.Top,
-                        sourcePosition: layoutDirection === 'LR' ? Position.Right : Position.Bottom,
-                      };
-                      setNodes(prev=>[...prev, newNode]);
-                      setShowAddNode(false);
-                    } catch (e) { console.error('Failed to add block', e); }
-                  }}>Create</button>
-                </div>
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setShowAddNode(false)}>
+          <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:480, margin:'10vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
+            <div style={{ fontWeight:600, marginBottom:8 }}>Add Block</div>
+            <div style={{ display:'grid', gap:8 }}>
+              <input className="task-input" placeholder="id (slug_case)" value={nodeDraft.id} onChange={e=>setNodeDraft({...nodeDraft, id:e.target.value})} />
+              <input className="task-input" placeholder="name" value={nodeDraft.name} onChange={e=>setNodeDraft({...nodeDraft, name:e.target.value})} />
+              <select className="task-input" value={nodeDraft.type} onChange={e=>setNodeDraft({...nodeDraft, type: e.target.value as any})}>
+                <option value="analysis">analysis</option>
+                <option value="tool_call">tool_call</option>
+                <option value="decision">decision</option>
+                <option value="parallel">parallel</option>
+                <option value="final">final</option>
+              </select>
+              <input className="task-input" placeholder="agent role (optional)" value={nodeDraft.agent_role} onChange={e=>setNodeDraft({...nodeDraft, agent_role:e.target.value})} />
+              <textarea className="task-input" rows={3} placeholder="description/prompt" value={nodeDraft.description} onChange={e=>setNodeDraft({...nodeDraft, description:e.target.value})} />
+              <div style={{ border:`1px dashed ${isDarkMode?'#334155':'#e2e8f0'}`, padding:6, borderRadius:6, maxHeight:120, overflow:'auto' }}>
+                <div style={{ fontSize:12, marginBottom:4 }}>Tools</div>
+                {availableTools.map(t=>{
+                  const checked = nodeDraft.tools.includes(t);
+                  return (
+                    <label key={t} style={{ display:'inline-flex', alignItems:'center', gap:4, marginRight:8, marginBottom:6 }}>
+                      <input type="checkbox" checked={checked} onChange={(e)=>{
+                        const set = new Set(nodeDraft.tools);
+                        if (e.target.checked) set.add(t); else set.delete(t);
+                        setNodeDraft({...nodeDraft, tools: Array.from(set)});
+                      }} />
+                      <span>{t}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                <button className="panel-button" onClick={()=>setShowAddNode(false)}>Cancel</button>
+                <button className="panel-button" onClick={async()=>{
+                  if (!executionId) return;
+                  if (!nodeDraft.id || !nodeDraft.name) return;
+                  try {
+                    const patch: any = { states: [{ id: nodeDraft.id, name: nodeDraft.name, type: nodeDraft.type, description: nodeDraft.description, agent_role: nodeDraft.agent_role, tools: nodeDraft.tools }] };
+                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) });
+                    const newNode: any = {
+                      id: nodeDraft.id,
+                      type: 'agent',
+                      position: { x: 100, y: 100 },
+                      data: { label: nodeDraft.name, name: nodeDraft.name, status:'pending', nodeType: nodeDraft.type, task: nodeDraft.description, tools: nodeDraft.tools, toolsPlanned: nodeDraft.tools, description: nodeDraft.description, agentRole: nodeDraft.agent_role, direction: layoutDirection },
+                      targetPosition: layoutDirection === 'LR' ? 'left' : 'top',
+                      sourcePosition: layoutDirection === 'LR' ? 'right' : 'bottom',
+                    };
+                    setNodes(prev=>[...prev, newNode]);
+                    setShowAddNode(false);
+                  } catch (e) { console.error('Failed to add block', e); }
+                }}>Create</button>
               </div>
             </div>
           </div>
+        </div>
       )}
 
       {/* Edge Editor */}
       {editMode && edgeEdit && (
-          <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setEdgeEdit(null)}>
-            <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:420, margin:'15vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
-              <div style={{ fontWeight:600, marginBottom:8 }}>Edit Connection</div>
-              <div style={{ fontSize:12, marginBottom:8 }}>From <b>{edgeEdit.source}</b> to <b>{edgeEdit.target}</b></div>
-              <label>
-                <div className="label">Event</div>
-                <input className="task-input" defaultValue={edgeEdit.event || 'success'} onBlur={(e)=>setEdgeEdit({...edgeEdit, event: e.target.value})} />
-              </label>
-              <div style={{ display:'flex', gap:8, justifyContent:'space-between', marginTop:12 }}>
-                <button className="panel-button" onClick={async()=>{
-                  if (!executionId) return;
-                  try {
-                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
-                    setEdges(prev=>prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target && ((e as any).label || 'success')===edgeEdit.event)));
-                    setEdgeEdit(null);
-                  } catch (e) { console.error('Failed to delete edge', e); }
-                }}>Delete</button>
-                <span />
-                <button className="panel-button" onClick={()=>setEdgeEdit(null)}>Cancel</button>
-                <button className="panel-button" onClick={async()=>{
-                  if (!executionId || !edgeEdit) return;
-                  try {
-                    // Change event: remove old then add new
-                    await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }], edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
-                    setEdges(prev=>{
-                      const rest = prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target));
-                      const newE: Edge = { id: `${edgeEdit.source}-${edgeEdit.target}-${edgeEdit.event}`, source: edgeEdit.source, target: edgeEdit.target, type:'smoothstep', animated:false, label: edgeEdit.event && edgeEdit.event!=='success'? edgeEdit.event : '', labelStyle:{ fill:'#94a3b8', fontSize:11 }, labelBgStyle:{ fill:'#1e293b', fillOpacity:0.8 }, style:{ stroke:'#52525b', strokeWidth:1.5 }, markerEnd:{ type: MarkerType.ArrowClosed, width:20, height:20, color:'#52525b' } };
-                      return [...rest, newE];
-                    });
-                    setEdgeEdit(null);
-                  } catch (e) { console.error('Failed to update edge', e); }
-                }}>Save</button>
-              </div>
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200}} onClick={()=>setEdgeEdit(null)}>
+          <div style={{ background: isDarkMode?'#0f172a':'#fff', color: isDarkMode?'#e2e8f0':'#0f172a', width:420, margin:'15vh auto', padding:16, borderRadius:8 }} onClick={(e)=>e.stopPropagation()}>
+            <div style={{ fontWeight:600, marginBottom:8 }}>Edit Connection</div>
+            <div style={{ fontSize:12, marginBottom:8 }}>From <b>{edgeEdit.source}</b> to <b>{edgeEdit.target}</b></div>
+            <label>
+              <div className="label">Event</div>
+              <input className="task-input" defaultValue={edgeEdit.event || 'success'} onBlur={(e)=>setEdgeEdit({...edgeEdit, event: e.target.value})} />
+            </label>
+            <div style={{ display:'flex', gap:8, justifyContent:'space-between', marginTop:12 }}>
+              <button className="panel-button" onClick={async()=>{
+                if (!executionId) return;
+                try {
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
+                  setEdges(prev=>prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target && ((e as any).label || 'success')===edgeEdit.event)));
+                  setEdgeEdit(null);
+                } catch (e) { console.error('Failed to delete edge', e); }
+              }}>Delete</button>
+              <span />
+              <button className="panel-button" onClick={()=>setEdgeEdit(null)}>Cancel</button>
+              <button className="panel-button" onClick={async()=>{
+                if (!executionId || !edgeEdit) return;
+                try {
+                  await fetch(`${window.location.origin}/api/v1/streaming/stream/state-machine/${executionId}/update_graph`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ remove_edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }], edges: [{ source: edgeEdit.source, target: edgeEdit.target, event: edgeEdit.event }] }) });
+                  setEdges(prev=>{
+                    const rest = prev.filter(e=>!(e.source===edgeEdit.source && e.target===edgeEdit.target));
+                    const newE: any = { id: `${edgeEdit.source}-${edgeEdit.target}-${edgeEdit.event}`, source: edgeEdit.source, target: edgeEdit.target, type:'smoothstep', animated:false, label: edgeEdit.event && edgeEdit.event!=='success'? edgeEdit.event : '', labelStyle:{ fill:'#94a3b8', fontSize:11 }, labelBgStyle:{ fill:'#1e293b', fillOpacity:0.8 }, style:{ stroke:'#52525b', strokeWidth:1.5 }, markerEnd:{ type: MarkerType.ArrowClosed, width:20, height:20, color:'#52525b' } };
+                    return [...rest, newE];
+                  });
+                  setEdgeEdit(null);
+                } catch (e) { console.error('Failed to update edge', e); }
+              }}>Save</button>
             </div>
           </div>
+        </div>
       )}
 
       {/* Block Settings Panel */}
       {selectedNodeForSettings && (
-          <BlockSettingsPanel
-            node={nodes.find(n => n.id === selectedNodeForSettings!.id) || selectedNodeForSettings}
-            isDarkMode={isDarkMode}
-            onClose={() => setSelectedNodeForSettings(null)}
-            onUpdate={(nodeId: string, data: any) => {
-              setNodes((nds) => {
-                // If node is marked as start, ensure uniqueness by clearing others
-                if (data && data.isStart) {
-                  return nds.map(n => ({
-                    ...n,
-                    data: {
-                      ...n.data,
-                      ...(n.id === nodeId ? data : {}),
-                      isStart: n.id === nodeId
-                    }
-                  }));
-                }
-                return nds.map((n) =>
-                  n.id === nodeId
-                    ? { ...n, data: { ...n.data, ...data } }
-                    : n
-                );
-              });
-              // Update the selectedNodeForSettings to reflect the changes
-              setSelectedNodeForSettings(prev =>
-                prev && prev.id === nodeId
-                  ? { ...prev, data: { ...prev.data, ...data } }
-                  : prev
-              );
-            }}
-            onDelete={(nodeId: string) => {
-              setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-              setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
-              setSelectedNodeForSettings(null);
-              setSelectedAgent(null);
-            }}
-            onDuplicate={(nodeId: string) => {
-              const nodeToDuplicate = nodes.find((n) => n.id === nodeId);
-              if (nodeToDuplicate) {
-                const newNode = {
-                  ...nodeToDuplicate,
-                  id: uuidv4(),
-                  position: {
-                    x: nodeToDuplicate.position.x + 50,
-                    y: nodeToDuplicate.position.y + 50
+        <BlockSettingsPanel
+          node={nodes.find(n => n.id === selectedNodeForSettings!.id) || selectedNodeForSettings}
+          isDarkMode={isDarkMode}
+          onClose={() => setSelectedNodeForSettings(null)}
+          onUpdate={(nodeId: string, data: any) => {
+            setNodes((nds) => {
+              if (data && data.isStart) {
+                return nds.map(n => ({
+                  ...n,
+                  data: {
+                    ...n.data,
+                    ...(n.id === nodeId ? data : {}),
+                    isStart: n.id === nodeId
                   }
-                };
-                setNodes((nds) => [...nds, newNode]);
+                }));
               }
-            }}
-            availableTools={availableTools}
-          />
+              return nds.map((n) =>
+                n.id === nodeId
+                  ? { ...n, data: { ...n.data, ...data } }
+                  : n
+              );
+            });
+            setSelectedNodeForSettings(prev =>
+              prev && prev.id === nodeId
+                ? { ...prev, data: { ...prev.data, ...data } }
+                : prev
+            );
+          }}
+          onDelete={(nodeId: string) => {
+            setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+            setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+            setSelectedNodeForSettings(null);
+            setSelectedAgent(null);
+          }}
+          onDuplicate={(nodeId: string) => {
+            const nodeToDuplicate = nodes.find((n) => n.id === nodeId);
+            if (nodeToDuplicate) {
+              const newNode = {
+                ...nodeToDuplicate,
+                id: uuidv4(),
+                position: {
+                  x: nodeToDuplicate.position.x + 50,
+                  y: nodeToDuplicate.position.y + 50
+                }
+              };
+              setNodes((nds) => [...nds, newNode]);
+            }
+          }}
+          availableTools={availableTools}
+        />
       )}
 
       {/* Command Bar */}
       <ExecutionControlBar
-        executionMode={executionMode as ExecutionMode}
+        executionMode={executionMode as any}
         task={task}
         isRunning={isRunning}
         onExecutionModeChange={(mode) => setExecutionMode(mode)}
@@ -3987,8 +1079,8 @@ const FlowSwarmInterface: React.FC = () => {
         onStopExecution={stopExecution}
       />
     </div>
-    );
-  };
+  );
+};
 
 // Wrapper Component with Provider
 const FlowSwarmInterfaceWrapper: React.FC = () => {
