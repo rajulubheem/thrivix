@@ -76,6 +76,7 @@ export const useFlowSwarmState = () => {
   const [showRawDataViewer, setShowRawDataViewer] = useState<boolean>(false);
   const [showToolsHub, setShowToolsHub] = useState(false);
   const [showAIChat, setShowAIChat] = useState<boolean>(false);
+  const [aiSessionId, setAISessionId] = useState<string | null>(null);
 
   // Modal States
   const [decisionPrompt, setDecisionPrompt] = useState<null | {stateId: string, name: string, description?: string, allowed: string[]}>(null);
@@ -255,6 +256,7 @@ export const useFlowSwarmState = () => {
     showRawDataViewer, setShowRawDataViewer,
     showToolsHub, setShowToolsHub,
     showAIChat, setShowAIChat,
+    aiSessionId, setAISessionId,
 
     // Modals
     decisionPrompt, setDecisionPrompt,

@@ -1583,3 +1583,97 @@ body.resizing * {
 .card-content a:hover {
   text-decoration: underline;
 }
+
+/* AI Assistant Split-View Layout */
+.ai-assistant-sidebar {
+  width: 450px;
+  height: 100vh;
+  border-left: 2px solid var(--border-color, #27272a);
+  background: var(--bg-primary, #0f0f0f);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  position: fixed;
+  right: 0;
+  top: 0;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.3);
+}
+
+.light-mode .ai-assistant-sidebar {
+  background: #ffffff;
+  border-left: 2px solid #e5e7eb;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Adjust canvas when chat is open - use padding instead of margin */
+.flow-swarm-container {
+  transition: padding-right 0.3s ease;
+}
+
+.flow-swarm-container:has(.ai-assistant-sidebar) {
+  padding-right: 450px;
+}
+
+/* Resize handle for AI sidebar */
+.ai-sidebar-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 101;
+  transition: background 0.2s ease;
+}
+
+.ai-sidebar-resize-handle:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.ai-sidebar-resize-handle:active {
+  background: rgba(59, 130, 246, 0.4);
+}
+
+/* AI-generated node animations */
+.react-flow__node-professional {
+  animation: nodeAppear 0.5s ease-out;
+}
+
+@keyframes nodeAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.85) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.react-flow__node-professional.ai-added {
+  animation: nodeAppear 0.5s ease-out, nodePulse 2s ease-in-out;
+}
+
+@keyframes nodePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 15px rgba(124, 58, 237, 0);
+  }
+}
+
+/* Animated edge drawing effect */
+.react-flow__edge-path {
+  stroke-dasharray: 5;
+  animation: edgeDraw 0.5s ease-out forwards;
+}
+
+@keyframes edgeDraw {
+  from {
+    stroke-dashoffset: 1000;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}

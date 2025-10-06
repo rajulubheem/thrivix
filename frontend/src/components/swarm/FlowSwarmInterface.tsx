@@ -1,4 +1,5 @@
 import React from 'react';
+import { flushSync } from 'react-dom';
 import ReactFlow, {
   Background,
   Controls,
@@ -9,6 +10,7 @@ import ReactFlow, {
   BackgroundVariant,
   MarkerType,
   ReactFlowProvider,
+  useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './FlowSwarmInterface.css';
@@ -26,18 +28,23 @@ import { ParallelGroupOverlay } from './components/ParallelGroupOverlay';
 import { ParallelChildrenEditor } from './components/ParallelChildrenEditor';
 import { AgentConversationPanel } from './components/AgentConversationPanel';
 import { AIWorkflowChat } from './components/AIWorkflowChat';
+import { ImprovedAIAssistant } from './components/ImprovedAIAssistant';
+import { autoLayout as applyAutoLayout } from '../../utils/hierarchicalLayout';
 import { v4 as uuidv4 } from 'uuid';
 
 const FlowSwarmInterface: React.FC = () => {
+  // Get React Flow instance for forcing updates
+  const { fitView: reactFlowFitView } = useReactFlow();
+
   // Initialize all state
   const state = useFlowSwarmState();
-  
+
   // Initialize all handlers
   const handlers = useFlowSwarmHandlers(state);
-  
+
   // Initialize workflow operations
   const workflow = useFlowSwarmWorkflow(state, handlers);
-  
+
   // Initialize all effects
   useFlowSwarmEffects(state, handlers);
 
@@ -58,6 +65,7 @@ const FlowSwarmInterface: React.FC = () => {
     highlightPath,
     showToolsHub, setShowToolsHub,
     showAIChat, setShowAIChat,
+    aiSessionId, setAISessionId,
     decisionPrompt, setDecisionPrompt,
     inputPrompt, setInputPrompt,
     inputValue, setInputValue,
@@ -478,6 +486,7 @@ const FlowSwarmInterface: React.FC = () => {
             }
           }} onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}>
             <ReactFlow
+              key={`reactflow-${nodes.length}-${edges.length}`}
               style={{ background: isDarkMode ? '#0a0f1a' : '#ffffff' }}
               nodes={nodes}
               edges={edges}
@@ -1082,16 +1091,20 @@ const FlowSwarmInterface: React.FC = () => {
         onToggleAIChat={() => setShowAIChat(!showAIChat)}
       />
 
-      {/* AI Workflow Chat */}
-      <AIWorkflowChat
-        isOpen={showAIChat}
-        onToggle={() => setShowAIChat(!showAIChat)}
-        currentNodes={nodes}
-        currentEdges={edges}
-        onOperations={(operations, aiNodes, aiEdges) => {
-          console.log('🤖 AI Operations:', operations.length, 'operations');
+      {/* AI Workflow Assistant - Improved */}
+      {showAIChat && (
+        <div className="ai-assistant-sidebar">
+          <ImprovedAIAssistant
+            sessionId={aiSessionId}
+            nodes={nodes}
+            edges={edges}
+            selectedNode={selectedNodeForSettings}
+            availableTools={availableTools}
+            wsRef={state.wsRef}
+            onOperations={(operations) => {
+              console.log('🤖 Applying AI Operations:', operations.length, 'operations');
 
-          operations.forEach((op: any, idx: number) => {
+              operations.forEach((op: any, idx: number) => {
             console.log(`  ${idx + 1}. ${op.type}:`, op);
 
             if (op.type === 'add_node') {
@@ -1108,6 +1121,7 @@ const FlowSwarmInterface: React.FC = () => {
                 id: nodeData.id || uuidv4(),
                 type: 'professional',
                 position: position,
+                className: 'ai-added', // Add animation class for AI-created nodes
                 data: {
                   type: nodeData.type || 'analysis',
                   name: nodeData.name || 'New Node',
@@ -1156,15 +1170,31 @@ const FlowSwarmInterface: React.FC = () => {
                 },
               };
 
-              setNodes((nds) => {
-                // If this is a start node, remove isStart from other nodes
-                if (newNode.data.isStart) {
-                  return nds
-                    .map((n) => ({ ...n, data: { ...n.data, isStart: false } }))
-                    .concat(newNode);
-                }
-                return [...nds, newNode];
-              });
+              // Check if node already exists first
+              const exists = nodes.some(n => n.id === newNode.id);
+              if (exists) {
+                console.log(`⚠️  Node ${newNode.id} already exists, skipping`);
+              } else {
+                // Use flushSync for immediate rendering during streaming
+                flushSync(() => {
+                  setNodes((nds) => {
+                    // If this is a start node, remove isStart from other nodes
+                    if (newNode.data.isStart) {
+                      console.log(`✅ Added START node: ${newNode.data.name}`);
+                      return nds
+                        .map((n) => ({ ...n, data: { ...n.data, isStart: false } }))
+                        .concat(newNode);
+                    }
+                    console.log(`✅ Added node: ${newNode.data.name} at (${position.x}, ${position.y})`);
+                    return [...nds, newNode];
+                  });
+                });
+
+                // Force React Flow to update viewport to show new node
+                setTimeout(() => {
+                  reactFlowFitView({ padding: 0.1, duration: 0, maxZoom: 1 });
+                }, 10);
+              }
 
             } else if (op.type === 'remove_node') {
               const nodeId = op.node_id;
@@ -1213,12 +1243,20 @@ const FlowSwarmInterface: React.FC = () => {
                 },
               };
 
-              setEdges((eds) => {
-                // Don't add duplicate edges
-                const exists = eds.some(
-                  (e) => e.source === op.source && e.target === op.target && (e.label || 'success') === (op.event || 'success')
-                );
-                return exists ? eds : [...eds, newEdge];
+              // Use flushSync for immediate rendering during streaming
+              flushSync(() => {
+                setEdges((eds) => {
+                  // Don't add duplicate edges
+                  const exists = eds.some(
+                    (e) => e.source === op.source && e.target === op.target && (e.label || 'success') === (op.event || 'success')
+                  );
+                  if (!exists) {
+                    console.log(`🔗 Connected: ${op.source} → ${op.target} (${op.event || 'success'})`);
+                    return [...eds, newEdge];
+                  }
+                  console.log(`⚠️ Edge already exists: ${op.source} → ${op.target}`);
+                  return eds;
+                });
               });
 
             } else if (op.type === 'disconnect_nodes') {
@@ -1238,19 +1276,108 @@ const FlowSwarmInterface: React.FC = () => {
               setEdges([]);
 
             } else if (op.type === 'auto_layout') {
-              // Trigger auto-layout
-              setTimeout(() => handlers.updateGraph(true), 100);
+              // Use hierarchical auto-layout with current state
+              setTimeout(() => {
+                setNodes((currentNodes) => {
+                  // Get current edges at the time of layout
+                  const currentEdges = edges;
+                  if (currentNodes.length === 0) {
+                    console.log('⚠️ No nodes to layout');
+                    return currentNodes;
+                  }
+
+                  const layoutedNodes = applyAutoLayout(currentNodes, currentEdges);
+                  console.log('📐 Applied hierarchical auto-layout to', currentNodes.length, 'nodes');
+                  console.log('First node position:', layoutedNodes[0]?.position);
+                  return layoutedNodes as any;
+                });
+              }, 0);
             }
           });
 
-          // Auto-layout after all operations
-          setTimeout(() => {
-            handlers.updateGraph(true);
-          }, 150);
-        }}
-        isDarkMode={isDarkMode}
-        wsRef={state.wsRef}
-      />
+          // Only auto-layout if NOT streaming individual operations
+          // Check if any operation has the _isStreaming flag
+          const isStreaming = operations.some((op: any) => op._isStreaming);
+
+          if (!isStreaming) {
+            // Auto-layout after all operations if nodes were added
+            const hasAddOps = operations.some((op: any) => op.type === 'add_node');
+            if (hasAddOps) {
+              setTimeout(() => {
+                setNodes(currentNodes => {
+                  if (currentNodes.length > 0) {
+                    console.log('📐 Auto-layout:', currentNodes.length, 'nodes');
+                    const layouted = applyAutoLayout(currentNodes, edges);
+                    return layouted as any;
+                  }
+                  return currentNodes;
+                });
+              }, 200);
+            }
+          }
+            }}
+            onStartSession={async (task) => {
+              try {
+                // Generate session ID first
+                const tempSessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                setAISessionId(tempSessionId);
+
+                // Connect WebSocket BEFORE starting the session
+                if (state.wsRef.current) {
+                  state.wsRef.current.close();
+                }
+
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const port = window.location.hostname === 'localhost' ? '8000' : window.location.port || '8000';
+                const wsUrl = `${protocol}//${window.location.hostname}:${port}/api/v1/ws/${tempSessionId}?start_from=0`;
+
+                console.log('🔌 Connecting WebSocket BEFORE starting session:', tempSessionId);
+                const ws = new WebSocket(wsUrl);
+                (state.wsRef as any).current = ws;
+
+                // Wait for WebSocket to connect
+                await new Promise<void>((resolve, reject) => {
+                  ws.onopen = () => {
+                    console.log('✅ WebSocket connected, now starting AI session');
+                    ws.send(JSON.stringify({ type: 'ping' }));
+                    resolve();
+                  };
+                  ws.onerror = (error) => {
+                    console.error('❌ WebSocket connection failed:', error);
+                    reject(error);
+                  };
+                  setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
+                });
+
+                // Now make the HTTP request - it will return immediately
+                const response = await fetch('/api/v1/streaming/ai-assistant/start', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ task, session_id: tempSessionId })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                  console.log('AI Session started, streaming will happen via WebSocket');
+                  // Operations will come via WebSocket, not HTTP response
+                  return {
+                    success: true,
+                    message: data.message || 'Session started',
+                    operations: [] // Empty - operations will stream via WebSocket
+                  };
+                }
+
+                return { success: false };
+              } catch (error) {
+                console.error('Error starting AI session:', error);
+                return { success: false, error: String(error) };
+              }
+            }}
+            isDarkMode={isDarkMode}
+          />
+        </div>
+      )}
     </div>
   );
 };

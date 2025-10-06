@@ -795,18 +795,40 @@ async def start_ai_assistant(request: AIAssistantStartRequest):
         task: Description of workflow to build
         session_id: Optional session ID (auto-generated if not provided)
         reuse_existing: If True, continue existing session instead of creating new one
+
+    Returns immediately with session_id. Streaming happens via WebSocket.
     """
     session_id = request.session_id or str(uuid.uuid4())
 
     try:
-        result = await ai_workflow_assistant.start_session(
-            session_id=session_id,
-            task=request.task,
-            reuse_existing=request.reuse_existing
-        )
+        # Start the AI session in background - don't wait for completion
+        async def run_ai_session():
+            try:
+                await ai_workflow_assistant.start_session(
+                    session_id=session_id,
+                    task=request.task,
+                    reuse_existing=request.reuse_existing
+                )
+            except Exception as e:
+                logger.error(f"Error in background AI session: {e}")
+                # Publish error to WebSocket
+                hub = get_event_hub()
+                await hub.connect()
+                await hub.publish_control(ControlFrame(
+                    exec_id=session_id,
+                    type="ai_assistant_error",
+                    payload={"error": str(e)}
+                ))
+
+        # Start background task
+        asyncio.create_task(run_ai_session())
+
+        # Return immediately with session ID
         return {
             "success": True,
-            **result
+            "session_id": session_id,
+            "message": "Session started. Connect to WebSocket for streaming.",
+            "operations": []  # Operations will stream via WebSocket
         }
     except Exception as e:
         logger.error(f"Error starting AI assistant: {e}")

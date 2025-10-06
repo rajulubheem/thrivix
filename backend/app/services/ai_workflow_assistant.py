@@ -250,7 +250,7 @@ class AIWorkflowAssistant:
 
     async def _generate_initial_workflow(self, session: WorkflowSession) -> Dict[str, Any]:
         """
-        AI analyzes the task and generates initial workflow structure.
+        AI analyzes the task and generates initial workflow structure using Strands streaming.
         Returns message and node operations.
         """
 
@@ -306,21 +306,32 @@ Be conversational and helpful in your message.
 CRITICAL: Output ONLY valid JSON. NO trailing commas. NO markdown. NO explanations outside JSON."""
 
         try:
-            # Stream the response token by token
-            stream = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                stream=True
+            # Create a Strands agent for streaming with OpenAI
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
+
+            # Create OpenAI model instance
+            openai_model = OpenAIModel(
+                model_id="gpt-4o-mini",
+                temperature=0.7
+            )
+
+            # Agent with OpenAI model and no callback handler (we'll use stream_async)
+            agent = Agent(
+                model=openai_model,
+                callback_handler=None
             )
 
             content = ""
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
+
+            # Stream async using Strands - stream EVERYTHING (raw AI response)
+            async for event in agent.stream_async(prompt):
+                # Handle text generation events
+                if "data" in event:
+                    token = event["data"]
                     content += token
 
-                    # Publish streaming tokens to WebSocket
+                    # Stream ALL tokens (including JSON structure, thoughts, operations)
                     await self.hub.publish_control(ControlFrame(
                         exec_id=session.session_id,
                         type="ai_assistant_token",
@@ -331,14 +342,38 @@ CRITICAL: Output ONLY valid JSON. NO trailing commas. NO markdown. NO explanatio
             json_content = self._clean_json_content(content)
             result = json.loads(json_content)
 
+            # Send operations via WebSocket ONE BY ONE for real-time visualization
+            operations = result.get("operations", [])
+            if operations:
+                for idx, operation in enumerate(operations):
+                    # Send each operation individually with a small delay for visual effect
+                    await self.hub.publish_control(ControlFrame(
+                        exec_id=session.session_id,
+                        type="ai_assistant_operation",  # Singular - one at a time
+                        payload={
+                            "operation": operation,
+                            "index": idx,
+                            "total": len(operations)
+                        }
+                    ))
+                    # Small delay for visual effect (50ms between operations)
+                    await asyncio.sleep(0.05)
+
+            # Send completion signal
+            await self.hub.publish_control(ControlFrame(
+                exec_id=session.session_id,
+                type="ai_assistant_complete",
+                payload={"message": result.get("message", "Let me help you build this workflow.")}
+            ))
+
             return {
                 "message": result.get("message", "Let me help you build this workflow."),
-                "operations": result.get("operations", [])
+                "operations": operations
             }
 
         except Exception as e:
             logger.error(f"Error in AI initial workflow generation: {e}")
-            logger.error(f"Raw content: {content[:500]}")
+            logger.error(f"Raw content: {content[:500] if 'content' in locals() else 'N/A'}")
             return self._fallback_initial_workflow(session)
 
     async def _generate_response(self, session: WorkflowSession, user_message: str) -> Dict[str, Any]:
@@ -368,20 +403,42 @@ CRITICAL: Output ONLY valid JSON. NO trailing commas. NO markdown. NO explanatio
             "edges": [{"from": e["source"], "to": e["target"], "event": e.get("event", "success")} for e in session.current_edges]
         }
 
-        # Show current nodes clearly
-        nodes_text = "\n".join([f'- "{n["name"]}"' for n in current_state['nodes']])
-        if not nodes_text:
-            nodes_text = "(no nodes yet)"
+        # Show current nodes with full details
+        nodes_info = []
+        for n in current_state['nodes']:
+            tools_str = f"tools: [{', '.join(n.get('tools', []))}]" if n.get('tools') else "tools: []"
+            nodes_info.append(f'  - Name: "{n["name"]}", ID: {n["id"]}, Type: {n["type"]}, {tools_str}')
 
-        prompt = f"""Modify a workflow.
+        nodes_text = "\n".join(nodes_info) if nodes_info else "  (no nodes yet)"
 
-CURRENT NODES:
+        # Parse if selected node is in the message
+        selected_node_context = ""
+        if "[SELECTED NODE:" in user_message:
+            selected_node_context = "\n⚠️ USER HAS SELECTED A SPECIFIC NODE - Focus your response on this node.\n"
+
+        # Available tools list
+        tools_list = "\n".join([f"  - {tool}" for tool in session.available_tools[:50]])
+
+        prompt = f"""You are helping build a workflow. Be precise and only use available tools.
+
+=== AVAILABLE TOOLS ({len(session.available_tools)}) ===
+{tools_list}
+
+⚠️ ONLY use tools from the list above. DO NOT make up tool names.
+
+=== CURRENT WORKFLOW ({len(current_state['nodes'])} nodes) ===
 {nodes_text}
 
-USER REQUEST: {user_message}
+{selected_node_context}
+=== USER REQUEST ===
+{user_message}
 
-When modifying an existing node, use node_id = the exact node name from the list above.
-When adding a new node, create a descriptive snake_case id.
+=== INSTRUCTIONS ===
+1. When adding a node, ONLY assign tools from the AVAILABLE TOOLS list above
+2. When modifying an existing node, use the exact Name as node_id (e.g., "Data Processor")
+3. When adding a new node, create a unique snake_case id
+4. If user asks about a node, explain it conversationally with no operations
+5. Nodes should be spaced out: x coordinate increases by 300-400 per node
 
 Return JSON with this EXACT format:
 {{
@@ -433,27 +490,32 @@ CRITICAL: Output ONLY valid JSON. NO trailing commas. NO markdown. NO explanatio
 If no changes needed, return empty operations array: "operations": []"""
 
         try:
-            # Use system + user messages for clarity
-            messages = [
-                {"role": "system", "content": "You generate JSON operations for workflows. When the user says 'modify X', use modify_node with node_id=name of X. When user says 'add', use add_node. Use node names as IDs."},
-                {"role": "user", "content": prompt}
-            ]
+            # Create a Strands agent for streaming with OpenAI
+            from strands import Agent
+            from strands.models.openai import OpenAIModel
 
-            # Stream the response token by token
-            stream = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.3,
-                stream=True
+            # Create OpenAI model instance
+            openai_model = OpenAIModel(
+                model_id="gpt-4o-mini",
+                temperature=0.3
+            )
+
+            # Agent with OpenAI model and no callback handler (we'll use stream_async)
+            agent = Agent(
+                model=openai_model,
+                callback_handler=None
             )
 
             content = ""
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
+
+            # Stream async using Strands - stream EVERYTHING (raw AI response)
+            async for event in agent.stream_async(prompt):
+                # Handle text generation events
+                if "data" in event:
+                    token = event["data"]
                     content += token
 
-                    # Publish streaming tokens to WebSocket
+                    # Stream ALL tokens (including JSON structure, thoughts, operations)
                     await self.hub.publish_control(ControlFrame(
                         exec_id=session.session_id,
                         type="ai_assistant_token",
@@ -464,14 +526,36 @@ If no changes needed, return empty operations array: "operations": []"""
             json_content = self._clean_json_content(content)
             result = json.loads(json_content)
 
-            ops = result.get('operations', [])
-            if ops:
-                logger.info(f"AI generated {len(ops)} operations: {', '.join([op.get('type', 'unknown') for op in ops])}")
-                logger.info(f"First operation: {ops[0]}")
+            # Send operations via WebSocket ONE BY ONE for real-time visualization
+            operations = result.get("operations", [])
+            if operations:
+                logger.info(f"AI generated {len(operations)} operations: {', '.join([op.get('type', 'unknown') for op in operations])}")
+                logger.info(f"First operation: {operations[0]}")
+
+                for idx, operation in enumerate(operations):
+                    # Send each operation individually with a small delay for visual effect
+                    await self.hub.publish_control(ControlFrame(
+                        exec_id=session.session_id,
+                        type="ai_assistant_operation",  # Singular - one at a time
+                        payload={
+                            "operation": operation,
+                            "index": idx,
+                            "total": len(operations)
+                        }
+                    ))
+                    # Small delay for visual effect (50ms between operations)
+                    await asyncio.sleep(0.05)
+
+            # Send completion signal
+            await self.hub.publish_control(ControlFrame(
+                exec_id=session.session_id,
+                type="ai_assistant_complete",
+                payload={"message": result.get("message", "Updated the workflow.")}
+            ))
 
             return {
                 "message": result.get("message", "Updated the workflow."),
-                "operations": result.get("operations", [])
+                "operations": operations
             }
 
         except Exception as e:
