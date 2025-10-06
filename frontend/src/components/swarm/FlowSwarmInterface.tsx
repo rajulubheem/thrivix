@@ -27,7 +27,6 @@ import { ImportStateMachineDialog } from './components/ImportStateMachineDialog'
 import { ParallelGroupOverlay } from './components/ParallelGroupOverlay';
 import { ParallelChildrenEditor } from './components/ParallelChildrenEditor';
 import { AgentConversationPanel } from './components/AgentConversationPanel';
-import { AIWorkflowChat } from './components/AIWorkflowChat';
 import { ImprovedAIAssistant } from './components/ImprovedAIAssistant';
 import { autoLayout as applyAutoLayout } from '../../utils/hierarchicalLayout';
 import { v4 as uuidv4 } from 'uuid';
@@ -1349,11 +1348,39 @@ const FlowSwarmInterface: React.FC = () => {
                   setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
                 });
 
+                // Prepare full context for AI
+                const canvasState = {
+                  nodes: nodes.map(n => ({
+                    id: n.id,
+                    name: n.data.name || n.id,
+                    type: n.data.type || n.data.nodeType || 'analysis',
+                    tools: n.data.tools || n.data.toolsPlanned || [],
+                    description: n.data.description || n.data.agent_role || ''
+                  })),
+                  edges: edges.map(e => ({
+                    source: e.source,
+                    target: e.target,
+                    event: (e as any).label || e.data?.event || 'success'
+                  })),
+                  node_count: nodes.length
+                };
+
+                console.log('📊 Sending context to AI:', {
+                  nodes: canvasState.nodes.length,
+                  edges: canvasState.edges.length,
+                  tools: availableTools.length
+                });
+
                 // Now make the HTTP request - it will return immediately
                 const response = await fetch('/api/v1/streaming/ai-assistant/start', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ task, session_id: tempSessionId })
+                  body: JSON.stringify({
+                    task,
+                    session_id: tempSessionId,
+                    current_canvas_state: canvasState,
+                    available_tools: availableTools
+                  })
                 });
 
                 const data = await response.json();

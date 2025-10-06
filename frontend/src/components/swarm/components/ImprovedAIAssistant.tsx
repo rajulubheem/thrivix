@@ -67,7 +67,11 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
   const [operationStatus, setOperationStatus] = useState<string | null>(null);
   const [isStreamingOperations, setIsStreamingOperations] = useState(false);
   const [operationQueue, setOperationQueue] = useState<any[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
+  const [pendingOperations, setPendingOperations] = useState<any[]>([]);
+  const [approvedOperations, setApprovedOperations] = useState<any[]>([]);
   const streamingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const operationQueueRef = useRef<any[]>([]);  // Use ref to track operations immediately
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -81,13 +85,13 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
     console.log('📝 streamingContent length:', streamingContent.length);
   }, [isStreaming, streamingContent]);
 
-  // Process operation queue with delays
+  // Process approved operations queue with delays
   useEffect(() => {
-    if (operationQueue.length === 0) return;
+    if (approvedOperations.length === 0) return;
 
     const timer = setTimeout(() => {
-      const [nextOp, ...rest] = operationQueue;
-      setOperationQueue(rest);
+      const [nextOp, ...rest] = approvedOperations;
+      setApprovedOperations(rest);
 
       // Apply the operation
       onOperations([nextOp.operation]);
@@ -108,7 +112,7 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
     }, 150); // 150ms delay between operations for visibility
 
     return () => clearTimeout(timer);
-  }, [operationQueue, onOperations]);
+  }, [approvedOperations, onOperations]);
 
   // Listen for WebSocket streaming tokens
   useEffect(() => {
@@ -145,15 +149,17 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
             // Mark that we're streaming operations (disable auto-layout)
             if (index === 0) {
               setIsStreamingOperations(true);
+              operationQueueRef.current = [];  // Clear ref on first operation
             }
 
-            // Add operation to queue with metadata
-            // Pass a flag to indicate we're streaming
-            setOperationQueue(prev => [...prev, {
+            // Add operation to BOTH state and ref
+            const opWithMetadata = {
               operation: { ...operation, _isStreaming: true },
               index,
               total
-            }]);
+            };
+            operationQueueRef.current.push(opWithMetadata);
+            setOperationQueue(prev => [...prev, opWithMetadata]);
           }
         }
 
@@ -177,6 +183,18 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
               timestamp: Date.now()
             };
             setMessages(prev => [...prev, assistantMessage]);
+          }
+
+          // AUTO-APPLY operations immediately using ref (no preview needed)
+          console.log(`📊 Operation queue has ${operationQueueRef.current.length} operations`);
+          if (operationQueueRef.current.length > 0) {
+            console.log(`🚀 Auto-applying ${operationQueueRef.current.length} operations...`);
+            const operations = operationQueueRef.current.map(op => op.operation);
+            onOperations(operations);
+            operationQueueRef.current = [];  // Clear the ref
+            setOperationQueue([]); // Clear the state
+          } else {
+            console.warn('⚠️ No operations in queue to apply!');
           }
 
           // Clear streaming content and stop streaming state
@@ -260,13 +278,21 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
         prompt: `Message: ${contextualMessage}\n\nCanvas State: ${JSON.stringify(canvasState, null, 2)}\n\nAvailable Tools: ${availableTools.join(', ')}`
       }));
 
+      console.log('📤 Sending to AI:', {
+        nodes: canvasState.nodes.length,
+        edges: canvasState.edges.length,
+        tools: availableTools.length,
+        message: contextualMessage.substring(0, 100)
+      });
+
       const response = await fetch('/api/v1/streaming/ai-assistant/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
           message: contextualMessage,
-          current_canvas_state: canvasState
+          current_canvas_state: canvasState,
+          available_tools: availableTools
         })
       });
 
@@ -304,6 +330,49 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
     if (sessionId) {
       fetch(`/api/v1/streaming/ai-assistant/${sessionId}`, { method: 'DELETE' });
     }
+  };
+
+  // Operation preview handlers
+  const handleApproveAll = () => {
+    // Convert pending operations to approved format with metadata
+    const opsWithMetadata = pendingOperations.map((op, index) => ({
+      operation: { ...op, _isStreaming: true },
+      index,
+      total: pendingOperations.length
+    }));
+    setApprovedOperations(opsWithMetadata);
+    setPendingOperations([]);
+    setShowPreview(false);
+    setIsStreamingOperations(true);
+  };
+
+  const handleRejectAll = () => {
+    setPendingOperations([]);
+    setShowPreview(false);
+  };
+
+  const handleApproveOperation = (index: number) => {
+    const operation = pendingOperations[index];
+    setApprovedOperations(prev => [...prev, {
+      operation: { ...operation, _isStreaming: true },
+      index: 0,
+      total: 1
+    }]);
+    setPendingOperations(prev => prev.filter((_, i) => i !== index));
+    if (pendingOperations.length === 1) {
+      setShowPreview(false);
+    }
+  };
+
+  const handleRejectOperation = (index: number) => {
+    setPendingOperations(prev => prev.filter((_, i) => i !== index));
+    if (pendingOperations.length === 1) {
+      setShowPreview(false);
+    }
+  };
+
+  const handleEditOperation = (index: number, operation: any) => {
+    setPendingOperations(prev => prev.map((op, i) => i === index ? operation : op));
   };
 
   return (
@@ -495,6 +564,8 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
           {isStreaming ? '⏳' : '📤 Send'}
         </button>
       </div>
+
+      {/* Operation Preview Panel - Removed: Auto-apply operations instead */}
     </div>
   );
 };

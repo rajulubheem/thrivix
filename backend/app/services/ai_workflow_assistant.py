@@ -126,7 +126,8 @@ class AIWorkflowAssistant:
         session_id: str,
         task: str,
         available_tools: Optional[List[str]] = None,
-        reuse_existing: bool = False
+        reuse_existing: bool = False,
+        current_canvas_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Start a new workflow building session.
@@ -171,6 +172,13 @@ class AIWorkflowAssistant:
             task=task,
             available_tools=available_tools
         )
+
+        # Initialize with existing canvas state if provided
+        if current_canvas_state:
+            session.current_nodes = current_canvas_state.get("nodes", [])
+            session.current_edges = current_canvas_state.get("edges", [])
+            logger.info(f"📊 Initialized session with {len(session.current_nodes)} existing nodes")
+
         self.sessions[session_id] = session
 
         # Get or create conversation manager from Strands session service
@@ -202,7 +210,8 @@ class AIWorkflowAssistant:
         self,
         session_id: str,
         user_message: str,
-        current_canvas_state: Optional[Dict[str, Any]] = None
+        current_canvas_state: Optional[Dict[str, Any]] = None,
+        available_tools: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Handle user message and generate AI response with node operations.
@@ -216,6 +225,11 @@ class AIWorkflowAssistant:
             session.current_nodes = current_canvas_state.get("nodes", session.current_nodes)
             session.current_edges = current_canvas_state.get("edges", session.current_edges)
             logger.debug(f"Canvas state: {len(session.current_nodes)} nodes, {len(session.current_edges)} edges")
+
+        # Update available tools if provided
+        if available_tools:
+            session.available_tools = available_tools
+            logger.debug(f"Updated available tools: {len(available_tools)} tools")
 
         # Add user message
         session.messages.append(WorkflowMessage(
@@ -259,11 +273,18 @@ class AIWorkflowAssistant:
 
         tools_text = ", ".join(f'"{t}"' for t in session.available_tools[:30])
 
+        # Build context about existing canvas
+        canvas_context = ""
+        if session.current_nodes:
+            canvas_context = f"\n\nEXISTING CANVAS STATE:\nNodes: {json.dumps(session.current_nodes, indent=2)}\nEdges: {json.dumps(session.current_edges, indent=2)}\n\nIMPORTANT: The canvas already has {len(session.current_nodes)} nodes. You can either modify existing nodes or add new ones. Make sure to connect new nodes to existing ones if appropriate."
+        else:
+            canvas_context = "\n\nThe canvas is currently empty. Create a complete workflow from scratch."
+
         prompt = f"""You are an AI workflow architect helping a user build a multi-agent workflow on a visual canvas.
 
 User's task: {session.task}
 
-Available tools: [{tools_text}]
+Available tools: [{tools_text}]{canvas_context}
 
 Your job:
 1. Analyze the task deeply and design an intelligent, production-ready workflow

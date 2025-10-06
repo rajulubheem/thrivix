@@ -1,5 +1,6 @@
 import React from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
+import { getNodeIcon, getNodeColors } from '../../utils/nodeIcons';
 
 const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
   const isDark = data.isDarkMode === true;
@@ -73,16 +74,26 @@ const AgentNode: React.FC<NodeProps> = ({ data, selected }) => {
 
       <div style={{ marginBottom: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+          {/* Professional colored icon circle like competitor */}
           <div style={{
-            width: '10px',
-            height: '10px',
+            width: '32px',
+            height: '32px',
             borderRadius: '50%',
-            background: getStatusColor(),
+            background: getNodeColors(data.nodeType || data.type || 'agent').bg,
+            border: `2px solid ${getNodeColors(data.nodeType || data.type || 'agent').border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            fontSize: '16px',
             boxShadow: data.status === 'running'
               ? `0 0 0 4px ${getStatusColor()}30`
-              : 'none',
-            animation: data.status === 'running' ? 'pulse 2s infinite' : 'none',
-          }} />
+              : '0 1px 3px rgba(0,0,0,0.1)',
+          }}>
+            <span style={{ color: getNodeColors(data.nodeType || data.type || 'agent').icon }}>
+              {getNodeIcon(data.nodeType || data.type || 'agent')}
+            </span>
+          </div>
           <span style={{
             fontSize: '15px',
             fontWeight: '600',

@@ -776,6 +776,8 @@ class AIAssistantStartRequest(BaseModel):
     task: str = Field(..., description="The user's task description")
     session_id: Optional[str] = Field(None, description="Optional session ID")
     reuse_existing: bool = Field(False, description="If True, reuse existing session if it exists")
+    current_canvas_state: Optional[Dict[str, Any]] = Field(None, description="Current canvas nodes and edges")
+    available_tools: Optional[List[str]] = Field(None, description="List of available tools")
 
 
 class AIAssistantMessageRequest(BaseModel):
@@ -783,6 +785,7 @@ class AIAssistantMessageRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     message: str = Field(..., description="User's message")
     current_canvas_state: Optional[Dict[str, Any]] = Field(None, description="Current canvas nodes and edges")
+    available_tools: Optional[List[str]] = Field(None, description="List of available tools")
 
 
 @router.post("/ai-assistant/start")
@@ -807,7 +810,9 @@ async def start_ai_assistant(request: AIAssistantStartRequest):
                 await ai_workflow_assistant.start_session(
                     session_id=session_id,
                     task=request.task,
-                    reuse_existing=request.reuse_existing
+                    reuse_existing=request.reuse_existing,
+                    current_canvas_state=request.current_canvas_state,
+                    available_tools=request.available_tools
                 )
             except Exception as e:
                 logger.error(f"Error in background AI session: {e}")
@@ -845,7 +850,8 @@ async def send_ai_assistant_message(request: AIAssistantMessageRequest):
         result = await ai_workflow_assistant.send_message(
             session_id=request.session_id,
             user_message=request.message,
-            current_canvas_state=request.current_canvas_state
+            current_canvas_state=request.current_canvas_state,
+            available_tools=request.available_tools
         )
         return {
             "success": True,

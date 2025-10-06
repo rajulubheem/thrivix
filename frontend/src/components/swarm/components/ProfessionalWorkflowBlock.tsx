@@ -6,6 +6,7 @@ import {
   GitBranch, Users, AlertCircle, Zap, RefreshCw, Wrench,
   Code, Maximize2, Minimize2, MoreVertical
 } from 'lucide-react';
+import { getNodeIcon, getNodeColors } from '../utils/nodeIcons';
 
 interface WorkflowBlockData {
   type: string;
@@ -340,20 +341,26 @@ export const ProfessionalWorkflowBlock = memo<NodeProps<WorkflowBlockData>>(({
       {/* Header */}
       <div className="px-3 py-2 flex items-center justify-between border-b border-gray-100 dark:border-gray-800">
         <div className="flex items-center gap-2 flex-1">
-          {typeof config.icon === 'string' ? (
-            <span className="text-lg">{config.icon}</span>
-          ) : NodeIcon ? (
-            <NodeIcon
-              size={16}
-              style={{ color: isRunning ? '#FCD34D' : config.color }}
-              className={isRunning ? 'animate-spin' : ''}
-            />
-          ) : null}
+          {/* Professional colored icon circle like competitor */}
+          <div
+            className="flex items-center justify-center rounded-full w-8 h-8 flex-shrink-0"
+            style={{
+              backgroundColor: getNodeColors(data.type).bg,
+              border: `2px solid ${getNodeColors(data.type).border}`
+            }}
+          >
+            <span
+              className="text-base"
+              style={{ color: getNodeColors(data.type).icon }}
+            >
+              {getNodeIcon(data.type)}
+            </span>
+          </div>
 
           <input
             value={localName}
             onChange={(e) => !isRunning && setLocalName(e.target.value)}
-            className="flex-1 px-2 py-1 text-sm font-medium bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none"
+            className="flex-1 px-2 py-1 text-sm font-semibold bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none dark:text-white"
             placeholder="Block name..."
             disabled={isRunning}
           />
