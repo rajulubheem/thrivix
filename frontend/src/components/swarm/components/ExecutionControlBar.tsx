@@ -41,8 +41,9 @@ export const ExecutionControlBar: React.FC<ExecutionControlBarProps> = ({
         className="task-input"
         value={task}
         onChange={(e) => onTaskChange(e.target.value)}
-        placeholder="Enter your task or click AI Assistant..."
+        placeholder="Describe your task (will auto-plan workflow if canvas is empty)..."
         disabled={isRunning}
+        title="Enter your task. If canvas is empty, Execute will auto-plan and run a workflow. For iterative building, use AI Assistant."
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !isRunning && task.trim()) {
             onStartExecution();
@@ -54,20 +55,30 @@ export const ExecutionControlBar: React.FC<ExecutionControlBarProps> = ({
         <button
           className="ai-chat-btn"
           onClick={onToggleAIChat}
-          title="AI Workflow Assistant"
+          title="Open AI Assistant to build, modify, or enhance your workflow using natural language"
           style={{
             background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
             color: 'white',
             border: 'none',
-            padding: '8px 16px',
-            borderRadius: '6px',
+            padding: '10px 20px',
+            borderRadius: '8px',
             cursor: 'pointer',
-            fontSize: '14px',
+            fontSize: '15px',
             fontWeight: 600,
-            marginRight: '8px'
+            marginRight: '8px',
+            boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)',
+            transition: 'all 0.2s'
+          }}
+          onMouseOver={(e) => {
+            e.currentTarget.style.transform = 'translateY(-2px)';
+            e.currentTarget.style.boxShadow = '0 6px 16px rgba(102, 126, 234, 0.4)';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = '0 4px 12px rgba(102, 126, 234, 0.3)';
           }}
         >
-          🤖 AI Assistant
+          🤖 AI Workflow Builder
         </button>
       )}
 

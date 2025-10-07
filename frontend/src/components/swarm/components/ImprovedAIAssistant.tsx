@@ -70,6 +70,7 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
   const [showPreview, setShowPreview] = useState(false);
   const [pendingOperations, setPendingOperations] = useState<any[]>([]);
   const [approvedOperations, setApprovedOperations] = useState<any[]>([]);
+  const [backendHistory, setBackendHistory] = useState<any[]>([]);
   const streamingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const operationQueueRef = useRef<any[]>([]);  // Use ref to track operations immediately
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -225,6 +226,26 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
       availableTools,
     });
   }, [sessionId, nodes, selectedNode, availableTools]);
+
+  // Fetch backend history when debug panel is opened
+  useEffect(() => {
+    const fetchBackendHistory = async () => {
+      if (showDebug && sessionId) {
+        try {
+          const response = await fetch(`/api/v1/streaming/ai-assistant/${sessionId}/history`);
+          if (response.ok) {
+            const data = await response.json();
+            setBackendHistory(data.messages || []);
+            console.log('📚 Fetched backend history:', data);
+          }
+        } catch (error) {
+          console.error('Error fetching backend history:', error);
+        }
+      }
+    };
+
+    fetchBackendHistory();
+  }, [showDebug, sessionId]);
 
   const sendMessage = async () => {
     if (!input.trim()) return;
@@ -415,6 +436,67 @@ export const ImprovedAIAssistant: React.FC<ImprovedAIAssistantProps> = ({
           <div className="debug-section">
             <h4>Session ID</h4>
             <code>{sessionId || 'No session'}</code>
+          </div>
+
+          <div className="debug-section">
+            <h4>💬 Backend Conversation History (What AI Actually Knows)</h4>
+            <button
+              onClick={() => {
+                if (sessionId) {
+                  fetch(`/api/v1/streaming/ai-assistant/${sessionId}/history`)
+                    .then(r => r.json())
+                    .then(data => {
+                      setBackendHistory(data.messages || []);
+                      console.log('🔄 Refreshed backend history:', data);
+                    });
+                }
+              }}
+              style={{
+                fontSize: '10px',
+                padding: '4px 8px',
+                marginBottom: '8px',
+                background: isDarkMode ? '#2d2d2d' : '#e0e0e0',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              🔄 Refresh from Backend
+            </button>
+            <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '12px', background: isDarkMode ? '#1a1a1a' : '#f5f5f5', padding: '8px', borderRadius: '4px' }}>
+              {backendHistory.length === 0 ? (
+                <p style={{ color: '#888', fontSize: '11px' }}>
+                  {sessionId ? 'Click refresh to load backend history' : 'No session yet'}
+                </p>
+              ) : (
+                <>
+                  <div style={{ fontSize: '10px', marginBottom: '8px', padding: '4px', background: isDarkMode ? '#2d2d2d' : '#e0e0e0', borderRadius: '4px' }}>
+                    📊 {backendHistory.length} messages in backend memory
+                  </div>
+                  {backendHistory.map((msg: any, idx: number) => (
+                    <div key={idx} style={{
+                      marginBottom: '8px',
+                      padding: '6px',
+                      background: msg.role === 'user' ? (isDarkMode ? '#2d2d2d' : '#e3f2fd') : (isDarkMode ? '#1e3a1e' : '#e8f5e9'),
+                      borderRadius: '4px',
+                      borderLeft: `3px solid ${msg.role === 'user' ? '#2196F3' : '#4CAF50'}`
+                    }}>
+                      <strong style={{ fontSize: '10px', textTransform: 'uppercase', opacity: 0.7 }}>
+                        {msg.role === 'user' ? '👤 User' : '🤖 Assistant'} #{idx + 1}
+                      </strong>
+                      <div style={{ fontSize: '11px', marginTop: '4px', whiteSpace: 'pre-wrap' }}>
+                        {msg.content.substring(0, 150)}{msg.content.length > 150 ? '...' : ''}
+                      </div>
+                      {msg.operations && msg.operations.length > 0 && (
+                        <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.7 }}>
+                          📦 {msg.operations.length} operations
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
           </div>
 
           <div className="debug-section">

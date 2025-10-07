@@ -329,13 +329,13 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             )}
           </button>
 
-          {/* AI Enhance */}
+          {/* AI Enhance - for expanding/refining selected nodes */}
           <button
             onClick={() => setShowEnhancePanel(!showEnhancePanel)}
             className={`p-2 rounded-lg transition-colors flex items-center gap-1 ${
               showEnhancePanel ? 'bg-purple-100 dark:bg-purple-900/30' : 'hover:bg-gray-100 dark:hover:bg-gray-800'
             }`}
-            title="Enhance Flow with AI"
+            title="Enhance Flow - Expand selected blocks into detailed sub-workflows"
           >
             <Sparkles size={16} />
             {selectedNodes.length > 0 && (
@@ -371,100 +371,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                       dark:border-green-700 rounded-lg px-3 py-2 flex items-center gap-2">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
           <span className="text-sm text-green-700 dark:text-green-400">Workflow Running</span>
-        </div>
-      )}
-
-      {/* AI Enhance Panel */}
-      {showEnhancePanel && (
-        <div className="absolute top-16 left-4 w-96 bg-white dark:bg-gray-900 rounded-lg shadow-lg
-                      border border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <Sparkles size={14} className="text-purple-500" />
-                AI Flow Enhancement
-              </span>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                {selectedNodes.length > 0
-                  ? `Enhance ${selectedNodes.length} selected block(s)`
-                  : 'Select blocks to enhance or enhance entire flow'}
-              </p>
-            </div>
-            <button
-              onClick={() => setShowEnhancePanel(false)}
-              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-            >
-              <ChevronDown size={14} />
-            </button>
-          </div>
-
-          <textarea
-            value={enhancePrompt}
-            onChange={(e) => setEnhancePrompt(e.target.value)}
-            placeholder="Describe how you want to enhance the selected blocks or entire workflow...
-
-Examples:
-• Add error handling and retry logic
-• Add validation steps before each tool call
-• Break down into smaller, more specific steps
-• Add parallel processing where possible
-• Add human review checkpoints"
-            className="w-full h-32 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600
-                     rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500
-                     bg-white dark:bg-gray-800"
-          />
-
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => {
-                if (onEnhanceFlow && enhancePrompt.trim()) {
-                  const nodeIds = selectedNodes.map(n => n.id);
-                  onEnhanceFlow(enhancePrompt, nodeIds);
-                  setEnhancePrompt('');
-                  setShowEnhancePanel(false);
-                }
-              }}
-              disabled={!enhancePrompt.trim()}
-              className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg transition-colors
-                        flex items-center justify-center gap-2
-                        ${enhancePrompt.trim()
-                          ? 'bg-purple-500 hover:bg-purple-600 text-white'
-                          : 'bg-gray-200 dark:bg-gray-700 text-gray-400 cursor-not-allowed'}`}
-            >
-              <Sparkles size={14} />
-              Enhance {selectedNodes.length > 0 ? 'Selected' : 'Flow'}
-            </button>
-
-            <button
-              onClick={() => {
-                setEnhancePrompt('');
-                setShowEnhancePanel(false);
-              }}
-              className="px-3 py-2 text-sm bg-gray-200 dark:bg-gray-700 rounded-lg
-                       hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-
-          {selectedNodes.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Selected blocks:</p>
-              <div className="flex flex-wrap gap-1">
-                {selectedNodes.slice(0, 5).map(node => (
-                  <span key={node.id} className="px-2 py-1 text-xs bg-purple-100 dark:bg-purple-900/30
-                                                text-purple-700 dark:text-purple-300 rounded">
-                    {node.data?.name || node.id}
-                  </span>
-                ))}
-                {selectedNodes.length > 5 && (
-                  <span className="px-2 py-1 text-xs text-gray-500">
-                    +{selectedNodes.length - 5} more
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -688,6 +594,100 @@ Examples:
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* AI Enhance Panel */}
+      {showEnhancePanel && (
+        <div className="absolute top-16 left-4 w-96 bg-white dark:bg-gray-900 rounded-lg shadow-lg
+                      border border-gray-200 dark:border-gray-700 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <span className="text-sm font-medium flex items-center gap-2">
+                <Sparkles size={14} className="text-purple-500" />
+                AI Flow Enhancement
+              </span>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {selectedNodes.length > 0
+                  ? `Expand ${selectedNodes.length} selected block(s) into detailed sub-workflows`
+                  : 'Select blocks to enhance or enhance entire flow'}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowEnhancePanel(false)}
+              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+
+          <textarea
+            value={enhancePrompt}
+            onChange={(e) => setEnhancePrompt(e.target.value)}
+            placeholder="Describe how you want to enhance the selected blocks or entire workflow...
+
+Examples:
+• Add error handling and retry logic
+• Add validation steps before each tool call
+• Break down into smaller, more specific steps
+• Add parallel processing where possible
+• Add human review checkpoints"
+            className="w-full h-32 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600
+                     rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500
+                     bg-white dark:bg-gray-800"
+          />
+
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => {
+                if (onEnhanceFlow && enhancePrompt.trim()) {
+                  const nodeIds = selectedNodes.map(n => n.id);
+                  onEnhanceFlow(enhancePrompt, nodeIds);
+                  setEnhancePrompt('');
+                  setShowEnhancePanel(false);
+                }
+              }}
+              disabled={!enhancePrompt.trim()}
+              className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg transition-colors
+                        flex items-center justify-center gap-2
+                        ${enhancePrompt.trim()
+                          ? 'bg-purple-500 hover:bg-purple-600 text-white'
+                          : 'bg-gray-200 dark:bg-gray-700 text-gray-400 cursor-not-allowed'}`}
+            >
+              <Sparkles size={14} />
+              Enhance {selectedNodes.length > 0 ? 'Selected' : 'Flow'}
+            </button>
+
+            <button
+              onClick={() => {
+                setEnhancePrompt('');
+                setShowEnhancePanel(false);
+              }}
+              className="px-3 py-2 text-sm bg-gray-200 dark:bg-gray-700 rounded-lg
+                       hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+
+          {selectedNodes.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Selected blocks:</p>
+              <div className="flex flex-wrap gap-1">
+                {selectedNodes.slice(0, 5).map(node => (
+                  <span key={node.id} className="px-2 py-1 text-xs bg-purple-100 dark:bg-purple-900/30
+                                                text-purple-700 dark:text-purple-300 rounded">
+                    {node.data?.name || node.id}
+                  </span>
+                ))}
+                {selectedNodes.length > 5 && (
+                  <span className="px-2 py-1 text-xs text-gray-500">
+                    +{selectedNodes.length - 5} more
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

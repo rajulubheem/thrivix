@@ -882,6 +882,34 @@ async def get_ai_assistant_status(session_id: str):
     }
 
 
+@router.get("/ai-assistant/{session_id}/history")
+async def get_ai_assistant_history(session_id: str):
+    """Get full conversation history for AI assistant session"""
+    session = ai_workflow_assistant.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Convert messages to serializable format
+    messages = []
+    for msg in session.messages:
+        messages.append({
+            "role": msg.role,
+            "content": msg.content,
+            "operations": msg.operations,
+            "timestamp": getattr(msg, 'timestamp', None)
+        })
+
+    return {
+        "session_id": session.session_id,
+        "task": session.task,
+        "messages": messages,
+        "message_count": len(messages),
+        "available_tools": session.available_tools,
+        "current_nodes": session.current_nodes,
+        "current_edges": session.current_edges
+    }
+
+
 @router.delete("/ai-assistant/{session_id}")
 async def clear_ai_assistant_session(session_id: str):
     """Delete an AI assistant session"""

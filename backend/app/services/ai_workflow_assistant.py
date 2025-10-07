@@ -288,11 +288,13 @@ Available tools: [{tools_text}]{canvas_context}
 
 Your job:
 1. Analyze the task deeply and design an intelligent, production-ready workflow
-2. Create 3-7 nodes with clear responsibilities and proper error handling
-3. Use appropriate node types: analysis (planning/thinking), tool_call (actions), decision (branching), parallel (concurrent tasks), final (completion)
-4. Assign relevant tools from the available list to tool_call nodes
-5. Connect nodes with success/failure paths for robust error handling
-6. Explain your design decisions conversationally
+2. Create 5-10 professional nodes with clear responsibilities
+3. Use appropriate node types: agent (LLM-powered reasoning), tool_call (tool execution), analysis (planning), decision (branching), parallel (concurrent), final (completion)
+4. For complex tasks, use "agent" type nodes with specific roles (e.g., "Researcher", "Analyzer", "Validator")
+5. Assign relevant tools from the available list to tool_call and agent nodes
+6. Connect nodes with success/failure/error paths for robust error handling
+7. Add retry logic and validation steps where appropriate
+8. Explain your design decisions conversationally
 
 Return JSON with this EXACT format:
 {{
@@ -319,9 +321,10 @@ Return JSON with this EXACT format:
     ]
 }}
 
-Node types: analysis, tool_call, decision, parallel, final
-Always include a "start" node and "final_success" node.
-Position nodes in a left-to-right flow (x increases by 300 for each node).
+Node types: agent, tool_call, analysis, decision, parallel, final
+Always include a "start" or initialization node and a "final_success" completion node.
+Position nodes in a left-to-right flow (x increases by 300-350 for each node, y varies by 150-200 for parallel branches).
+For "agent" nodes, provide detailed agent_role descriptions (e.g., "Senior Research Analyst", "Data Validator", "Error Handler").
 Be conversational and helpful in your message.
 
 CRITICAL: Output ONLY valid JSON. NO trailing commas. NO markdown. NO explanations outside JSON."""
