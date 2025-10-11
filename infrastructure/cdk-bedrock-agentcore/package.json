@@ -1,0 +1,28 @@
+{
+  "name": "thrivix-agentcore-cdk",
+  "version": "1.0.0",
+  "description": "AWS CDK infrastructure for Thrivix with Bedrock AgentCore",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --all --require-approval never",
+    "deploy:dev": "cdk deploy --all --context environment=development",
+    "deploy:prod": "cdk deploy --all --context environment=production",
+    "diff": "cdk diff",
+    "destroy": "cdk destroy --all"
+  },
+  "keywords": ["aws", "cdk", "thrivix", "bedrock", "agentcore", "strands"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "aws-cdk": "^2.180.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.180.0",
+    "constructs": "^10.4.2"
+  }
+}

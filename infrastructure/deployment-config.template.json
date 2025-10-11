@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Thrivix Deployment Configuration - COPY TO deployment-config.json AND FILL IN YOUR VALUES",
+  "aws": {
+    "account": "YOUR_AWS_ACCOUNT_ID",
+    "region": "us-west-2",
+    "profile": "thrivix-admin"
+  },
+  "backend": {
+    "secretName": "thrivix-fargate-secrets",
+    "corsOrigins": [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:3001",
+      "http://localhost:3002"
+    ],
+    "certificateArn": null,
+    "comment": "certificateArn: Optional ACM certificate ARN for HTTPS (e.g., arn:aws:acm:us-west-2:123456789012:certificate/xxx-xxx-xxx)"
+  },
+  "frontend": {
+    "bucketNameSuffix": null,
+    "comment": "bucketNameSuffix: Optional custom suffix for S3 bucket name. If null, uses AWS account ID"
+  },
+  "deployment": {
+    "autoUpdateFrontendWithBackendAlb": true,
+    "comment": "autoUpdateFrontendWithBackendAlb: If true, frontend automatically uses backend ALB domain from CloudFormation exports"
+  }
+}

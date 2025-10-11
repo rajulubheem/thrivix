@@ -1,0 +1,28 @@
+{
+  "name": "thrivix-fargate-cdk",
+  "version": "1.0.0",
+  "description": "AWS CDK infrastructure for deploying Thrivix to Fargate",
+  "bin": {
+    "thrivix-fargate-cdk": "bin/thrivix-fargate-app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "synth": "cdk synth",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "aws-cdk": "^2.219.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.219.0",
+    "constructs": "^10.4.2",
+    "source-map-support": "^0.5.21"
+  }
+}

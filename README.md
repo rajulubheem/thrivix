@@ -143,12 +143,14 @@ Features: Web search via Tavily, streaming responses, conversation history, sour
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Local Development
+
+**Prerequisites:**
 - Python 3.11+
 - Node.js 18+
 - Redis (required)
 
-### Installation
+**Installation:**
 
 ```bash
 # Clone repository
@@ -182,6 +184,109 @@ npm start
 ```
 
 Open **http://localhost:3000**
+
+---
+
+### ☁️ AWS Cloud Deployment
+
+Deploy Thrivix to AWS with **one-command CDK deployment**. All infrastructure is managed as code with automatic resource discovery.
+
+**Prerequisites:**
+- AWS Account with CLI configured
+- AWS CDK installed (`npm install -g aws-cdk`)
+- Docker (for building container images)
+
+**Step 1: Configure Deployment**
+
+```bash
+cd infrastructure
+
+# Copy template and fill in your AWS details
+cp deployment-config.template.json deployment-config.json
+
+# Edit deployment-config.json:
+# - Set your AWS account ID
+# - Choose region (default: us-west-2)
+# - Configure CORS origins
+```
+
+**Step 2: Create Secrets**
+
+```bash
+# One-time: Create AWS Secrets Manager secret
+aws secretsmanager create-secret \
+  --name thrivix-fargate-secrets \
+  --description "API keys for Thrivix" \
+  --secret-string '{"OPENAI_API_KEY":"your-key","ANTHROPIC_API_KEY":"your-key","TAVILY_API_KEY":"your-key"}' \
+  --region us-west-2
+
+# Or use the helper script:
+cd infrastructure/cdk-fargate
+./update-secrets.sh
+```
+
+**Step 3: Deploy Infrastructure**
+
+```bash
+# Deploy backend (ECS Fargate + ALB + Redis + DynamoDB)
+cd infrastructure/cdk-fargate
+npx cdk bootstrap  # First time only
+npx cdk deploy
+
+# Deploy frontend (S3 + CloudFront)
+cd ../cdk-frontend
+npx cdk deploy
+```
+
+**What Gets Deployed:**
+- ✅ **VPC** - Private network with 2 AZs and NAT gateways
+- ✅ **ECS Fargate** - Serverless containers with auto-scaling (2-10 tasks)
+- ✅ **ALB** - Application Load Balancer with health checks
+- ✅ **ElastiCache Redis** - Event streaming backbone
+- ✅ **DynamoDB** - Session state storage
+- ✅ **CloudFront + S3** - Global CDN for frontend
+- ✅ **Secrets Manager** - Secure API key storage
+- ✅ **CloudWatch** - Logs and metrics (6-month retention)
+
+**Security Features:**
+- 🔒 No hardcoded AWS account IDs or endpoints in git
+- 🔒 Automatic ALB discovery via CloudFormation exports
+- 🔒 All secrets in AWS Secrets Manager (not environment variables)
+- 🔒 Encrypted data at rest (KMS) and in transit (TLS)
+- 🔒 VPC isolation with private subnets
+
+**Cost Estimate:** ~$80-120/month
+- ECS Fargate (2 tasks): ~$35/month
+- ElastiCache t3.micro: ~$12/month
+- ALB: ~$18/month
+- NAT Gateways: ~$32/month
+- CloudFront + S3: ~$5-10/month
+
+**Update Your Deployment:**
+
+When you get a new AWS account or need to reconfigure:
+
+```bash
+# 1. Edit infrastructure/deployment-config.json with new account ID
+# 2. Update secrets in new account
+# 3. Redeploy both stacks
+
+cd infrastructure/cdk-fargate
+npx cdk deploy
+
+cd ../cdk-frontend
+npx cdk deploy
+```
+
+**AWS Architecture:**
+
+![AWS Architecture Diagram](infrastructure/aws_architecture_diagram.png)
+
+The diagram shows the complete AWS infrastructure including VPC, ECS Fargate, ALB, Redis, DynamoDB, CloudFront, and S3.
+
+**Deployment Scripts:**
+- `./infrastructure/deploy.sh` - One-command deployment
+- `./infrastructure/pause-services.sh` - Pause/resume services to save costs
 
 ---
 

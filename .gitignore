@@ -106,3 +106,20 @@ backend/uploads/
 backend/temp/
 frontend/.cache/
 strands_sessions/
+
+# AWS CDK - Sensitive deployment configuration
+# SECURITY: deployment-config.json contains AWS account IDs and deployment details
+infrastructure/deployment-config.json
+infrastructure/cdk/deployment-config.json
+infrastructure/cdk-fargate/deployment-config.json
+infrastructure/cdk-frontend/deployment-config.json
+cdk.out/
+*.generated.ts
+**/cdk.context.json
+
+# Private deployment scripts and configs (keep your AWS info local)
+/private/
+deployment-outputs.json
+*-outputs.json
+/tmp/backend-outputs.json
+/tmp/frontend-outputs.jsonbackend/published_articles/

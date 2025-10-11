@@ -251,5 +251,6 @@ def get_event_hub() -> EventHub:
     """Get singleton EventHub instance"""
     global _event_hub
     if _event_hub is None:
-        _event_hub = EventHub()
+        from app.config import settings
+        _event_hub = EventHub(redis_url=settings.REDIS_URL)
     return _event_hub

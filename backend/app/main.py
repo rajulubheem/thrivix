@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import structlog
 
 from app.config import Settings
+from app.core.config import settings as core_settings
 from app.api.v1.api import api_router
 from app.core.middleware import (
     LoggingMiddleware,
@@ -70,14 +71,7 @@ app = FastAPI(
 # If compression is needed elsewhere, add conditional logic to skip SSE paths.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5173",
-        "http://localhost:3002",
-        "https://truewave.info",
-        "http://truewave.info"
-    ],
+    allow_origins=core_settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
