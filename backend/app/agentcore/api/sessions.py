@@ -1,25 +1,34 @@
 """
 Session API Endpoints
 
-RESTful API for managing agent sessions.
+RESTful API for managing agent sessions with FileSessionManager integration.
 """
 from fastapi import APIRouter, HTTPException, status
 from typing import List, Optional
 import structlog
 
-from app.agentcore.schemas import SessionCreate, SessionResponse
-from app.agentcore.services import get_session_manager
+from app.agentcore.services import get_agent_session_manager
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 
-@router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
-async def create_session(session: SessionCreate):
-    """Create a new agent session."""
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_session(agent_id: str, actor_id: str, session_expiry_seconds: int = 3600):
+    """
+    Create a new agent session.
+
+    Returns session_id to use in subsequent invocations.
+    Session stores conversation history via FileSessionManager.
+    """
     try:
-        session_manager = get_session_manager()
-        return session_manager.create_session(session)
+        session_mgr = get_agent_session_manager()
+        session_id = session_mgr.create_session(
+            agent_id=agent_id,
+            actor_id=actor_id,
+            session_expiry_seconds=session_expiry_seconds
+        )
+        return {"session_id": session_id, "agent_id": agent_id, "actor_id": actor_id}
     except Exception as e:
         logger.error("Failed to create session", error=str(e))
         raise HTTPException(
@@ -28,15 +37,15 @@ async def create_session(session: SessionCreate):
         )
 
 
-@router.get("", response_model=List[SessionResponse])
+@router.get("")
 async def list_sessions(
     agent_id: Optional[str] = None,
     actor_id: Optional[str] = None
 ):
     """List active sessions with optional filtering."""
     try:
-        session_manager = get_session_manager()
-        return session_manager.list_active_sessions(agent_id=agent_id, actor_id=actor_id)
+        session_mgr = get_agent_session_manager()
+        return session_mgr.list_sessions(agent_id=agent_id, actor_id=actor_id)
     except Exception as e:
         logger.error("Failed to list sessions", error=str(e))
         raise HTTPException(
@@ -45,20 +54,23 @@ async def list_sessions(
         )
 
 
-@router.get("/{session_id}", response_model=SessionResponse)
+@router.get("/{session_id}")
 async def get_session(session_id: str):
     """Get session details by ID."""
     try:
-        session_manager = get_session_manager()
-        session = session_manager.get_session(session_id)
+        session_mgr = get_agent_session_manager()
+        session_info = session_mgr.get_session_info(session_id)
 
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Session not found or expired: {session_id}"
-            )
+        if not session_info:
+            # Check if session exists on disk
+            if not session_mgr.validate_session(session_id):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Session not found or expired: {session_id}"
+                )
+            return {"session_id": session_id, "status": "active", "source": "disk"}
 
-        return session
+        return session_info
     except HTTPException:
         raise
     except Exception as e:
@@ -71,27 +83,17 @@ async def get_session(session_id: str):
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(session_id: str):
-    """Delete/end a session."""
+    """
+    Delete/end a session (metadata only).
+
+    Note: Conversation history files remain on disk for reference.
+    """
     try:
-        session_manager = get_session_manager()
-        session_manager.delete_session(session_id)
+        session_mgr = get_agent_session_manager()
+        session_mgr.delete_session(session_id)
     except Exception as e:
         logger.error("Failed to delete session", session_id=session_id, error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete session: {str(e)}"
-        )
-
-
-@router.get("/_stats", response_model=dict)
-async def get_session_stats():
-    """Get session manager statistics."""
-    try:
-        session_manager = get_session_manager()
-        return session_manager.get_cache_stats()
-    except Exception as e:
-        logger.error("Failed to get session stats", error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get session stats: {str(e)}"
         )
