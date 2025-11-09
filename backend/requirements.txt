@@ -22,9 +22,10 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.9
 
-# AWS
+# AWS SDK
 boto3>=1.35.0
 botocore>=1.35.0
+aioboto3>=13.0.0
 
 # SSE & Real-time
 sse-starlette==2.1.3
@@ -80,3 +81,11 @@ typing-extensions>=4.12.2
 strands-agents==1.6.0
 strands-agents-tools==0.2.5
 strands-agents-builder==0.1.8
+
+# AWS AgentCore
+bedrock-agentcore>=0.1.0
+aioboto3>=13.0.0
+
+# Additional AWS Services
+boto3>=1.35.0
+botocore>=1.35.0
