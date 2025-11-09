@@ -15,6 +15,7 @@ from app.agentcore.schemas import (
     AgentInvokeResponse
 )
 from app.agentcore.services import get_agent_manager
+from app.agentcore.examples.agent_configs import EXAMPLE_AGENTS, get_example_agent
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/agents", tags=["Agents"])
@@ -145,6 +146,48 @@ async def delete_agent(agent_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete agent: {str(e)}"
+        )
+
+
+@router.get("/examples", response_model=List[str])
+async def list_example_agents():
+    """
+    List available example agent configurations.
+
+    Returns names of production-quality agent examples that can be
+    created using the /agents/examples/{name} endpoint.
+    """
+    return list(EXAMPLE_AGENTS.keys())
+
+
+@router.post("/examples/{example_name}", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
+async def create_from_example(example_name: str):
+    """
+    Create an agent from an example configuration.
+
+    Available examples:
+    - research: Deep research agent with multi-tool integration
+    - customer_support: Enterprise support assistant with memory
+    - query_optimizer: SQL query optimization automation
+    - financial_analyst: Market analyst persona with domain expertise
+    - medical_coding: Medical documentation specialist
+
+    These are production-quality configurations based on real samples.
+    """
+    try:
+        example_config = get_example_agent(example_name)
+        agent_manager = get_agent_manager()
+        return agent_manager.create_agent(example_config)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error("Failed to create agent from example", example=example_name, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create agent from example: {str(e)}"
         )
 
 

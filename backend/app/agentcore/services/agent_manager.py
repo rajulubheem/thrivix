@@ -27,6 +27,7 @@ from app.agentcore.services.memory_service import MemoryService
 from app.agentcore.services.gateway_service import GatewayService
 from app.agentcore.services.session_manager import SessionManager
 from app.agentcore.config import settings
+from app.agentcore.tools import get_tools_by_names
 
 logger = structlog.get_logger()
 
@@ -138,8 +139,8 @@ class AgentManager:
                 'memory_type': agent_request.memory_type,
                 'session_expiry': agent_request.session_expiry,
                 'tools_enabled': agent_request.tools_enabled,
+                'tools': agent_request.tools or [],
                 'gateway_id': agent_request.gateway_id,
-                'custom_tools': agent_request.custom_tools or [],
                 'knowledge_base_id': agent_request.knowledge_base_id,
                 'code_interpreter_enabled': agent_request.code_interpreter_enabled,
                 'skills': agent_request.skills or [],
@@ -307,6 +308,41 @@ class AgentManager:
 
         return agent
 
+    def _load_tools(self, agent_config: Dict[str, Any]) -> List:
+        """
+        Load tools for an agent based on configuration.
+
+        Pattern from: Strands samples - tools are loaded and passed to Agent
+
+        Args:
+            agent_config: Agent configuration
+
+        Returns:
+            List of tool functions
+        """
+        tools = []
+
+        # Load built-in tools by name
+        if agent_config.get('tools_enabled') and agent_config.get('tools'):
+            tool_names = agent_config['tools']
+            tools.extend(get_tools_by_names(tool_names))
+
+            logger.debug(
+                "Loaded built-in tools",
+                agent_id=agent_config['agent_id'],
+                tools=tool_names,
+                count=len(tools)
+            )
+
+        # TODO: Load tools from gateway if gateway_id is provided
+        # This would involve:
+        # 1. Get gateway details
+        # 2. Get gateway targets
+        # 3. Create MCP client for MCP targets
+        # 4. Wrap Lambda/OpenAPI targets as tools
+
+        return tools
+
     def invoke_agent(
         self,
         agent_id: str,
@@ -363,8 +399,8 @@ class AgentManager:
             # Get or create cached agent instance
             strands_agent = self.session_manager.get_cached_agent(session_id, agent_id)
             if not strands_agent:
-                # Create new agent instance
-                tools = []  # TODO: Load tools from gateway
+                # Load tools
+                tools = self._load_tools(agent_config)
                 strands_agent = self._create_strands_agent(agent_config, tools)
                 self.session_manager.cache_agent(session_id, agent_id, strands_agent)
 

@@ -70,11 +70,11 @@ class AgentCreate(BaseModel):
 
     # Tools configuration
     tools_enabled: bool = True
-    gateway_id: Optional[str] = Field(None, description="Gateway ID for tools")
-    custom_tools: Optional[List[str]] = Field(
+    tools: Optional[List[str]] = Field(
         None,
-        description="List of custom tool names"
+        description="List of tool names to enable (e.g., ['web_search', 'calculator'])"
     )
+    gateway_id: Optional[str] = Field(None, description="Gateway ID for additional tools")
 
     # Knowledge Base
     knowledge_base_id: Optional[str] = Field(
@@ -104,6 +104,7 @@ class AgentResponse(BaseModel):
     memory_type: str
     session_expiry: int
     tools_enabled: bool
+    tools: Optional[List[str]] = None
     gateway_id: Optional[str] = None
     knowledge_base_id: Optional[str] = None
     code_interpreter_enabled: bool
@@ -121,6 +122,7 @@ class AgentUpdate(BaseModel):
     system_prompt: Optional[str] = None
     model_config: Optional[ModelConfig] = None
     tools_enabled: Optional[bool] = None
+    tools: Optional[List[str]] = None
     gateway_id: Optional[str] = None
     knowledge_base_id: Optional[str] = None
     code_interpreter_enabled: Optional[bool] = None
